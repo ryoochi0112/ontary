@@ -1,0 +1,85 @@
+name: verify
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - name: Install dependencies
+        run: uv sync --all-extras
+      - name: make verify
+        run: make verify
+
+  # The Postgres backend's real gate (M8a). `verify` above runs the conformance
+  # suite against SQLite and in-memory only, because `make verify` is defined as
+  # offline and no-DB and breaking that would make the gate unrunnable on a
+  # laptop. So the third backend gets a job with a real server: same suite, same
+  # assertions, one more `STORE_FACTORIES` entry. Without this, `PostgresStore`
+  # would be exactly the "nothing ever tested this" hole M6 found in packaging.
+  postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - name: Install dependencies
+        run: uv sync --all-extras
+      - name: Conformance suite + backend tests against Postgres
+        env:
+          ONTARY_TEST_POSTGRES_DSN: postgresql://postgres:postgres@localhost:5432/postgres
+        run: |
+          uv run pytest tests/test_store_conformance.py tests/test_store_postgres.py \
+            tests/test_multi_tenancy.py tests/test_erase.py tests/test_actions.py -q
+
+  # The check that had never existed (M6 step 3). `verify` above runs from the
+  # source tree with every extra installed -- precisely the environment an
+  # outside adopter does NOT have. Their first command is
+  # `pip install ontary`, and nothing verified that path until a manual
+  # clean-venv install turned up `ontary-mcp` dying on a bare
+  # `ModuleNotFoundError`. Deliberately NO extras and no dev dependencies here:
+  # installing pytest would defeat the point, which is why the smoke test is a
+  # plain script rather than a test module.
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - name: Build sdist + wheel
+        run: uv build --out-dir dist
+      - name: Install the wheel into an empty environment
+        run: |
+          uv venv --python 3.12 /tmp/clean
+          VIRTUAL_ENV=/tmp/clean uv pip install dist/*.whl
+      - name: Smoke-test the installed package
+        run: /tmp/clean/bin/python scripts/install_smoke.py
+      - name: Upload the distributions
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
