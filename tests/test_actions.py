@@ -3656,10 +3656,17 @@ def _prose_corpus() -> list[Path]:
 
     `tests/` is deliberately out: this module holds the canonical, so it
     states the claim by construction.
+
+    `CHANGELOG.md` is out for a different reason: its released sections are a
+    HISTORICAL record of what each version shipped, and a released section is
+    never rewritten to match today's canonical. The copy of this region inside
+    the 0.8.0 entry is therefore frozen history, not a live site. The live
+    sites this instrument governs are `src/ontary/scope.py` and the two
+    `docs/api-reference` pages; a new site still joins by glob.
     """
     return sorted(
         {
-            *_REPO_ROOT.glob("*.md"),
+            *(path for path in _REPO_ROOT.glob("*.md") if path.name != "CHANGELOG.md"),
             *_REPO_ROOT.glob("docs/**/*.md"),
             *_REPO_ROOT.glob("src/ontary/**/*.py"),
         }
@@ -3723,7 +3730,8 @@ def _interstitial(path: Path) -> str:
 # guarded region. A file that grows a region and is missing here FAILS -- the
 # key set is checked against the derived one, never trusted as the list.
 _SCOPE_INTERSTITIAL_DIGESTS: dict[str, str] = {
-    "CHANGELOG.md": "9790daa1671d2ec77b499207f2e52791f0ae1e81a1ec9e58f4c73290ea3dece3",
+    # `CHANGELOG.md` is absent by design: `_prose_corpus` leaves it out, because
+    # its released sections are frozen history rather than a live prose site.
     "docs/api-reference.ja.md": (
         "f921ef55b3f3f812fa454db4673bd63325d30eb7d6d7ca8a6e0d24aa6c4fd4df"
     ),

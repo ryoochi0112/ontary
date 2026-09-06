@@ -287,51 +287,58 @@ uv add "ontary @ git+https://github.com/ryoochi0112/ontary@v0.8.0"
   <!-- scope-denied-consequences:start -->
   Where the chain resolves and the consumer covers it, the gate reaches the
   handler's own refusal (`OBJECT_ALREADY_RETIRED`). `SCOPE_DENIED` does not
-  mean one thing: it is raised at two places. One is a defense-in-depth
-  refusal of a scope-bearing parameter that is not a `str` — parameter
-  validation rejects that first, so it is a floor under type confusion
-  rather than a path in normal use. The other fires wherever coverage cannot
-  be shown, and that is two situations rather than one: the chain resolved
-  and this consumer is outside it, which is the ordinary denial this gate
-  does not change; or the chain did not resolve at that instant, and
-  deny-by-default denies. Only the second belongs to this frame. Four rule
-  kinds are declared, and each meets retirement at its OWN hop:
+  mean one thing: it is raised at two places. One is a defense-in-depth refusal
+  of a scope-bearing parameter that is not a `str` — parameter validation
+  rejects that first, so it is a floor under type confusion rather than a path
+  in normal use. The other fires wherever coverage cannot be shown, and that is
+  two situations rather than one: the chain resolved and this consumer is
+  outside it, which is the ordinary denial this gate does not change; or the
+  chain did not resolve at that instant, and deny-by-default denies. Only the
+  second belongs to this frame. Four rule kinds are declared, and each meets
+  retirement and erasure at its OWN hop:
 
-  - `SelfScope` answers with the object's own id, which retirement does not
-    take away.
-  - `DirectProperty` reads the scope key off the payload, which retirement
-    leaves alone: this gate reads the newest row rather than the live one.
-  - `ViaLink` climbs the `links` table. It resolves to nothing when none of
-    the parents it reaches resolves in turn — among them a parent already
-    retired BEFORE the target closed: its edge may still be readable at that
-    instant, but its own row is not admitted, so it cannot answer at the one
-    instant this gate asks about. One retired after the target — including in
-    the same cascade tick — still answers for it.
-  - `CustomResolver` is author code handed the raw `Store`, and the engine
-    does not reach inside it, so what a retired object resolves to is the
+  - `SelfScope` answers with the object's own id, which neither retirement nor
+    erasure takes away.
+  - `DirectProperty` reads the scope key off the payload, and
+    `erase_object_content` blanks by design what that rule reads, which no
+    history-aware read can recover. Retirement leaves the payload alone,
+    because this gate reads the newest row rather than the live one, so erasure
+    is the only lifecycle event this hop's OWN READ loses to. That is the
+    target itself when the target is `DirectProperty`-scoped; it is equally an
+    ANCESTOR whose own hop is `DirectProperty`, which denies a `ViaLink`-scoped
+    target whose link erasure preserved. Erasure destroying the scope key is
+    the point of erasure, not a gap in the gate.
+  - `ViaLink` climbs the `links` table, which erasure preserves, so erasure
+    costs this hop nothing. It resolves to nothing when none of the parents it
+    reaches resolves in turn — among them a parent already retired BEFORE the
+    target closed: its edge may still be readable at that instant, but its own
+    row is not admitted, so it cannot answer at the one instant this gate asks
+    about. One retired after the target — including in the same cascade tick —
+    still answers for it.
+  - `CustomResolver` is author code handed the raw `Store`, and the engine does
+    not reach inside it, so what a retired or erased object resolves to is the
     resolver's own business rather than this frame's. The natural body reads
-    `read_current`, which is `None` for a retired object, so a resolver
-    written that way denies. A type that needs the precondition refusal after
+    `read_current`, which is `None` for a retired object, so a resolver written
+    that way denies. A type that needs the precondition refusal after
     retirement declares a second rule — a `DirectProperty` on a scope-key
     column, which survives retirement.
 
   Each bullet is about one hop, never about one target, and the four are not
-  the whole chain. `ScopePolicy.rules` maps each type to an ORDERED
-  list, so a target declares as many of these hops as that
-  list holds and is answered by the first that resolves; and a level no rule of its own can
-  answer climbs to the canonical instance of a narrower scope, where a type
-  declares one — which is none of the four. What the engine's own hops share is the
-  frame: any object the engine has to read that had already been retired
-  before the target closed is refused there, whichever of those hops reached
-  it — so the hop that answers a target's level can fail on an object the
-  target's other hops never touch. A `CustomResolver` is outside that frame only
-  for the reads its own callable makes: the engine does not thread the
-  instant into author code, so an ancestor the callable reaches for itself is
-  read however it reads it, retired or not. Its ANSWER re-enters the engine,
-  and every object the engine reads from there is refused on the frame's own
-  terms — the canonical instance a narrower answer names, and any object
-  whose rules the engine goes on to ask, whose row is checked before its own
-  resolver runs.
+  the whole chain. `ScopePolicy.rules` maps each type to an ORDERED list, so a
+  target declares as many of these hops as that list holds and is answered by
+  the first that resolves; and a level no rule of its own can answer climbs to
+  the canonical instance of a narrower scope, where a type declares one — which
+  is none of the four. What the engine's own hops share is the frame: any
+  object the engine has to read that had already been retired before the target
+  closed is refused there, whichever of those hops reached it — so the hop that
+  answers a target's level can fail on an object the target's other hops never
+  touch. A `CustomResolver` is outside that frame only for the reads its own
+  callable makes: the engine does not thread the instant into author code, so
+  an ancestor the callable reaches for itself is read however it reads it,
+  retired or not. Its ANSWER re-enters the engine, and every object the engine
+  reads from there is refused on the frame's own terms — the canonical instance
+  a narrower answer names, and any object whose rules the engine goes on to
+  ask, whose row is checked before its own resolver runs.
 
   Every denial in this list fails closed — the object's own owner is denied,
   nothing is disclosed.
@@ -438,7 +445,7 @@ uv add "ontary @ git+https://github.com/ryoochi0112/ontary@v0.8.0"
   entry for each call that actually releases.
 
 - **New error codes:** lifecycle and query refusals add
-  `OBJECT_RETIRE_NOT_FOUND`,
+  `OBJECT_ERASURE_NOT_FOUND`, `OBJECT_RETIRE_NOT_FOUND`, `OBJECT_ALREADY_ERASED`,
   `OBJECT_ALREADY_RETIRED`, `LINK_NOT_FOUND`, `STALE_CURSOR`,
   `UNDECLARED_SOURCE_REMOVAL`, `UNKNOWN_OPERATOR`, `OPERATOR_TYPE_MISMATCH`,
   `PAGE_NOT_ITERABLE`, and `GROUP_KEY_COLLISION`. Branch on these stable codes where a

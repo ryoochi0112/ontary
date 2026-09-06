@@ -64,6 +64,7 @@ EXPECTED_PRE_080_ERROR_CODES = frozenset(
         "SOURCE_CREATE_REFUSED",
         "STORE_BUSY",
         "STORE_ERROR",
+        "STORE_SCHEMA_INCOMPATIBLE",
         "STORE_VERSION_UNSUPPORTED",
         "UNKNOWN_ACTION",
         "UNKNOWN_FIELD",
@@ -80,6 +81,8 @@ EXPECTED_PRE_080_ERROR_CODES = frozenset(
 )
 EXPECTED_080_NEW_ERROR_CODES = frozenset(
     {
+        "OBJECT_ERASURE_NOT_FOUND",
+        "OBJECT_ALREADY_ERASED",
         "OBJECT_RETIRE_NOT_FOUND",
         "OBJECT_ALREADY_RETIRED",
         "LINK_NOT_FOUND",
@@ -89,6 +92,19 @@ EXPECTED_080_NEW_ERROR_CODES = frozenset(
         "OPERATOR_TYPE_MISMATCH",
         "PAGE_NOT_ITERABLE",
         "GROUP_KEY_COLLISION",
+    }
+)
+# Codes that shipped in (or before) 0.8.0 and have since been removed from the
+# catalogue. The two sets above are HISTORY: they record what those releases
+# actually announced, and a released CHANGELOG section is never edited to match
+# today's catalogue. Each cut task that deletes a code appends it here instead,
+# which keeps the catalogue-diff assertion below honest in both directions --
+# every live code is still accounted for, and nothing is quietly dropped.
+REMOVED_SINCE_080_ERROR_CODES = frozenset(
+    {
+        "OBJECT_ERASURE_NOT_FOUND",
+        "OBJECT_ALREADY_ERASED",
+        "STORE_SCHEMA_INCOMPATIBLE",
     }
 )
 NEW_ENGLISH_DOCS = tuple(
@@ -529,9 +545,21 @@ def test_changelog_new_error_codes_match_catalog_diff() -> None:
     bullet = changelog[start:] if end == -1 else changelog[start:end]
     listed_codes = re.findall(r"`([A-Z][A-Z0-9_]+)`", bullet)
 
-    assert EXPECTED_080_NEW_ERROR_CODES <= set(ERROR_CODES)
-    assert set(ERROR_CODES) - EXPECTED_080_NEW_ERROR_CODES == EXPECTED_PRE_080_ERROR_CODES
+    # The released bullet is a historical record: it lists what 0.8.0 added,
+    # including codes later cut. So it is compared against the historical set,
+    # never against today's catalogue.
     assert sorted(listed_codes) == sorted(EXPECTED_080_NEW_ERROR_CODES)
+
+    # Every code the catalogue holds today is still accounted for by one of the
+    # historical sets, minus what has since been removed -- and nothing removed
+    # is still live.
+    assert REMOVED_SINCE_080_ERROR_CODES <= (
+        EXPECTED_PRE_080_ERROR_CODES | EXPECTED_080_NEW_ERROR_CODES
+    )
+    assert not (REMOVED_SINCE_080_ERROR_CODES & set(ERROR_CODES))
+    assert set(ERROR_CODES) == (
+        EXPECTED_PRE_080_ERROR_CODES | EXPECTED_080_NEW_ERROR_CODES
+    ) - REMOVED_SINCE_080_ERROR_CODES
 
 
 def test_effect_meta_has_exact_dispatch_safe_field_set() -> None:

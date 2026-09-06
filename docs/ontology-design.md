@@ -196,10 +196,12 @@ remains present in history. `ActionContext.retire` also cascade-closes every liv
 that references the object on the side its link type declares for that object type, in
 the same transaction.
 
-Erasure for a right-to-erasure request under GDPR/APPI is an operator runbook tool,
-not an ontology concept. It is not an action, Function, client operation, or MCP tool;
-do not declare an `Erase*` action to reach it. Keep operator erasure separate from the
-business action that retires an object.
+Erasure is not an ontology concept, and this SDK gives you no erasure verb. Retirement
+is the lifecycle verb: do not declare an `Erase*` or `Delete*` action, Function, client
+operation, or MCP tool to serve a right-to-erasure request under GDPR/APPI. Destroying
+stored bytes is an operational matter for whoever runs the database, decided outside the
+declared ontology and separate from the business action that retires an object. Audit
+stays the engine's `AuditEntry`; never declare a type or an action to record it.
 
 A governed action may retire an object only when its whole type declares `owned=True`,
 and may close a link only when that link type declares `owned=True`. Partial ownership

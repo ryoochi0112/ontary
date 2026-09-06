@@ -184,10 +184,12 @@ Foundry の object-backed link type は関係にプロパティを付けます�
 宣言している側でそのオブジェクトを参照するすべての live link も、同じ transaction で
 cascade-close されます。
 
-right-to-erasure 要求（GDPR/APPI）に対応する erasure は、オペレーターが実行する runbook ツールで
-あり、オントロジーの概念ではありません。Action、Function、client operation、MCP tool のいずれ
-でもありません。そこへ到達するための `Erase*` Action を宣言しないでください。オペレーターの
-erasure は、オブジェクトをリタイアするビジネス Action とは分離して扱います。
+erasure はオントロジーの概念ではなく、この SDK は erasure の動詞を提供しません。ライフサイクルの
+動詞はリタイアです。right-to-erasure 要求（GDPR/APPI）に応じるために `Erase*` や `Delete*` の
+Action、Function、client operation、MCP tool を宣言しないでください。保存されたバイト列の破棄は
+データベースを運用する側の運用上の判断であり、宣言されたオントロジーの外で決めます。オブジェクトを
+リタイアするビジネス Action とは分離して扱ってください。監査はエンジンの `AuditEntry` のままです。
+記録のための型や Action を宣言しないでください。
 
 統制された Action は、型全体が `owned=True` を宣言している場合に限りオブジェクトをリタイア
 できます。リンクを close できるのは、そのリンク型が `owned=True` を宣言している場合だけです。
