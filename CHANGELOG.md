@@ -35,6 +35,8 @@ you**.
 - The ruff rule set is declared explicitly (`select = ["E4", "E7", "E9", "F", "I",
   "B", "C901"]`) instead of extending the implicit default. ruff 0.16.0 widened
   the defaults from 59 to 413 rules; the explicit list keeps the pre-0.16 gate.
+- Dependabot ignores `mcp` major bumps: 2.x removes the integration surface
+  `mcp_server.py` imports, so a 2.x PR cannot go green without a migration.
 
 ## [0.11.0] — 2026-09-06
 
