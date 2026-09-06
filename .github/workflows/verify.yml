@@ -56,14 +56,16 @@ jobs:
             tests/test_examples_tickets_e2e.py -q
 
   # The check that had never existed (M6 step 3) -- now the stranger test too
-  # (OSS v0 spec § 4.3). `verify` above runs from the
-  # source tree with every extra installed -- precisely the environment an
-  # outside adopter does NOT have. Their first command is
-  # `pip install ontary`, and nothing verified that path until a manual
-  # clean-venv install turned up `ontary-mcp` dying on a bare
-  # `ModuleNotFoundError`. Deliberately NO extras and no dev dependencies here:
-  # installing pytest would defeat the point, which is why the smoke test is a
-  # plain script rather than a test module.
+  # (OSS v0 spec § 4.3). `verify` above runs from the source tree with every
+  # extra installed -- precisely the environment an outside adopter does NOT
+  # have. Their first command is `pip install ontary`, and nothing verified
+  # that path until a manual clean-venv install turned up `ontary-mcp` dying
+  # on a bare `ModuleNotFoundError`. The first venv below is deliberately
+  # no-extras and no dev dependencies, so `scripts/install_smoke.py` checks
+  # the bare `pip install ontary` path (which is why it is a plain script,
+  # not a test module). The second venv installs the `mcp` extra, so
+  # `scripts/stranger_smoke.py` can run the README quickstart and the
+  # tickets example exactly as a reader would (OSS v0 spec § 4.3).
   package:
     runs-on: ubuntu-latest
     steps:

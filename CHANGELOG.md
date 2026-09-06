@@ -65,8 +65,6 @@ that ships without them. Pre-v1 hygiene from the same cycle is under
   `download-artifact` v8.
 - `release.yml` serializes runs per tag (`concurrency`, `cancel-in-progress: false`)
   so a re-push cannot cancel a publish that is already uploading.
-- The carried release backlog is re-triaged for the PyPI path in
-  `rstaff/var/specs/ontary/post-v1-backlog.md`.
 
 ## [0.10.0] — 2026-09-04
 

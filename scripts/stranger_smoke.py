@@ -3,7 +3,7 @@
 Run from the repository root against a venv that holds ONLY the published
 wheel with the `[mcp]` extra:
 
-    /tmp/clean/bin/python scripts/stranger_smoke.py
+    /tmp/stranger/bin/python scripts/stranger_smoke.py
 
 1. Executes the README quickstart block verbatim (the same block
    `tests/test_docs.py` runs from the source tree, here from the wheel).

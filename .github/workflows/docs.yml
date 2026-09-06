@@ -7,7 +7,7 @@ on:
 
 concurrency:
   group: docs-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   # Runs on every PR too, so a broken link or a missing nav page blocks the
