@@ -4,12 +4,16 @@ on:
   push:
     tags: ['v*']
 
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
 jobs:
   gate:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.0.1
         with:
           python-version: "3.12"
           enable-cache: true
@@ -34,7 +38,7 @@ jobs:
       - name: Smoke-test the installed package
         run: /tmp/clean/bin/python scripts/install_smoke.py
       - name: Upload the distributions
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dist
           path: dist/
@@ -54,7 +58,7 @@ jobs:
       contents: read
     steps:
       - name: Download the distributions
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: dist
           path: dist/
