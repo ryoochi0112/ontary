@@ -35,16 +35,19 @@ a public surface a stranger can learn in one sitting, and a docs site.**
 
 `authoring`, `declarations`, `model`, `typesys`, `ontology`, `actions`, `functions`,
 `_typed_api`, `scope`, `security`, `query`, `client`, `errors`, `audit`, `diagnose`,
+`ingest` (bulk load; decided 2026-09-06, keeps `client.ingest`/`ingest_links`),
 `mcp_server`, `cli`, `testing`, and `store/` with `inmemory`, `sqlite`, `postgres`, `_sql`,
 `_shared`, `protocol`, `schema`, `values`.
 
-Conditional: `store/migration` and `meta` are kept only if a kept module imports them after
-the cut. The rule is verify-by-import, decided module by module during the cut. A module that
-is needed is kept whole; it is never stubbed.
+`meta` is kept (core registry). `store/migration` is load-bearing (it issues the SQLite DDL) and is
+collapsed to a create-or-refuse path like Postgres: no in-place migration of pre-0.11 files. The
+storage envelope (measured constants, `STORAGE_ENVELOPE_EXCEEDED`, `diagnose(store=)`) is removed
+with the rest of the operator-scale tooling; the design-guide lints in `diagnose` stay.
+Implementation plan: `specs/plans/2026-09-06-oss-v0-cut.md`.
 
 ### 3.2 Deleted
 
-- Modules: `connect/*`, `ingest`, `effects`, `outbox`, `outbox_drain`, `erase`, `migrate`,
+- Modules: `connect/*`, `effects`, `outbox`, `outbox_drain`, `erase`, `migrate`,
   `upcast`, `explain`, `fingerprint`, and the conditional modules above when unused.
 - CLI subcommands `explain` and `erase`.
 - Tests of every deleted module, plus `test_upgrade_fixtures.py`, `test_v1_gate_coverage.py`,
