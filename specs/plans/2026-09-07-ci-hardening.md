@@ -816,9 +816,15 @@ git status --short
 ```
 Expected: verify green, zizmor clean, working tree clean.
 
-- [ ] **Step 2: Push and open the PR (needs the maintainer's go, per the repo's Git rules)**
+- [ ] **Step 2: Enable private vulnerability reporting, push, open the PR (needs the maintainer's go, per the repo's Git rules)**
+
+`SECURITY.md` links to `security/advisories/new`; that page 404s until the
+setting is on, so it is enabled before the file can land on `main`
+(final review finding F2). It has no dependency on the PR and is reversible.
 
 ```bash
+gh api -X PUT repos/ryoochi0112/ontary/private-vulnerability-reporting
+gh api repos/ryoochi0112/ontary/private-vulnerability-reporting --jq .enabled   # true
 git push -u origin ci/hardening
 gh pr create --title "ci: enforce the gate — SHA pins, 3.13 matrix, zizmor, CodeQL, Dependabot, SECURITY.md" --body "$(cat <<'EOF'
 Implements specs/2026-09-07-ci-hardening-design.md (Tiers A+B).
@@ -826,7 +832,7 @@ Implements specs/2026-09-07-ci-hardening-design.md (Tiers A+B).
 - Every action SHA-pinned; top-level `contents: read`; timeouts; `persist-credentials: false`; PR-only cancellation on `verify`.
 - `verify` runs on 3.12 and 3.13. New `workflows` job (zizmor 1.30.0). New `codeql.yml`.
 - Dependabot replaces the never-installed Renovate config.
-- `SECURITY.md` + README link; CHANGELOG + releasing.md.
+- `SECURITY.md` + README link; CHANGELOG + releasing.md. Dependabot has a 7-day cooldown (zizmor `dependabot-cooldown`).
 - Deviation from spec § 3 "no job logic changes": the release gate sets `enable-cache: false` (zizmor `cache-poisoning`).
 
 After merge, repo settings flip in this order (spec § 9): required status checks → `sha_pinning_required` → Dependabot alerts + security updates + private vulnerability reporting.
@@ -902,12 +908,15 @@ gh api repos/ryoochi0112/ontary/actions/permissions --jq .sha_pinning_required
 ```
 Expected: `true`.
 
-- [ ] **Step 4: Dependabot alerts, security updates, private vulnerability reporting**
+- [ ] **Step 4: Dependabot alerts and security updates**
+
+Private vulnerability reporting is NOT here: `SECURITY.md` points at the
+`security/advisories/new` page, so that setting is enabled at PR time (Task 7
+step 2), before the file can reach `main`. Final review finding F2.
 
 ```bash
 gh api -X PUT repos/ryoochi0112/ontary/vulnerability-alerts
 gh api -X PUT repos/ryoochi0112/ontary/automated-security-fixes
-gh api -X PUT repos/ryoochi0112/ontary/private-vulnerability-reporting
 gh api repos/ryoochi0112/ontary/vulnerability-alerts >/dev/null && echo "alerts on"
 gh api repos/ryoochi0112/ontary --jq .security_and_analysis.dependabot_security_updates.status
 gh api repos/ryoochi0112/ontary/private-vulnerability-reporting --jq .enabled
