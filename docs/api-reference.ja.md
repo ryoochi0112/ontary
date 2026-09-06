@@ -19,7 +19,7 @@
 - [読み取り](#読み取り)
 - [Action](#action)
 - [Function](#function)
-- [Capability](#capability)
+- [Capabilities](#capabilities)
 - [セキュリティ](#セキュリティ)
 - [ストア](#ストア)
 - [バルク取り込み](#バルク取り込み)
@@ -679,7 +679,7 @@ store ではなく `execute()` に属するのと同じく、client surface に�
 
 ---
 
-## Capability
+## Capabilities
 
 ハンドラが外界に求めるものはすべて**宣言**し、バインド時に提供する必要があります。
 未宣言の利用は拒否され、利用はすべて監査されます。Capability はハンドラが読む／呼ぶ

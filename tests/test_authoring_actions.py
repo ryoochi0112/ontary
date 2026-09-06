@@ -13,7 +13,7 @@ identical audited params (AC5).
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Protocol
 
 import pytest
 from conftest import raises_code
@@ -52,6 +52,10 @@ def _build_tickets_ontology() -> tuple[Ontology, type[OntologyObject], type[Onto
 
 def _agent(role: str = "Agent") -> Consumer:
     return Consumer(actor_id="a1", role=role, scope_level="org", scope_id="org-1", kind="human")
+
+
+class _WeatherReader(Protocol):
+    def temperature(self, city: str) -> float: ...
 
 
 class TestDerivedMatchesHandWritten:
@@ -197,6 +201,28 @@ class TestMarkerValidation:
                 return {}
         assert "different Ontology" in str(exc_info.value)
 
+    def test_action_rejects_foreign_capability_handle_naming_capability(self) -> None:
+        """`Ontology._capability_api_names` (authoring.py) refuses a
+        `CapabilityHandle` registered on a different `Ontology` at
+        declaration time -- api-name equality is not enough, since two
+        independent ontologies may legally declare the same name."""
+        ontology, Ticket, _Team = _build_tickets_ontology()
+        other, _OtherTicket, _OtherTeam = _build_tickets_ontology()
+        foreign = other.capability(_WeatherReader)
+
+        class Params(ActionParams):
+            ticket_id: str = target(Ticket)
+
+        with raises_code(ValidationFailed, "ONTOLOGY_INVALID") as exc_info:
+
+            @ontology.action(
+                Params, target=Ticket, roles=["Agent"], capabilities=[foreign], api_name="Bad"
+            )
+            def handler(ctx: ActionContext, params: Params) -> dict[str, str]:
+                return {}
+        assert "capability" in str(exc_info.value)
+        assert "registered on a different Ontology" in str(exc_info.value)
+
     def test_scope_ref_marker_derives_scope_semantics(self) -> None:
         ontology, Ticket, Team = _build_tickets_ontology()
 
@@ -283,6 +309,17 @@ class TestDuplicateAndFreeze:
             @ontology.action(Params, target=Ticket, roles=["Agent"], api_name="Late")
             def handler(ctx: ActionContext, params: Params) -> dict[str, str]:
                 return {}
+        assert "frozen" in str(exc_info.value)
+
+    def test_capability_after_freeze_rejected(self) -> None:
+        """`Ontology.capability()` is pinned to the same freeze gate as
+        `action`/`function`: once `.definition` has been read, no further
+        capability may be declared."""
+        ontology, _Ticket, _Team = _build_tickets_ontology()
+        ontology.definition  # freeze
+
+        with raises_code(ValidationFailed, "ONTOLOGY_INVALID") as exc_info:
+            ontology.capability(_WeatherReader)
         assert "frozen" in str(exc_info.value)
 
 

@@ -111,8 +111,8 @@ def _is_audit_entry_call(node: ast.AST) -> bool:
 
 # The ONLY sites where an `AuditEntry(...)` is built without a `Consumer`
 # available to stamp a `principal` from at all -- verified by hand against
-# every one of the 15 `AuditEntry(...)` call sites under `src/ontary` on
-# 2026-07-27 (`grep -rn "AuditEntry(" src/ontary`), not merely inherited
+# every one of the 6 `AuditEntry(...)` call sites under `src/ontary` on
+# 2026-09-06 (`grep -rn "AuditEntry(" src/ontary`), not merely inherited
 # from a claim. Every other site passes `principal=` directly. Keyed on the
 # ENCLOSING FUNCTION NAME (not a line number) so it survives edits elsewhere
 # in the file; `test_allowlist_entries_all_still_match_a_real_site` asserts

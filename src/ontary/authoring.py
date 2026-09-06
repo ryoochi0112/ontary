@@ -167,8 +167,8 @@ def _repair_optional_default(field_info: Any, is_optional: bool) -> bool:
     default: without one, Pydantic still treats it as required at
     construction (`X | None` doesn't imply `= None`). Returns whether the
     field was mutated -- the caller collects that into its `needs_rebuild`
-    flag and calls `model_rebuild(force=True)` once. The one fixup all
-    two derive loops (`_derive_properties`/`_derive_action_params`)
+    flag and calls `model_rebuild(force=True)` once. The one fixup both
+    derive loops (`_derive_properties`/`_derive_action_params`)
     share."""
     if is_optional and field_info.is_required():
         field_info.default = None
