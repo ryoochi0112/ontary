@@ -3,7 +3,7 @@
 [Back to the README](../README.md) · [API reference](api-reference.md)
 
 This is the mechanical bar for tagging `v1.0.0`. It records requirements and
-decisions; it does not resolve open decisions A, B, or C for the maintainer.
+decisions; the human resolutions for Decisions A, B, and C are recorded below.
 
 ## May `v1.0.0` be tagged?
 
@@ -17,7 +17,7 @@ candidate. An unchecked box means the tag must wait.
   evidence does not count.
 - [x] **Decision A — audience:** the intended audience is resolved and the
   decision is recorded in a durable project record.
-- [ ] **Decision B — parent-covers-child:** the parent-covers-child rule is
+- [x] **Decision B — parent-covers-child:** the parent-covers-child rule is
   resolved and recorded in a durable project record.
 - [x] **Decision C — storage scale:** the storage-scale decision is resolved
   and recorded in a durable project record.
@@ -50,8 +50,19 @@ distributions, and installs the wheel into an empty environment. [The release
 runbook](releasing.md) is the operational half — publish, confirm, and roll back by
 **yanking** the version (PEP 592), never by deleting it.
 
-What this decision does not settle: Decision B stays open, and nothing here changes
-runtime behaviour, adds an error code, or narrows what the engine accepts.
+What this decision does not settle: nothing here changes runtime behaviour, adds an
+error code, or narrows what the engine accepts.
+
+## Decision B — parent-covers-child
+
+**Resolved.** Exact-scope-id match is the v1 contract — human decision 2026-09-04,
+spec `v1-0-0.md` Q3=A. A consumer scoped at a parent level does **not** cover an
+object owned by a child scope.
+
+A parent-covers-child rule, if ever built, is opt-in on `ScopePolicy` and
+default-off. Adding that rule post-1.0 is therefore additive under
+[`compatibility.md`](compatibility.md), while the v1 default remains the exact match
+already enforced by `ontary.security.covers_scope`.
 
 ## Decision C — storage scale
 
@@ -82,10 +93,8 @@ dispersion note — not a single job id — is now the reproducibility evidence
 for the Postgres figure; `ObjectStore`/SQLite remains the less-evidenced of
 the two, being local and single-sample.
 
-Decision A (audience) is resolved above. Decision B (parent-covers-child)
-stays unresolved here, deliberately **deferred to 0.10** (spec
-`storage-envelope.md` §4): it is meant to be decided from the dogfood evidence
-0.9's own crossing produces, not resolved ahead of it.
+Decisions A (audience) and B (parent-covers-child) are resolved above. Neither
+decision changes the storage-scale ruling recorded in this section.
 
 ## Post-1.0 contract
 

@@ -230,11 +230,11 @@ class ScopePolicy(BaseModel):
     the type rather than listing it as unscoped.
     - `min_n`: aggregation threshold (generalized `security.MIN_N`).
 
-    KNOWN LIMITATION (M3.5 §5 decision, 2026-07-24): coverage checks
-    (`ontary.security.covers_scope`) are exact-scope-id-match only -- a
-    consumer scoped at a parent level (e.g. company) does not automatically
-    cover objects owned by a child scope (e.g. one of that company's teams).
-    Parent-covers-child coverage was deferred rather than designed here; see
+    Decision B (`docs/v1-gate.md`), resolved 2026-09-04: coverage checks
+    (`ontary.security.covers_scope`) use exact-scope-id match as the v1
+    contract. A consumer scoped at a parent level (e.g. company) does not
+    automatically cover objects owned by a child scope (e.g. one of that
+    company's teams). Parent-covers-child is opt-in and post-1.0; see
     `covers_scope`'s docstring for the enforcement-level detail.
     """
 
