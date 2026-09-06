@@ -120,9 +120,9 @@ def decode_audit_entry(row: AuditRowLike) -> AuditEntry:
 # -- write-path contract helpers (B4) ---------------------------------------
 #
 # The refusal/validation sequence every backend ran as a hand-copied preamble.
-# Message strings, exception types, and check ORDER are frozen behavior
-# (docs/compatibility.md) and are preserved verbatim from the copies these
-# helpers replace.
+# Message strings, exception types, and check ORDER are frozen behavior -- do
+# not reorder the checks or reword the messages -- and are preserved verbatim
+# from the copies these helpers replace.
 
 
 def resolve_object_type(registry: OntologyRegistry, obj_type: str) -> ObjectTypeDef:

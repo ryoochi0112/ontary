@@ -404,6 +404,11 @@ property is absent. An `int` operand on a declared `float` is widening, not a
 mismatch. Mapping-valued `where` is the same grammar on typed,
 string, aggregate, Function, and MCP read surfaces.
 
+Because a mapping value is operator syntax, dict equality on a declared `json`
+property is not spelled `where={"data": {"kind": "a"}}` — that mapping is parsed
+as operators, not a value to match. Wrap it as an `in` list of one instead:
+`where={"data": {"in": [{"kind": "a"}]}}` is the equality escape.
+
 For a hidden property declared as a `DirectProperty` scope-routing key, the
 scope-key exemption applies only to a bare `eq` value and `in` over an explicit
 list. `gt`, `gte`, `lt`, `lte`, `ne`, and `contains`, plus `in` over a non-list or
@@ -574,7 +579,7 @@ the action's own `Source`.
 
 | Member | Purpose |
 | --- | --- |
-| `.insert(obj_type, payload) -> str` | Create. A payload omitting the type's primary key gets one from the runtime's `id_factory` (0.10; see [docs/compatibility.md](compatibility.md#auto-minted-ids-come-from-id_factory-09--010)) |
+| `.insert(obj_type, payload) -> str` | Create. A payload omitting the type's primary key gets one auto-minted from the runtime's `id_factory` |
 | `.update(obj_type, obj_id, changes)` | Update |
 | `.create_link(link_api_name, from_id, to_id)` | Link |
 | `.retire(obj_type, obj_id)` | Retire the object and cascade-close every live link that references the object on the side its link type declares for that object type |

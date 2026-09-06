@@ -21,7 +21,9 @@ class Store(Protocol):
     without inheriting from it, as do `InMemoryStore` and `PostgresStore`,
     the other two shipped backends. This seam is ENGINE-INTERNAL: matching
     these method signatures does not make a third-party class a supported
-    backend -- only these three are (docs/compatibility.md).
+    backend -- only these three shipped implementations are, and ontary
+    makes no compatibility promise for third-party classes that happen to
+    satisfy this protocol.
 
     Layering rule: consumer reads go only via `GuardedQuery` --
     `Store.read_current`/`read_all`/`read_page` are engine-internal raw

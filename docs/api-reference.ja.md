@@ -398,6 +398,11 @@ payload と lineage を分離した凍結オブジェクトです。`_object_typ
 `where` は、型付き、文字列、aggregate、Function、MCP のすべての読み取り surface で
 共通です。
 
+mapping 値は演算子構文なので、宣言済み `json` プロパティの等価比較を
+`where={"data": {"kind": "a"}}` とは書けません — その mapping は値ではなく演算子として
+解釈されます。1 要素の `in` リストで包んでください:
+`where={"data": {"in": [{"kind": "a"}]}}` が等価比較の回避策です。
+
 `DirectProperty` として宣言されたスコープルーティングキーが隠しフィールドである
 場合、スコープキーの例外は、素の `eq` 値による等価一致と、明示的なリストを
 operand とする `in` に限られます。`gt`、`gte`、`lt`、`lte`、`ne`、`contains`、
@@ -559,7 +564,7 @@ Action は、型付きパラメータクラスと、
 
 | メンバー | 用途 |
 | --- | --- |
-| `.insert(obj_type, payload) -> str` | 作成。primary key を省略した payload には、ランタイムの `id_factory` から採番される（0.10; [docs/compatibility.md](compatibility.md#auto-minted-ids-come-from-id_factory-09--010) 参照） |
+| `.insert(obj_type, payload) -> str` | 作成。primary key を省略した payload には、ランタイムの `id_factory` から自動で採番される |
 | `.update(obj_type, obj_id, changes)` | 更新 |
 | `.create_link(link_api_name, from_id, to_id)` | リンク作成 |
 | `.retire(obj_type, obj_id)` | オブジェクトをリタイアし、そのオブジェクト型についてリンク型が宣言している側でそのオブジェクトを参照するすべての live link を cascade-close |
