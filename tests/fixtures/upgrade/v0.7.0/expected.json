@@ -196,6 +196,7 @@
   },
   "metadata": {
     "generated_at": "2026-07-15T09:00:00Z",
+    "ontary_version": "0.7.0",
     "ontology_fingerprint": {
       "as_written": {
         "digest": "7e8ea57c80e705a6b819a60b52c8b5b180c7309d425112780f9dd192dfa96e27",
@@ -254,7 +255,6 @@
       },
       "note": "`as_written` is the fingerprint THIS writer's own `ObjectStore.__init__` stamped when it first opened an empty file -- the v0.7.0 `examples.tickets` declarations, 5 object types, `Ticket` at version 1. `expected_after_upgrade` is the CURRENT `examples.tickets` registry's fingerprint, i.e. what `check_ontology_fingerprint` (`ontary.store.protocol`) re-stamps via `write_ontology_fingerprint(current, adopted=False)` the moment a LATER SDK opens this file and classifies every T1 change as version-covered -- the SAME digest as `audit.expected_after_upgrade`'s third entry's `params.current_digest`, restated here in full (`digest`+`types`+`versions`) so a T8 assertion against `store.read_ontology_fingerprint()` directly has a literal to compare against without reaching into the audit log. This writer runs under v0.7.0 and cannot import HEAD's registry to compute `expected_after_upgrade` itself, so -- like `audit.expected_after_upgrade`'s third entry -- it is a hand-verified literal, not something computed here."
     },
-    "ontary_version": "0.7.0",
     "schema_version": 9,
     "tag": "v0.7.0"
   },
