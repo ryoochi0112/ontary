@@ -10,10 +10,9 @@ lint:
 
 # `tests/` as a whole is NOT type-checked: 249 errors across 44 files, measured
 # at 44a9cf9. Named test files are admitted one at a time, and only files that
-# are already clean under --strict. test_v1_gate_coverage.py is here because it
-# IS the v1 acceptance gate -- a type error in the guard is a hole in the gate.
+# are already clean under --strict.
 typecheck:
-	uv run mypy src examples scripts tests/test_typing_surface.py tests/test_v1_gate_coverage.py
+	uv run mypy src examples scripts tests/test_typing_surface.py
 
 test:
 	uv run pytest -q

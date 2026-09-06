@@ -13,7 +13,7 @@ declare-once, class-authored (`@_ontology.action(...)`/`@_ontology
 `fixtures.py` now only holds the synthetic-data loader, not any
 registration wiring.
 
-`build_ontology()` is called by every test/fixture/connector that needs an
+`build_ontology()` is called by every test/fixture that needs an
 `(Ontology, ObjectStore)` pair. Handlers/functions are declared exactly
 once, at import time, on the module-level `_ontology` -- so unlike the
 pre-M4b version there is no need to re-create a `FunctionRegistry`/handler
@@ -36,8 +36,6 @@ from ontary import (
     BoundQuery,
     Cardinality,
     DirectProperty,
-    EffectHandle,
-    EffectPayload,
     LinkHandle,
     ObjectStore,
     Ontology,
@@ -83,7 +81,6 @@ class Agent(OntologyObject):
 @_ontology.object(
     layer="L0",
     owned={"escalated": False},
-    version=2,
     scope=[
         DirectProperty(level="queue", property_name="queue_id"),
         ViaLink(link_api_name="ticketInQueue", direction="from", parent_type="Queue"),
@@ -97,11 +94,6 @@ class Ticket(OntologyObject):
     queue_id: str | None = prop(default=None, scope_level="queue")
     escalated: bool | None = prop(default=None)
     channel: str | None = prop(default=None, choices=["email", "chat", "phone"])
-
-
-@_ontology.upcaster(Ticket, from_version=1)
-def _ticket_v1_to_v2(payload: dict[str, Any]) -> dict[str, Any]:
-    return {**payload, "channel": "email"}
 
 
 @_ontology.object(
@@ -144,20 +136,11 @@ escalationAssignedTo: LinkHandle[Escalation, Agent] = _ontology.link(
 )
 
 
-class TicketEscalationNotification(EffectPayload):
-    ticket_id: str
-    reason: str | None = None
-
-
-NOTIFY_TICKET_ESCALATION: EffectHandle[TicketEscalationNotification] = _ontology.effect(
-    TicketEscalationNotification,
-    api_name="NotifyTicketEscalation",
-    description="Notifies the owning queue that a ticket was escalated.",
-)
-
-
 class EscalateTicketParams(ActionParams):
     ticket_id: str = target(Ticket)
+    # Audited, not read: the handler does not branch on `reason`, but every
+    # parameter is recorded in the `AuditEntry`, so the caller's stated reason
+    # is preserved with the escalation. Not dead code.
     reason: str | None = None
 
 
@@ -168,7 +151,6 @@ class EscalateTicketParams(ActionParams):
     display_name="Escalate Ticket",
     description="Escalates a Ticket as urgent.",
     api_name="EscalateTicket",
-    effects=[NOTIFY_TICKET_ESCALATION],
 )
 def _escalate_ticket(ctx: ActionContext, params: EscalateTicketParams) -> dict[str, str]:
     """Same precondition + write as the pre-M4b `fixtures._escalate_ticket_handler`
@@ -180,12 +162,6 @@ def _escalate_ticket(ctx: ActionContext, params: EscalateTicketParams) -> dict[s
             code="PRECONDITION_FAILED",
         )
     ctx.update("Ticket", params.ticket_id, {"escalated": True})
-    ctx.emit(
-        TicketEscalationNotification(
-            ticket_id=params.ticket_id,
-            reason=params.reason,
-        )
-    )
     return {"ticket_id": params.ticket_id}
 
 
@@ -279,7 +255,7 @@ def build_ontology() -> tuple[Ontology, ObjectStore]:
     """Returns the module-level `Ontology` (registry + declared
     `EscalateTicket`/`ticketStats` handlers, shared and immutable after
     `.validate()` above) paired with a fresh `ObjectStore` -- every caller
-    (tests/fixtures/connector) gets independent data to seed and tear
+    (tests/fixtures) gets independent data to seed and tear
     down, while `OntologyClient(ontology, store, consumer)`/
     `build_mcp_server(ontology, store, consumer)` auto-bind the SAME
     declared handlers with zero manual wiring (spec `typed-actions.md`
@@ -304,7 +280,5 @@ __all__ = [
     "OpenEscalationParams",
     "ResolveTicketParams",
     "ArchiveTicketParams",
-    "TicketEscalationNotification",
-    "NOTIFY_TICKET_ESCALATION",
     "build_ontology",
 ]

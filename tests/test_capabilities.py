@@ -35,12 +35,11 @@ class _Provider:
 
 class _TransactionTrackingStore(ObjectStore):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
-        # Set BEFORE super().__init__(): since M9a the base constructor records
-        # the ontology fingerprint, which opens a transaction through `self` --
-        # so an override that reads subclass state runs before this __init__
-        # body would have had a chance to set it. Counting starts after
-        # construction either way (`action_transactions` is about actions), so
-        # the reset below is what the assertions actually depend on.
+        # Set BEFORE super().__init__(): a base-constructor step that opened a
+        # transaction through `self` would run an override reading subclass
+        # state before this __init__ body had a chance to set it. Counting
+        # starts after construction either way (`action_transactions` is about
+        # actions), so the reset below is what the assertions depend on.
         self.action_transactions = 0
         self._appending_audit = False
         super().__init__(*args, **kwargs)

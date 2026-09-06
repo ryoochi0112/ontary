@@ -203,13 +203,11 @@ class TestTypedGetList:
         # refuses a value that does not match its declared type on every write
         # path -- which is why this poke exists rather than a public call.
         #
-        # The guarantee under test survives that change and still matters: a row
-        # can hold a value today's declaration rejects because it was written
-        # under an OLDER declaration. That is precisely ontology drift, and the
-        # end-to-end version of this scenario (write under one shape, re-declare,
-        # accept the drift, read) is covered by
-        # tests/test_ontology_evolution.py. Here we only pin that hydration fails
-        # with a CODED error rather than a bare pydantic `ValidationError`.
+        # The guarantee under test survives that change and still matters: a
+        # stored row can always turn out to hold a value the current declaration
+        # rejects, whatever put it there. This test pins the read side of that:
+        # hydrating such a row fails with a CODED error, not with a bare pydantic
+        # `ValidationError` leaking through.
         store.insert(
             "Ticket",
             {"id": "t1", "subject": "a", "created_at": "2026-07-24T10:00:00+00:00"},

@@ -12,11 +12,10 @@ separately-passed `Consumer`, and never the `ObjectStore`:
 
 - No store handle reaches the function body, so a function cannot write the
   ontology, only derive values from already-guarded reads (原則1 / spec AC3).
-  It is given no outward-write path either: a Function cannot declare or emit an
-  effect (spec AC4) and its `BoundQuery` carries no dispatcher map (AC5b). That is
-  a guarantee about what the SDK PROVIDES, not a sandbox -- a capability provider
-  is unsandboxed author code, so `query.capability(...)` can itself write outward
-  with no effect record and no audit row (spec §11, `Declarations.writeback`).
+  It is given no outward-write path either (spec AC4). That is a guarantee
+  about what the SDK PROVIDES, not a sandbox -- a capability provider is
+  unsandboxed author code, so `query.capability(...)` can itself write outward
+  with no audit row (spec §11, `Declarations.writeback`).
 - The `Consumer` is fixed at construction (by whichever `OntologyClient`
   built the `BoundQuery`), not accepted as a per-call argument the function
   body could vary -- a function cannot read AS a different consumer than
@@ -129,12 +128,9 @@ class BoundQuery(_TypedReadMixin):
         # declared-Function DISPATCH, and `FunctionRegistry.call` is the only
         # place that hands either of them out -- see `_for_author_dispatch`.
         self._author_dispatch = None
-        # Capability providers ONLY -- deliberately no effect dispatchers here.
-        # A Function cannot declare effects (spec `governed-effects` AC4:
-        # `@ontology.function(effects=...)` is refused outright), so carrying
-        # dispatchers it can never use would be dead surface inviting exactly the
-        # wiring AC4 forbids. This withholds an outward-write PATH; it is not a
-        # sandbox -- see the module docstring and AC4's scope note.
+        # Capability providers ONLY -- a Function is given no outward-write
+        # path (spec AC4). This withholds a PATH; it is not a sandbox -- see
+        # the module docstring and AC4's scope note.
         self._capability_providers = dict(capability_providers or {})
         self._capability_accesses = capability_accesses
         # Where the guarded read layer records that the AC10 exemption -- and
@@ -177,7 +173,7 @@ class BoundQuery(_TypedReadMixin):
 
     def capability(self, handle: CapabilityHandle[P]) -> P:
         """The bound provider for `handle`, typed as the handle's protocol
-        (spec `governed-effects` AC6) -- so `query.capability(LLM)` narrows to
+        -- so `query.capability(LLM)` narrows to
         `LLMClient` with no cast at the call site.
 
         Fail-closed in three ways (AC8), all before any provider is returned:

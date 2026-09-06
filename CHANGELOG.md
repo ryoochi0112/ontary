@@ -14,19 +14,42 @@ you**.
 Pre-v1 hygiene: closes the remaining repository and CI gaps before the v1.0.0
 crossing without changing the package version or the runtime contract.
 
+OSS v0 cut: reduces `ontary` to its core. Every removed public name is listed
+under `### Removed`; the next release (0.11.0) is the first to ship without them.
+
+### Removed
+
+- The v1 acceptance gate, upgrade-fixture ladder, and `upgrade-fixture-honesty` CI job (docs/v1-gate.md, docs/releasing.md, tests/fixtures/upgrade).
+- The storage envelope: `STORAGE_ENVELOPE_EXCEEDED` finding, `Ontology.diagnose(store=)`, `ontary validate --store`, scripts/scan_curve.py.
+- Error code `STORE_SCHEMA_INCOMPATIBLE`.
+- ontary.explain (DecisionTrace, explain_read, explain_list, explain_scan) and the `ontary explain` CLI.
+- ontary.erase, Store.erase_object_content, Store.object_erasure_state, EraseResult, the `ontary erase` CLI, and codes OBJECT_ERASURE_NOT_FOUND, OBJECT_ALREADY_ERASED.
+- Effects and the durable outbox: EffectDispatcher, EffectHandle, EffectMeta, EffectPayload, OutboxRecord, RetryPolicy, DrainReport, Ontology.effect, Ontology.action(effects=), ActionContext.emit, OntologyRuntime.drain_effects, OntologyClient.drain_effects, OntologyClient.outbox, ontary.testing.capture_effects, AuditEntry.effects, the effect_outbox table, and codes EFFECT_NOT_DISPATCHABLE, UNDECLARED_EFFECT, EFFECT_NOT_SERIALIZABLE.
+- Ontology fingerprints and drift detection (ontary.fingerprint, Store.read/write_ontology_fingerprint, accept_ontology_drift=, code ONTOLOGY_DRIFT); declared type versions and upcasters (Ontology.object(version=), Ontology.upcaster, ontary.upcast, code UPCAST_FAILED); ontary.migrate (migrate_object_type, upcast_object_type).
+- Connectors: ontary.connect (BaseConnector, CanonicalBatch, CanonicalRecord, MappingSpec, ObjectBinding, LinkBinding, RawTables, oid, run_pipeline), the dlt and bq extras, docs/connectors.md, and codes ENTITY_KEY_MISMATCH, MISSING_MAPPED_FIELD. Bulk loading stays via OntologyClient.ingest / ingest_links.
+- docs/authority.md, docs/queries.md, docs/cookbook.md (content folded into docs/api-reference.md and examples/tickets/README.md); the Compatibility project URL.
+
 ### Changed
 
-- Decision B is recorded in `docs/v1-gate.md`: exact-scope-id match is the v1
-  contract; parent-covers-child coverage is opt-in and post-1.0. The `covers_scope`
-  and `ScopePolicy` docstrings cite the decision instead of calling it deferred, and
-  a contract test pins that a parent-scoped consumer never covers a child-owned row.
+- docs/compatibility.md is now a one-paragraph pre-1.0 policy; CHANGELOG's Removed/Changed sections are the migration guide.
+- `SCHEMA_VERSION` is bumped 9 → 10, and stores are now create-or-refuse: both the
+  SQLite and the Postgres backend refuse a store stamped at any other version with
+  `STORE_VERSION_UNSUPPORTED`, and neither migrates in place. A store created by
+  0.10.0 or earlier (stamped 9) must be recreated and reloaded from its source —
+  for example via `OntologyClient.ingest`. The internal mixin
+  `ontary.store.migration.SqliteSchemaMigrator` is renamed `SqliteSchemaGate` to
+  match: it gates, it does not migrate.
+- Decision B: exact-scope-id match is the v1 contract; parent-covers-child
+  coverage is opt-in and post-1.0. The `covers_scope` and `ScopePolicy`
+  docstrings cite the decision instead of calling it deferred, and a contract
+  test pins that a parent-scoped consumer never covers a child-owned row.
 - Every GitHub Actions `uses:` entry in `verify.yml` and `release.yml` moved off the
   Node 20 runtime: `checkout` v7, `setup-uv` v10.0.1, `upload-artifact` v7,
   `download-artifact` v8.
 - `release.yml` serializes runs per tag (`concurrency`, `cancel-in-progress: false`)
   so a re-push cannot cancel a publish that is already uploading.
-- The README links the release runbook. The carried release backlog is re-triaged
-  for the PyPI path in `rstaff/var/specs/ontary/post-v1-backlog.md`.
+- The carried release backlog is re-triaged for the PyPI path in
+  `rstaff/var/specs/ontary/post-v1-backlog.md`.
 
 ## [0.10.0] — 2026-09-04
 

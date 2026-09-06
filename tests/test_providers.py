@@ -11,7 +11,6 @@ from conftest import raises_code
 from ontary.actions import ActionContext
 from ontary.authoring import ActionParams, Ontology, OntologyObject, prop
 from ontary.client import OntologyClient, OntologyRuntime
-from ontary.effects import EffectMeta, EffectPayload
 from ontary.errors import ValidationFailed
 from ontary.functions import BoundQuery
 from ontary.security import Consumer
@@ -43,15 +42,6 @@ def _provider_ontology() -> tuple[Ontology, dict[str, Any]]:
     read_primary = ontology.capability(_Reader, name="readPrimary")
     read_secondary = ontology.capability(_Reader, name="readSecondary")
 
-    class Notify(EffectPayload):
-        message: str
-
-    class Archive(EffectPayload):
-        record_id: str
-
-    notify = ontology.effect(Notify)
-    archive = ontology.effect(Archive)
-
     class RunParams(ActionParams):
         pass
 
@@ -60,7 +50,6 @@ def _provider_ontology() -> tuple[Ontology, dict[str, Any]]:
         target=Record,
         roles=["Operator"],
         capabilities=[read_primary, read_secondary],
-        effects=[notify, archive],
         api_name="Run",
     )
     def run(_ctx: ActionContext, _params: RunParams) -> dict[str, str]:
@@ -71,31 +60,13 @@ def _provider_ontology() -> tuple[Ontology, dict[str, Any]]:
         capabilities=[read_primary, read_secondary],
     )
     def bound_providers(query: BoundQuery, _params: dict[str, Any]) -> dict[str, Any]:
-        return {
-            "capabilities": dict(query._capability_providers),
-            # A Function's BoundQuery must carry NO effect dispatchers: a
-            # Function cannot declare effects at all (AC4), so dispatchers it
-            # could never use would be dead surface inviting exactly that
-            # wiring. Reported out so the assertion sites below can pin the
-            # ABSENCE -- re-adding the attribute turns those tests red.
-            "has_effect_dispatchers": hasattr(query, "_effect_dispatchers"),
-        }
+        return {"capabilities": dict(query._capability_providers)}
 
     ontology.validate()
     return ontology, {
         "read_primary": read_primary,
         "read_secondary": read_secondary,
-        "notify": notify,
-        "archive": archive,
     }
-
-
-def _dispatch(_payload: EffectPayload, _meta: EffectMeta) -> None:
-    pass
-
-
-def _alternate_dispatch(_payload: EffectPayload, _meta: EffectMeta) -> None:
-    pass
 
 
 def test_bind_copies_maps_and_for_consumer_overrides_per_key(
@@ -110,22 +81,15 @@ def test_bind_copies_maps_and_for_consumer_overrides_per_key(
         handles["read_primary"]: primary,
         handles["read_secondary"]: secondary,
     }
-    effect_defaults = {
-        handles["notify"]: _dispatch,
-        handles["archive"]: _dispatch,
-    }
 
     runtime = ontology.bind(
         store,
         capabilities=capability_defaults,
-        effects=effect_defaults,
     )
     capability_defaults[handles["read_primary"]] = replacement
-    effect_defaults[handles["archive"]] = _alternate_dispatch
 
     override = _Provider("consumer-primary")
     capability_overrides = {handles["read_primary"]: override}
-    effect_overrides = {handles["notify"]: _alternate_dispatch}
     client = runtime.for_consumer(
         make_consumer(
             actor_id="one",
@@ -135,17 +99,14 @@ def test_bind_copies_maps_and_for_consumer_overrides_per_key(
             kind="human",
         ),
         capabilities=capability_overrides,
-        effects=effect_overrides,
     )
     capability_overrides[handles["read_primary"]] = replacement
-    effect_overrides[handles["notify"]] = _dispatch
 
     bound = client.call_function("boundProviders", {})
     assert bound["capabilities"] == {
         handles["read_primary"]: override,
         handles["read_secondary"]: secondary,
     }
-    assert bound["has_effect_dispatchers"] is False
 
 
 def test_shared_runtime_clients_interleave_without_provider_crosstalk(
@@ -155,7 +116,6 @@ def test_shared_runtime_clients_interleave_without_provider_crosstalk(
     runtime = ontology.bind(
         ObjectStore(ontology.registry),
         capabilities={handles["read_secondary"]: _Provider("inherited")},
-        effects={handles["archive"]: _dispatch},
     )
     provider_a = _Provider("a")
     provider_b = _Provider("b")
@@ -168,7 +128,6 @@ def test_shared_runtime_clients_interleave_without_provider_crosstalk(
             kind="human",
         ),
         capabilities={handles["read_primary"]: provider_a},
-        effects={handles["notify"]: _dispatch},
     )
     client_b = runtime.for_consumer(
         make_consumer(
@@ -179,7 +138,6 @@ def test_shared_runtime_clients_interleave_without_provider_crosstalk(
             kind="human",
         ),
         capabilities={handles["read_primary"]: provider_b},
-        effects={handles["notify"]: _alternate_dispatch},
     )
 
     assert client_a.actions is runtime.actions is client_b.actions
@@ -191,7 +149,6 @@ def test_shared_runtime_clients_interleave_without_provider_crosstalk(
         # Runtime-level configuration, like the scope policy -- deliberately
         # NOT per-consumer state, which is what this assertion guards the
         # shared executor against accumulating.
-        "_retry_policy",
         "_clock",
         "_id_factory",
     }
@@ -202,10 +159,6 @@ def test_shared_runtime_clients_interleave_without_provider_crosstalk(
     assert first_a["capabilities"][handles["read_primary"]] is provider_a
     assert only_b["capabilities"][handles["read_primary"]] is provider_b
     assert second_a["capabilities"][handles["read_primary"]] is provider_a
-    # The function path never carries dispatchers, for any consumer (AC4).
-    assert not any(
-        r["has_effect_dispatchers"] for r in (first_a, only_b, second_a)
-    )
 
 
 def test_direct_client_copies_maps_and_threads_them_to_action_execute(
@@ -214,17 +167,15 @@ def test_direct_client_copies_maps_and_threads_them_to_action_execute(
     ontology, handles = _provider_ontology()
     provider = _Provider("direct")
     replacement = _Provider("mutated")
-    # `Run` declares BOTH capabilities and BOTH effects, so bind all four:
-    # T6's pre-flight refuses an action with an unprovided declared capability
-    # (CAPABILITY_NOT_PROVIDED) before the transaction opens, and T7 adds the same
-    # refusal for an undispatchable declared effect. This test is about
-    # map-COPY isolation, so it must satisfy the pre-flight to reach that point.
+    # `Run` declares BOTH capabilities, so bind both: T6's pre-flight refuses
+    # an action with an unprovided declared capability (CAPABILITY_NOT_PROVIDED)
+    # before the transaction opens. This test is about map-COPY isolation, so it
+    # must satisfy the pre-flight to reach that point.
     secondary = _Provider("direct-secondary")
     capabilities = {
         handles["read_primary"]: provider,
         handles["read_secondary"]: secondary,
     }
-    effects = {handles["notify"]: _dispatch, handles["archive"]: _dispatch}
     client = OntologyClient(
         ontology,
         ObjectStore(ontology.registry),
@@ -236,17 +187,11 @@ def test_direct_client_copies_maps_and_threads_them_to_action_execute(
             kind="human",
         ),
         capabilities=capabilities,
-        effects=effects,
     )
     capabilities[handles["read_primary"]] = replacement
-    effects[handles["notify"]] = _alternate_dispatch
 
     bound = client.call_function("boundProviders", {})
     assert bound["capabilities"][handles["read_primary"]] is provider
-    assert bound["has_effect_dispatchers"] is False
-    # Effect-map copy isolation is observed on the ACTION path instead (below):
-    # the caller's `effects` dict was mutated after construction, so what
-    # reaches `ActionExecutor.execute` must still be the ORIGINAL dispatcher.
 
     with patch.object(
         client.actions,
@@ -255,15 +200,11 @@ def test_direct_client_copies_maps_and_threads_them_to_action_execute(
     ) as execute:
         assert client.execute("Run", {}) == {"status": "ok"}
 
-    # The caller's dicts were mutated after construction; what reached the
-    # executor must still be the ORIGINAL provider/dispatcher objects.
+    # The caller's dict was mutated after construction; what reached the
+    # executor must still be the ORIGINAL provider objects.
     assert execute.call_args.kwargs["capability_providers"] == {
         handles["read_primary"]: provider,
         handles["read_secondary"]: secondary,
-    }
-    assert execute.call_args.kwargs["effect_dispatchers"] == {
-        handles["notify"]: _dispatch,
-        handles["archive"]: _dispatch,
     }
 
 
@@ -281,21 +222,17 @@ def test_bind_copies_the_callers_maps_at_the_runtime_itself() -> None:
     ontology, handles = _provider_ontology()
     provider = _Provider("original")
     capabilities: dict[Any, Any] = {handles["read_primary"]: provider}
-    effects: dict[Any, Any] = {handles["notify"]: _dispatch}
 
     runtime = OntologyRuntime(
         ontology,
         ObjectStore(ontology.registry),
         capabilities=capabilities,
-        effects=effects,
     )
 
     capabilities[handles["read_primary"]] = _Provider("mutated")
-    effects[handles["notify"]] = _alternate_dispatch
     capabilities[handles["read_secondary"]] = _Provider("sneaked in")
 
     assert runtime._capability_providers == {handles["read_primary"]: provider}
-    assert runtime._effect_dispatchers == {handles["notify"]: _dispatch}
 
 
 # -- whole-branch review remediations (2026-07-26) ---------------------------
@@ -310,13 +247,8 @@ def _second_ontology_with_same_names() -> tuple[Ontology, dict[str, Any]]:
         id: str = prop(primary_key=True)
 
     read_primary = other.capability(_Reader, name="readPrimary")
-
-    class Notify(EffectPayload):
-        message: str
-
-    notify = other.effect(Notify, api_name="Notify")
     other.validate()
-    return other, {"read_primary": read_primary, "notify": notify}
+    return other, {"read_primary": read_primary}
 
 
 def test_binding_a_foreign_capability_handle_is_refused_at_bind_time() -> None:
@@ -340,28 +272,6 @@ def test_binding_a_foreign_capability_handle_is_refused_at_bind_time() -> None:
     assert "different Ontology" in str(exc_info.value)
 
 
-def test_binding_a_foreign_effect_handle_is_refused_at_bind_time(
-    make_consumer: ConsumerFactory,
-) -> None:
-    ontology, _handles = _provider_ontology()
-    _other, foreign = _second_ontology_with_same_names()
-
-    with raises_code(ValidationFailed, "UNKNOWN_NAME") as exc_info:
-        OntologyClient(
-            ontology,
-            ObjectStore(ontology.registry),
-            make_consumer(
-                actor_id="direct",
-                role="Operator",
-                scope_level="org",
-                scope_id="org-1",
-                kind="human",
-            ),
-            effects={foreign["notify"]: _dispatch},
-        )
-    assert "different Ontology" in str(exc_info.value)
-
-
 def test_for_consumer_also_refuses_a_foreign_override(
     make_consumer: ConsumerFactory,
 ) -> None:
@@ -374,7 +284,6 @@ def test_for_consumer_also_refuses_a_foreign_override(
             handles["read_primary"]: _Provider("a"),
             handles["read_secondary"]: _Provider("b"),
         },
-        effects={handles["notify"]: _dispatch, handles["archive"]: _dispatch},
     )
 
     with raises_code(ValidationFailed, "UNKNOWN_NAME") as exc_info:
@@ -416,32 +325,17 @@ def test_falsey_nonempty_provider_map_is_still_validated() -> None:
     assert "different Ontology" in str(exc_info.value)
 
 
-def test_wrong_kind_handle_is_refused_in_each_map(
+def test_non_capability_handle_is_refused_in_the_capability_map(
     make_consumer: ConsumerFactory,
 ) -> None:
-    """A CapabilityHandle cannot be bound as an effect dispatcher, or vice versa.
+    """Only a `CapabilityHandle` may key the capability map.
 
-    Re-review finding (2026-07-26), and the one genuine FAIL-OPEN of the set:
-    `CapabilityDef` and `EffectTypeDef` live in separate registry namespaces, so
-    `capability(X, name="Shared")` and `effect(Y, api_name="Shared")` can BOTH be
-    declared -- verified directly. Both pre-flights then matched on
-    `(api_name, registry)` alone, so a `CapabilityHandle` bound in `effects=` would
-    satisfy an effect declaration and be INVOKED as its dispatcher. Not a refusal
-    -- the wrong object gets called.
+    Fail-closed at BIND time: any other object -- a handle of another kind, a
+    bare string -- is refused with `UNKNOWN_NAME` rather than silently copied
+    into a map whose pre-flight matches on `(api_name, registry)` and could
+    then invoke the wrong object.
     """
-    ontology = Ontology("kind-check", scope_levels=["org"], min_n=1)
-
-    @ontology.object(layer="L0", scope="unscoped", owned=True)
-    class Rec(OntologyObject):
-        id: str = prop(primary_key=True)
-
-    class Payload(EffectPayload):
-        msg: str
-
-    cap = ontology.capability(_Reader, name="Shared")
-    eff = ontology.effect(Payload, api_name="Shared")
-    assert cap.api_name == eff.api_name  # the collision is legal
-    ontology.validate()
+    ontology, _handles = _provider_ontology()
     store = ObjectStore(ontology.registry)
 
     with raises_code(ValidationFailed, "UNKNOWN_NAME") as exc_info:
@@ -455,21 +349,6 @@ def test_wrong_kind_handle_is_refused_in_each_map(
                 scope_id="org-1",
                 kind="human",
             ),
-            effects={cap: _dispatch},
-        )
-    assert "cannot be bound in the effect map" in str(exc_info.value)
-
-    with raises_code(ValidationFailed, "UNKNOWN_NAME") as exc_info:
-        OntologyClient(
-            ontology,
-            store,
-            make_consumer(
-                actor_id="k",
-                role="Operator",
-                scope_level="org",
-                scope_id="org-1",
-                kind="human",
-            ),
-            capabilities={eff: _Provider("x")},
+            capabilities={"readPrimary": _Provider("x")},
         )
     assert "cannot be bound in the capability map" in str(exc_info.value)

@@ -1,10 +1,10 @@
 """M8a: the Postgres backend's own behavior, beyond the shared contract.
 
-`tests/test_store_conformance.py` runs all 64 behavioral assertions against this
+`tests/test_store_conformance.py` runs its whole behavioral suite against this
 backend when `ONTARY_TEST_POSTGRES_DSN` is set -- that suite is the real proof
 the seam holds. What is here is what the shared suite CANNOT express, because it
 is Postgres-specific: the schema stamp, the refusal of a database this engine did
-not create, concurrent claims across two connections, and the missing-extra
+not create, transactional rollback across a real connection, and the missing-extra
 message.
 
 Skipped without a DSN; run against a service container in CI on every PR.
@@ -17,7 +17,6 @@ import sys
 import uuid
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
 
 import pytest
 from conftest import raises_code
@@ -177,68 +176,6 @@ def test_an_unstamped_database_with_tables_is_refused_not_adopted(
 
 
 # -- concurrency the other backends cannot express ---------------------------
-
-
-def test_two_connections_never_claim_the_same_effect_row(
-    postgres_ontology: Ontology, make_store: StoreFactory
-) -> None:
-    """`FOR UPDATE SKIP LOCKED` on top of the declared lease.
-
-    The lease alone makes double-claiming impossible only if both claimers see
-    each other's write; two connections in flight at once are exactly the case a
-    single-process test cannot reach, which is why this lives here rather than in
-    the shared suite.
-    """
-    from ontary.outbox import OutboxRecord
-
-    now = datetime(2026, 7, 26, 12, 0, tzinfo=timezone.utc)
-    with _schema() as schema:
-        writer = make_store(
-            postgres_ontology.registry, dsn=_dsn_for(schema), backend="postgres"
-        )
-        reader = make_store(
-            postgres_ontology.registry, dsn=_dsn_for(schema), backend="postgres"
-        )
-        try:
-            writer.enqueue_effects(
-                [
-                    OutboxRecord(
-                        effect_id=f"eff-{index}",
-                        invocation_id="inv-1",
-                        seq=index,
-                        api_name="Notice",
-                        payload={"n": index},
-                        action="Emit",
-                        actor_id="a",
-                        role="Op",
-                        emitted_at=now,
-                        next_attempt_at=now,
-                        updated_at=now,
-                    )
-                    for index in range(4)
-                ]
-            )
-
-            first = writer.claim_due_effects(
-                limit=2, now=now, lease=timedelta(seconds=60)
-            )
-            second = reader.claim_due_effects(
-                limit=2, now=now, lease=timedelta(seconds=60)
-            )
-
-            assert len(first) == 2 and len(second) == 2
-            # Disjoint: no row was handed to both drainers.
-            assert {r.effect_id for r in first}.isdisjoint(
-                {r.effect_id for r in second}
-            )
-            # And between them they took all four, so SKIP LOCKED skipped rather
-            # than blocked -- a blocked second claimer would have returned none.
-            assert {r.effect_id for r in first} | {
-                r.effect_id for r in second
-            } == {"eff-0", "eff-1", "eff-2", "eff-3"}
-        finally:
-            writer.close()
-            reader.close()
 
 
 def test_a_rolled_back_transaction_leaves_nothing_behind(

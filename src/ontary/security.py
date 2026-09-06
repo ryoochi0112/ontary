@@ -70,13 +70,12 @@ def covers_scope(
     future rule (e.g. "a company-scoped consumer also covers its child
     teams") change without breaking callers.
 
-    Decision B (`docs/v1-gate.md`), resolved 2026-09-04: exact-scope-id
-    match is the v1 contract. A consumer scoped at a *parent* level (e.g.
-    company) does NOT automatically cover objects owned by a *child* scope
-    (e.g. one of that company's teams); this function denies in that case
-    rather than inferring hierarchy. Parent-covers-child is opt-in and
-    post-1.0. Revisit `levels` ordering on `ScopePolicy` if/when that rule
-    is needed.
+    Resolved 2026-09-04: exact-scope-id match is the contract. A consumer
+    scoped at a *parent* level (e.g. company) does NOT automatically cover
+    objects owned by a *child* scope (e.g. one of that company's teams);
+    this function denies in that case rather than inferring hierarchy.
+    Parent-covers-child is opt-in and post-1.0. Revisit `levels` ordering
+    on `ScopePolicy` if/when that rule is needed.
     """
     resolved_id = resolved.get(consumer.scope_level)
     return resolved_id is not None and resolved_id == consumer.scope_id

@@ -2,8 +2,8 @@
 
 [English](api-reference.md) · **日本語** · [← README](../README.md)
 
-`ontary` のキュレーションされたフロントドア: `__all__` の **58 個の名前**。
-残りのエンジン API は、`ontary.meta`、`ontary.store`、`ontary.connect` などの
+`ontary` のキュレーションされたフロントドア: `__all__` の **42 個の名前**。
+残りのエンジン API は、`ontary.meta`、`ontary.store` などの
 定義元サブモジュールから利用します。
 
 これは調べ物のためのドキュメントです。「宣言する → バインドする → 読む → 配信する」
@@ -19,12 +19,10 @@
 - [読み取り](#読み取り)
 - [Action](#action)
 - [Function](#function)
-- [統制された副作用](#統制された副作用)
+- [Capabilities](#capabilities)
 - [セキュリティ](#セキュリティ)
 - [ストア](#ストア)
 - [バルク取り込み](#バルク取り込み)
-- [`ontary.erase`](#ontaryerase)
-- [`ontary.connect`](#ontaryconnect)
 - [MCP サーバー](#mcp-サーバー)
 - [記述子による宣言](#記述子による宣言)
 - [エラーコード](#エラーコード)
@@ -34,23 +32,20 @@
 
 ## フロントドア
 
-`__all__` はソート済み・重複なし・import 可能で、58 個を上限とします。オントロジーの
+`__all__` はソート済み・重複なし・import 可能で、ちょうど 42 個です。オントロジーの
 作者がエンジンの名前空間を選ばずに使う名前だけをここに置きます。
 
 ### Authoring vocabulary / 宣言用語彙
 
-`ActionContext`、`ActionParams`、`BaseConnector`、`BoundQuery`、`CanonicalBatch`、
-`CanonicalRecord`、`CapabilityHandle`、`Cardinality`、`Consumer`、`CustomResolver`、
-`DirectProperty`、`EffectDispatcher`、`EffectHandle`、`EffectMeta`、
-`EffectPayload`、`LinkBinding`、`LinkHandle`、`MappingSpec`、`ObjectBinding`、
-`Ontology`、`OntologyObject`、`RawTables`、`RowVisibilityStore`、`SelfScope`、
-`Sensitivity`、`Source`、`Store`、`ViaLink`、`oid`、`prop`、`ref`、`run_pipeline`、
-`scope_ref`、`target`。
+`ActionContext`、`ActionParams`、`BoundQuery`、`CapabilityHandle`、`Cardinality`、
+`Consumer`、`CustomResolver`、`DirectProperty`、`LinkHandle`、`Ontology`、
+`OntologyObject`、`RowVisibilityStore`、`SelfScope`、`Sensitivity`、`Source`、
+`Store`、`ViaLink`、`prop`、`ref`、`scope_ref`、`target`。
 
 ### Runtime entries / ランタイム項目
 
-`Declarations`、`DrainReport`、`Finding`、`InMemoryStore`、`ObjectStore`、`OntologyClient`、
-`OutboxRecord`、`Page`、`PostgresStore`、`RetryPolicy`、`ScopePolicy`、`TypedPage`、
+`Declarations`、`Finding`、`InMemoryStore`、`ObjectStore`、`OntologyClient`、
+`Page`、`PostgresStore`、`ScopePolicy`、`TypedPage`、
 `__version__`、`build_mcp_server`、`declarations`。
 
 ### Error classes / 例外クラス
@@ -58,7 +53,7 @@
 `ActionError`、`AuthorityError`、`ConflictError`、`InternalError`、`OntaryError`、
 `PermissionDenied`、`PreconditionFailed`、`ValidationFailed`、`VisibilityError`。
 
-この 58 個の上限は `tests/test_docs.py` が検証するため、root export の増加を
+この 42 個という個数は `tests/test_docs.py` が厳密に検証するため、root export の増加を
 見落としません。
 
 ```python
@@ -66,7 +61,7 @@ from ontary import Ontology, OntologyObject, Consumer, prop, target, Cardinality
 ```
 
 Python 3.12+。コアパッケージの依存は `pydantic` のみ。エクストラ: `[mcp]`（MCP
-サーバー）、`[dlt]`（dlt/duckdb によるコネクタ抽出）、`[bq]`（BigQuery 対応を追加）。
+サーバー）、`[postgres]`（`PostgresStore` バックエンド）。
 
 ---
 
@@ -74,8 +69,6 @@ Python 3.12+。コアパッケージの依存は `pydantic` のみ。エクス�
 
 以下の名前は意図的にフロントドアへ平坦化していません。エンジンを拡張したり高度な
 統合を行ったりするときは、定義元サブモジュールから import してください。
-`MappingValidationError` は connector の事前検証用の通常の `Exception` であり、
-`ontary.connect` にあります。
 
 ### `ontary.actions`
 
@@ -83,31 +76,15 @@ Python 3.12+。コアパッケージの依存は `pydantic` のみ。エクス�
 
 ### `ontary.audit`
 
-`CapabilityAccessRecord`、`EffectRecord`。
+`CapabilityAccessRecord`。
 
 ### `ontary.client`
 
 `OntologyRuntime`。
 
-### `ontary.connect`
-
-`LinkSkip`、`MappingValidationError`、`RunReport`、`SourceConnector`、
-`SourceLineage`、`map_batch`、`run_dlt_extract`、`to_date`、`to_datetime`、
-`to_optional_date`、`to_optional_datetime`。
-
 ### `ontary.errors`
 
 `ERROR_CODES`、`ErrorCodeInfo`、`Kind`。
-
-### `ontary.explain`
-
-オペレーター向けトレースモデル: `DecisionTrace`、`ScopeRuleTrace`、
-`ScopePathStep`、`RedactionTrace`、`MinNTrace`、`ScanReport`。これらは canonical
-submodule から import し、`ontary` フロントドアからは export しません。
-
-### `ontary.fingerprint`
-
-`OntologyFingerprint`、`fingerprint_ontology`。
 
 ### `ontary.functions`
 
@@ -117,21 +94,6 @@ submodule から import し、`ontary` フロントドアからは export しま
 
 `IngestError`、`IngestReport`、`bulk_link`、`bulk_upsert`。
 
-### `ontary.erase`
-
-`EraseReport`、`erase_object`。
-
-オペレーターだけが使う Python の runbook API です。`(object_type, id)` で 1 つの
-オブジェクトを消去しますが、`ontary.__all__` には意図的に含まれません。
-`OntologyClient`、`ActionContext`、MCP からは到達できません。呼び出し元は
-`operator=...` で実行者を指定します。消去は live なオブジェクト行を閉じ、対象の
-全オブジェクト行、該当する監査パラメータ、Effect outbox のペイロードから内容を
-取り除きます。構造と系譜は tombstone 行として残り、監査エントリも追加されます。
-完了済みの消去を、新たに一致する内容がない状態で繰り返すと
-`OBJECT_ALREADY_ERASED` の no-op レポートが返ります。遅れて到着した内容がある
-場合は purge をもう一度実行し、実際の消去を報告します。未知のオブジェクト ID には
-`OBJECT_ERASURE_NOT_FOUND` が送出されます。
-
 ### `ontary.mcp_server`
 
 `ConsumerResolver`、`build_multi_consumer_mcp_server`。
@@ -139,20 +101,11 @@ submodule から import し、`ontary` フロントドアからは export しま
 ### `ontary.meta`
 
 `ActionParameterDef`、`ActionTypeDef`、`FunctionDef`、`LinkTypeDef`、
-`ObjectTypeDef`、`OntologyRegistry`、`PropertyDef`、`PropertyType`、`ScopeLevel`、
-`Upcaster`。
-
-### `ontary.migrate`
-
-`MigrationFailure`、`MigrationReport`、`migrate_object_type`、`upcast_object_type`。
+`ObjectTypeDef`、`OntologyRegistry`、`PropertyDef`、`PropertyType`、`ScopeLevel`。
 
 ### `ontary.ontology`
 
 `OntologyDef`。
-
-### `ontary.outbox`
-
-`DEFAULT_RETRY_POLICY`、`OutboxState`。
 
 ### `ontary.query`
 
@@ -170,25 +123,19 @@ submodule から import し、`ontary` フロントドアからは export しま
 ### `ontary.store`
 
 `AuditEntry`、`DEFAULT_BATCH`、`DEFAULT_TENANT`、`Lineage`、
-`SCHEMA_VERSION`、`StoredObject`、`WriteRecord`、`accept_ontology_fingerprint`、
-`check_ontology_fingerprint`。
+`SCHEMA_VERSION`、`StoredObject`、`WriteRecord`。
 
 ### `ontary.testing`
 
 SDK 利用者向けのテストヘルパーは `make_store`、`consumer`、`raises_code`、
-`capture_effects`、`FixedClock`、`SequentialIds` です。`make_store(ontology)` は空の
+`FixedClock`、`SequentialIds` です。`make_store(ontology)` は空の
 `InMemoryStore` を新しく作り、`consumer(...)` は有効な `Consumer` を組み立て、
 `raises_code(code)` はメッセージではなく機械可読なコードでエラーを検証します
 （`ontary.ingest.IngestError` を含む任意の `OntaryError` に加え、安定した文字列
 `.code` を公開する構造的に互換な作者定義のコード付き例外にも一致します）。
-`capture_effects()` は外部へ配信せず、呼び出された `(payload, meta)` を `.effects` リストへ
-記録する callable dispatcher を返します。`FixedClock(start)` はタイムゾーン付きの同じ
+`FixedClock(start)` はタイムゾーン付きの同じ
 日時を毎回返し、naive な start は拒否します。`SequentialIds(prefix)` は
 `prefix-1`、`prefix-2`、…という決定的な ID を返します。
-
-### `ontary.upcast`
-
-`upcast_payload`。
 
 ---
 
@@ -214,7 +161,6 @@ SDK 利用者向けのテストヘルパーは `make_store`、`consumer`、`rais
 | `@ontology.action(params_cls, ...)` | 型付き Action ハンドラを登録 |
 | `@ontology.function(...)` | 導出値 Function を登録 |
 | `ontology.capability(proto, ...)` | Capability を宣言し `CapabilityHandle` を返す |
-| `ontology.effect(payload_cls, ...)` | Effect を宣言し `EffectHandle` を返す |
 | `ontology.validate()` | 検証して登録を**凍結** |
 | `ontology.bind(store, ...)` | `OntologyRuntime` を構築 |
 
@@ -343,52 +289,25 @@ covers_scope(policy, consumer, resolved) -> bool
 ## ランタイムとクライアント
 
 ```python
-runtime = ontology.bind(store, capabilities={...}, effects={...})   # 1 回だけ
+runtime = ontology.bind(store, capabilities={...})                  # 1 回だけ
 client  = runtime.for_consumer(consumer)                            # リクエストごとに安価に
 ```
 
-### `Ontology.bind(store, *, clock=None, id_factory=None, capabilities=None, effects=None)`
+### `Ontology.bind(store, *, clock=None, id_factory=None, capabilities=None)`
 
 `clock` はタイムゾーン付き `datetime` を返す callable で、デフォルトは
 `datetime.now(timezone.utc)` です。`id_factory` は `str` を返す callable で、デフォルトは
 UUID 形式の ID です。どちらも共有ランタイムに保存され、すべての
-`for_consumer()` ビューに引き継がれます。`drain_effects(now=...)` を明示した場合は、
-ランタイムの clock よりそちらが優先されます。
+`for_consumer()` ビューに引き継がれます。
 
-### `OntologyRuntime(ontology, store, handlers=None, *, clock=None, id_factory=None, capabilities=None, effects=None)`
+### `OntologyRuntime(ontology, store, handlers=None, *, clock=None, id_factory=None, capabilities=None)`
 
 1 つの `(ontology, store)` ペアに対する、コンシューマー非依存の共有機構 — クエリ層、
 Action 実行器、バインド済みハンドラ — をちょうど 1 回だけ配線します。
 
-- **`.for_consumer(consumer, *, capabilities=None, effects=None) -> OntologyClient`** —
+- **`.for_consumer(consumer, *, capabilities=None) -> OntologyClient`** —
   安価なビュー。1 プロセスで多数のコンシューマーを捌いても、再配線は起きません。
-- **`.explain_read(consumer, obj_type, id) -> DecisionTrace`** — 1 件の
-  guarded read について、評価した全スコープルールと解決経路、sensitivity
-  redaction、最終 verdict（`visible` / `redacted` / `denied` / `not_found`）、
-  および実際の read が送出するエラーコード（ある場合）を説明します。
-- **`.explain_list(consumer, obj_type, where=None) -> list[DecisionTrace]`** —
-  拒否された行も含め、raw の一致行ごとに 1 トレースを返します。各トレースには、
-  選択された可視 population の集計関連 min-N 結果も含まれます。これは診断情報であり、
-  通常の list に min-N gate を追加するものではありません。
-
-> **オペレーター信頼境界の警告。** Explain は隠された行の存在を明かします。
-> raw store を保持するのと同じ信頼レベルにだけアクセスを許可してください。
-> `OntologyClient` には意図的に存在せず、MCP tool として登録されることもありません。
-
-frozen な結果モデルは canonical submodule から import します。
-
-```python
-from ontary.explain import DecisionTrace
-```
-
-`DecisionTrace.rules` は、ルール種別、要求レベル、match 結果、解決済み scope id、
-および object type/id の hop からなる `scope_path`（ViaLink edge は link 名と方向を
-記録）を持つ `ScopeRuleTrace` エントリです。`redactions` は削除されたフィールドと
-consumer kind を示します。単一 read の `min_n` は `not_applicable`、説明対象 list
-selection では `passed` / `failed` です。この surface 全体が operator-only なので、
-count も含めます。
-
-### `OntologyClient(ontology, store, consumer, *, capabilities=None, effects=None)`
+### `OntologyClient(ontology, store, consumer, *, capabilities=None)`
 
 ちょうど 1 つの `(ontology, store, consumer)` に束縛されます。直接構築しても動作し、
 その場合は内部で使い捨てのランタイムを構築します。
@@ -479,6 +398,11 @@ payload と lineage を分離した凍結オブジェクトです。`_object_typ
 `where` は、型付き、文字列、aggregate、Function、MCP のすべての読み取り surface で
 共通です。
 
+mapping 値は演算子構文なので、宣言済み `json` プロパティの等価比較を
+`where={"data": {"kind": "a"}}` とは書けません — その mapping は値ではなく演算子として
+解釈されます。1 要素の `in` リストで包んでください:
+`where={"data": {"in": [{"kind": "a"}]}}` が等価比較の回避策です。
+
 `DirectProperty` として宣言されたスコープルーティングキーが隠しフィールドである
 場合、スコープキーの例外は、素の `eq` 値による等価一致と、明示的なリストを
 operand とする `in` に限られます。`gt`、`gte`、`lt`、`lte`、`ne`、`contains`、
@@ -532,6 +456,43 @@ list を返し、正の `limit` を渡すとページを返します。
   カーソルより前に移動した行は静かに取りこぼされ、後ろに移動した行は重複します。
   順序付き walk が欠落も重複も起こさないのは、ストアが静止している場合だけです。
 - `limit` なしの `after` → `AFTER_WITHOUT_LIMIT`。`limit < 1` → `INVALID_LIMIT`。
+  不正または未知のカーソル → `INVALID_CURSOR`。順序付き walk は、自身のカーソル行への
+  書き込み（retire や行を差し替える `update` を含む）の後は再開できず、`STALE_CURSOR`
+  になります。先頭ページからやり直してください。
+
+**順序付きページのスケール上の注意。** 順序付きページは現状、`limit` や `where` の
+絞り込みに関わらず、毎回そのオブジェクト型全体を展開してソートします。実測した
+20,000 行のケースでは、`order_by` ありの `limit=10` が 20,000 行すべてを読み、
+なしでは 500 行でした。1 ページあたり O(N log N)、順序付き walk 全体で O(N² log N)
+です。
+
+### `traverse`
+
+型付き形式は `client.traverse(link_cls, from_obj_or_id)` です。文字列形式は
+`client.traverse("Comment", "commentOnTicket", comment_id)` のように、ソース型・
+リンク API 名・ソース id をこの順で渡します。Function 内の `BoundQuery` も同じ
+ハンドル先頭の型付き形式を受け付けます。
+
+返される対象行にも通常どおり可視性チェックが適用されます。identity-revealing な
+リンクの traverse は、human コンシューマーに対しては対象を返す前に `VisibilityError`
+（`VISIBILITY_DENIED`）になります。AI コンシューマーには対象行への通常のスコープと
+sensitivity の強制が適用されます。`reverse=True` はリンクの対象側から辿り、
+identity-revealing の拒否は双方向で対称です。
+
+### 可視行のカウント
+
+`count(obj_type, where=None)` は、コンシューマーのスコープと行可視性のチェックを
+適用した後に一致する行数を返します。`exists(...)` は同じ post-visibility の選択が
+空でないかを返します。どちらも `list` と同じ `where` 演算子文法を受け付けます。
+一致する行すべてからスコープ外に置かれたコンシューマーは、プライバシー拒否ではなく
+`count` から `0`、`exists` から `False` を受け取ります。
+
+この 2 つの操作は意図的に min-N の対象外です。開示するのは post-visibility
+フィルター後の行集合のサイズだけであり、コンシューマーは
+`list(..., limit=None)` で同じ行を列挙できるため、min-N 拒否を加えても開示保護は
+増えません。`count_contributors` は引き続き唯一のプライバシー計数プリミティブです。
+可視行のカウントとは異なり、集計の背後にある distinct な貢献者母集団を解決するため、
+集計と同じ min-N のリリース規律を保ちます。
 
 ### 集計
 
@@ -586,7 +547,7 @@ surface だけでなく、**すべての** surface が対象です。型が宣�
 ## Action
 
 Action は、型付きパラメータクラスと、
-`@ontology.action(params_cls, target=..., roles=[...], capabilities=(), effects=())`
+`@ontology.action(params_cls, target=..., roles=[...], capabilities=())`
 でデコレートしたハンドラの組です。
 
 `execute` はすべて同じパイプラインを通ります。
@@ -603,7 +564,7 @@ Action は、型付きパラメータクラスと、
 
 | メンバー | 用途 |
 | --- | --- |
-| `.insert(obj_type, payload) -> str` | 作成。primary key を省略した payload には、ランタイムの `id_factory` から採番される（0.10; [docs/compatibility.md](compatibility.md#auto-minted-ids-come-from-id_factory-09--010) 参照） |
+| `.insert(obj_type, payload) -> str` | 作成。primary key を省略した payload には、ランタイムの `id_factory` から自動で採番される |
 | `.update(obj_type, obj_id, changes)` | 更新 |
 | `.create_link(link_api_name, from_id, to_id)` | リンク作成 |
 | `.retire(obj_type, obj_id)` | オブジェクトをリタイアし、そのオブジェクト型についてリンク型が宣言している側でそのオブジェクトを参照するすべての live link を cascade-close |
@@ -613,7 +574,6 @@ Action は、型付きパラメータクラスと、
 | `.links_from(link_api_name, from_id) -> list[str]` | リンク走査 |
 | `.links_to(link_api_name, to_id) -> list[str]` | リンク走査 |
 | `.capability(handle) -> P` | 宣言済み Capability の取得 |
-| `.emit(payload)` | 宣言済み Effect の発行 |
 | `.consumer` | 呼び出し元の `Consumer` |
 
 `read_current` と `read_all` は、信頼されたハンドラ向けの生の読み取りであり、
@@ -652,25 +612,23 @@ Action が監査ログの下でロールバックされうるためです。
 
 `ts`、`actor`、`role`、`action`、`target_type`、`target_id`、`params`、`outcome`、
 `invocation_id`、および完全性レコード: `writes: list[WriteRecord]`、
-`effects: list[EffectRecord]`、`capability_accesses: list[CapabilityAccessRecord]`。
+`capability_accesses: list[CapabilityAccessRecord]`。
 
 **`kind: Literal["action", "function"]`** — このエントリを生成したもの。Action と
 Function は 1 つのログを共有するため、読み手が両者を区別する手段が `kind` です（同じ
 `api_name` の Action と Function を宣言することを妨げるものは何もありません）。
 `function` エントリでは `action` に Function の api_name が入り、`target_type` は `""`
-（Function に対象オブジェクト型はありません）、`writes`/`effects` は常に空です。
+（Function に対象オブジェクト型はありません）、`writes` は常に空です。
 
 **`invocation_id: str | None`** — `execute()`（および監査対象の `call_function()`）
-呼び出しごとに 1 つの id で、その呼び出しが書き込む**すべて**のエントリ（`denied`/`error`/`ok` のエントリと、Effect を持つ Action
-では後続の `effects_dispatched` エントリ）に刻印されます。`pending` の Effect とその結果を
-対応づけるときは、フィールド一致と追記順に頼らずこの値を使ってください — 同じ Action を
+呼び出しごとに 1 つの id で、その呼び出しが書き込む**すべて**のエントリに刻印されます。
+エントリを対応づけるときは、フィールド一致と追記順に頼らずこの値を使ってください — 同じ Action を
 同じパラメータで 2 回呼ぶと、それ以外では区別できません。`None` はこのフィールドが存在
 しなかった頃のエントリ（古いエンジンが書いたストアファイル）を意味し、後から捏造される
 ことはありません。
 
 - `WriteRecord` — `op`（`create`/`update`/`link`）、`object_type`、`link_type`、
   `object_id`、`from_id`、`to_id`
-- `EffectRecord` — `api_name`、`payload`、`outcome`（`pending`/`dispatched`/`failed`）、`error`
 - `CapabilityAccessRecord` — `api_name`、`count`
 
 ---
@@ -696,8 +654,8 @@ Function の*パラメータ自体*はどちらの surface でも `dict[str, Any
 ### Function の監査境界
 
 監査対象となる call では、`OntologyClient.call_function` が `kind="function"` の監査エントリを 1 件追加します —
-invocation id、params、outcome、handler の `capability_accesses` を記録します。`writes` と
-`effects` は構造上空です。
+invocation id、params、outcome、handler の `capability_accesses` を記録します。`writes`
+は構造上空です。
 
 Function を監査するかは `FunctionDef.audited` による**条件付き**です。
 
@@ -738,12 +696,11 @@ store ではなく `execute()` に属するのと同じく、client surface に�
 
 ---
 
-## 統制された副作用
+## Capabilities
 
 ハンドラが外界に求めるものはすべて**宣言**し、バインド時に提供する必要があります。
-未宣言の利用は拒否され、利用はすべて監査されます。
-
-### Capability — ハンドラが読む／呼ぶもの
+未宣言の利用は拒否され、利用はすべて監査されます。Capability はハンドラが読む／呼ぶ
+ものです。
 
 ```python
 Clock = ontology.capability(ClockProto, name="clock")
@@ -756,50 +713,8 @@ def handler(ctx, params):
 未宣言の Capability を要求すると `UNDECLARED_CAPABILITY`、宣言済みでもプロバイダが
 バインドされていなければ `CAPABILITY_NOT_PROVIDED` になります。
 
-### Effect — ハンドラが「起きてほしい」こと
-
-```python
-Notify = ontology.effect(NotifyPayload, api_name="Notify")
-
-@ontology.action(P, target=T, roles=["Agent"], effects=[Notify])
-def handler(ctx, params):
-    ctx.emit(NotifyPayload(...))
-```
-
-Effect は**呼び出しではなくデータ**です。ハンドラはペイロードを発行するだけで、
-ディスパッチはトランザクションの外で起こります。各 Effect には `EffectMeta`
-（`action`、`actor_id`、`role`、`ts`、`effect_id`、`attempt`）が伴います。未宣言の
-Effect の発行は `UNDECLARED_EFFECT`、宣言済みでもディスパッチャが無ければ
-`EFFECT_NOT_DISPATCHABLE` になります。JSON 化できないペイロードは、トランザクション
-の**内側**で `EFFECT_NOT_SERIALIZABLE` を送出します。アクションはロールバックされ、
-外部へは何も送られません。
-
-プロバイダは `ontology.bind(store, capabilities={...}, effects={...})`、または
-クライアント単位で `for_consumer(...)` にバインドします。
-
-### 永続的な配信
-
-発行された Effect は、アクションのトランザクションの内側で `effect_outbox` テーブル
-に書き込まれます。つまり配信すべき仕事が、オントロジーへの書き込みと一緒にコミット
-されます。配信保証は **at-least-once** です。
-
-| API | シグネチャ | 補足 |
-| --- | --- | --- |
-| `RetryPolicy` | `RetryPolicy(max_attempts=3, initial_backoff=1s, multiplier=2.0, max_backoff=5m, lease=60s)` | ランタイム／クライアント単位に `effect_retry=` でバインド。`max_attempts=1` は従来の at-most-once と同じ挙動になる。バックオフは決定的（ジッタなし）。 |
-| `OntologyClient.drain_effects` | `drain_effects(*, limit=100, now=None) -> DrainReport` | 実行時刻に達した行をリース付きで確保し（二重送信を防ぐ）、そのクライアントのディスパッチャで試行して `DrainReport(claimed, delivered, retrying, failed, skipped)` を返す。`OntologyRuntime` にも同じメソッドがある。 |
-| `OntologyClient.outbox` | `outbox() -> list[OutboxRecord]` | 全行の管理用リード。`pending`・`delivered`・打ち切り済みの `failed` をすべて含む。 |
-
-`execute()` がコミット後に行う同期ディスパッチが、ポリシー上の 1 回目の試行です。
-以降の再試行が自動で走ることはありません。**この SDK はスレッドを一切起動しない**
-ので、障害からの回復が必要なら、ワーカー・cron・リクエスト末尾のいずれかから
-`drain_effects()` を呼ぶ必要があります。そのクライアントにディスパッチャが無い
-Effect の行は、失敗とは数えずリースを解放し、`skipped` に計上します。
-
-行が `delivered` になるのは外部呼び出しから戻った**後**なので、その間にプロセスが
-死ねば再配信されます。**ディスパッチャは `EffectMeta.effect_id` に対して冪等で
-なければなりません**。この id は 1 回の発行につき 1 つで、再試行をまたいでも変わり
-ません。`max_attempts` を使い切った行は `failed` になります。これは終端状態であり、
-読み出せるデッドレターとして残りますが、二度と再試行されません。
+プロバイダは `ontology.bind(store, capabilities={...})`、またはクライアント単位で
+`for_consumer(...)` にバインドします。
 
 ---
 
@@ -849,8 +764,6 @@ read_last(obj_type, obj_id) -> StoredObject | None
 read_all(obj_type) -> list[StoredObject]
 read_page(obj_type, after_key=None, batch=500) -> list[PagedRow]
 retire_object(object_type, obj_id) -> StoredObject
-erase_object_content(object_type, obj_id) -> EraseResult
-object_erasure_state(object_type, obj_id) -> tuple[bool, bool]
 create_link(link_type, from_id, to_id) -> None
 close_link(link_type, from_id, to_id) -> bool
 links_from(link_type, from_id) -> list[str]
@@ -873,9 +786,9 @@ retire されたオブジェクトも、属していたスコープを持ち続�
 はリンクを閉じるため、gate はオブジェクトの最後の行と、その行が閉じた時点で
 持っていたリンクからスコープを解決します。
 
-consumer の read は、あえてこれを使いません。retire 済み（または erase 済み）の行の
-スコープを解決すると、その子オブジェクトが再び可視集合に入ります。すると母集団が
-`min_n` を超え、erase 対象自身の行を含む集計値が返ってしまいます。`read_last` から
+consumer の read は、あえてこれを使いません。retire 済みの行のスコープを解決すると、
+その子オブジェクトが再び可視集合に入ります。すると母集団が `min_n` を超え、
+retire 対象自身の行を含む集計値が返ってしまいます。`read_last` から
 retire 済みの行を除外したり、`_asof` から閉じたリンクを除外したりするバックエンドを
 書くと、retire されたオブジェクトの正当な所有者が拒否されます。
 
@@ -918,24 +831,19 @@ raise は 2 か所にあります。1 つは、スコープを担うパラメー
 連鎖は解決できたが、この consumer がその外にいる場合。これはこの gate が変えていない従来
 どおりの拒否です。あるいは、その時刻に連鎖が解決できない場合で、既定の deny が働きます。
 この断面が扱うのは後者だけです。宣言されているルールの種類は 4 つで、それぞれが自身の hop で
-retire と erase に出会います。
+retire に出会います。
 
-- `SelfScope` はオブジェクト自身の id を返します。retire も erase もこの id を奪いません。
-- `DirectProperty` はスコープキーを payload から読みます。`erase_object_content` は設計
-  どおり、そのルールが読む payload を空にします。履歴を見る read でも復元できません。
-  この gate が読むのは有効な行ではなく最新行のため、retire は payload を変えません。
-  したがって、**この hop 自身の read** を失わせる lifecycle の事象は erase だけです。target 自身が
-  `DirectProperty` の場合はもちろん、**祖先**の hop が `DirectProperty` の場合も同じです。
-  後者では、erase が保持したリンクを持つ `ViaLink` の target まで拒否されます。
-  スコープキーが消えることは erase の目的であり、gate の穴ではありません。
-- `ViaLink` は `links` テーブルをたどります。erase はこれを保持するため、この hop に erase
-  の影響はありません。たどり着いた親のどれも順に解決できないとき、この hop は何も解決しません。
+- `SelfScope` はオブジェクト自身の id を返します。retire はこの id を奪いません。
+- `DirectProperty` はスコープキーを payload から読みます。この gate が読むのは有効な行では
+  なく最新行のため、retire は payload を変えません。
+- `ViaLink` は `links` テーブルをたどります。たどり着いた親のどれも順に解決できないとき、
+  この hop は何も解決しません。
   target が閉じるより前に retire された親もその一つです。その時刻に辺そのものは読める
   ことがありますが、親の行が採用されないため、この gate が尋ねる 1 つの時刻にその親は
   答えられません。target より後に retire された
   親は、同じ cascade の tick で閉じたものも含めて、いまも target のために解決します。
 - `CustomResolver` は生の `Store` を受け取る作者のコードで、engine はその中に立ち入り
-  ません。したがって、retire 済み・erase 済みのオブジェクトが何に解決するかは、この断面
+  ません。したがって、retire 済みのオブジェクトが何に解決するかは、この断面
   ではなく resolver 自身の責任です。素直な実装は `read_current` を読みますが、これは
   retire 済みのオブジェクトには `None` を返すため、そう書かれた resolver は拒否します。
   retire 後も precondition の拒否が必要な型は、2 つ目のルールを宣言してください。スコープ
@@ -960,7 +868,7 @@ target の level に答える hop は、その target の他の hop がまった
 情報は出ません。
 <!-- scope-denied-consequences:end -->
 
-3 つの実装が同梱され、すべて同じ 192 assertion の適合性テストスイートで検証されています。
+3 つの実装が同梱され、すべて同じ適合性テストスイートで検証されています。
 
 - **`ObjectStore`** — SQLite。履歴（close-old / insert-new）、リンク、監査ログ。
 - **`InMemoryStore`** — 純 Python。ファイルも SQL も無し。テストやドッグフーディング向け。
@@ -982,26 +890,19 @@ SQLite の write lock を保持します。競合する writer がその handler
 
 `retire_object` は置き換え行を挿入せず、オブジェクトの current row を閉じます。リンクの
 cascade は行いません。`close_link` は 3 つの ID が一致する 1 本の live link を閉じます。
-`erase_object_content` はバックエンド内で完結するオペレーター消去プリミティブです。
-live なオブジェクトを閉じたうえで、オブジェクト、監査、outbox の行から内容を消去し、
-構造上の tombstone を残します。3 つのバックエンドがすべてこれらの verb を実装します。
+3 つのバックエンドがすべてこれらの verb を実装します。
 `ActionContext.retire` の cascade は、ストアのオブジェクト retirement primitive
 の上位にあります。
 
 ### スキーマバージョニング
 
-すべての SQLite ファイルは、作成時または初回オープン時に `PRAGMA user_version` で
-刻印されます。
-
-- エンジンの `SCHEMA_VERSION` **より高い**刻印 → `STORE_VERSION_UNSUPPORTED`。
-  後段で分かりにくい SQL エラーになる前に、構築時点で拒否します。
-- **未刻印（version 0）** のファイルは、盲信せず検査します。既存のすべてのテーブルを、
-  スキーマが要求するすべてのカラムと突き合わせます。ページネーション用カーソル
-  カラムが欠けているだけなら、その場で移行し（`ALTER TABLE` 1 回、バックフィル、
-  インデックス）、そのうえで刻印します。それ以外のカラム欠落は
-  `STORE_SCHEMA_INCOMPATIBLE` としてテーブル名とカラム名を挙げて拒否し、
-  `user_version` は 0 のままにします。エンジンが実際には読めないファイルに刻印を
-  書き込むことは決してありません。
+すべての SQLite ファイルは、作成時にエンジンの `SCHEMA_VERSION` を `PRAGMA
+user_version` へ刻印します。Postgres も同じ番号を `schema_meta` に記録します。
+どちらのバックエンドも移行のはしご（migration ladder）を持ちません。そのため、刻印が
+一致しないストアはすべて、構築時点で `STORE_VERSION_UNSUPPORTED` として両方のバージョンを
+挙げて拒否します。刻印が高い場合も低い場合も、未刻印で `objects` テーブルをすでに
+持つ場合も同じです。スキーマバージョンをまたぐ移行はオペレーターの明示的な手順です。
+対応する ontary バージョンで開くか、新しいストアにデータを移してください。
 
 ---
 
@@ -1036,58 +937,13 @@ client.ingest_links(
 
 ---
 
-## `ontary.connect`
-
-任意のソースシステムとオントロジーの間に置く、ソース非依存のステージング層。ベンダーを
-差し替えてもオントロジーには手を入れずに済みます。エンジン名は 20 個です。
-
-### 正規モデル
-
-- **`CanonicalRecord`** — 基底クラス。`lineage: Lineage` スタンプ
-  （`source_system`、`source_id`、`extracted_at`）が構築時に強制されます。
-- **`CanonicalBatch`** — `entities: dict[str, list[CanonicalRecord]]`。
-- **`RawTables`** — テーブル名をキーにしたソース形状の行。
-
-### コネクタ
-
-- **`SourceConnector`** — プロトコル。`extract()`（副作用あり。`make verify` からは
-  呼ばれません）と `transform(raw) -> CanonicalBatch`（純粋。ユニットテスト対象）。
-- **`BaseConnector`** — 便利な基底クラス。
-- **`run_dlt_extract(source, pipeline_name, staging_dir) -> RawTables`** — dlt による
-  抽出（`dlt` エクストラが必要）。
-
-### マッピング
-
-- **`MappingSpec`** — `object_bindings`、`link_bindings`。
-- **`ObjectBinding`** — `entity`、`object_type`、`key_field`、`property_map`、
-  `record_model`、`transform`。
-- **`LinkBinding`** — `link_type`、`from_entity`、`from_key_field`、`to_entity`、
-  `to_key_field`。
-- **`map_batch(batch, mapping, registry, store, *, source_system, run_at) -> RunReport`**
-- **`run_pipeline(connector, mapping, ontology, store, *, raw=None, run_at=None) -> RunReport`**
-
-`oid(source_system, object_type, key) -> str` が、マッピングを冪等にする決定的な
-オントロジー id を導出します。同じバッチを再実行しても重複ではなく upsert になります。
-
-`RunReport` — `source_system`、`run_at`、`written`、`errors`、
-`entities_absent_from_batch`、`links_created`、`links_resolved_same_batch`、
-`links_resolved_via_store`、`links_skipped`、`link_skip_details`、`link_errors`。
-どの binding も参照していないバッチエンティティは `ENTITY_KEY_MISMATCH` になります。
-逆（binding はあるがバッチが出さないエンティティ）はエラーではなくレポートに計上されます。
-
-### 変換ヘルパー
-
-`to_date`、`to_datetime`、`to_optional_date`、`to_optional_datetime`。
-
----
-
 ## MCP サーバー
 
 ```python
 from ontary.mcp_server import build_mcp_server
 
 server = build_mcp_server(ontology, store, consumer, *, name=None,
-                          capabilities=None, effects=None)  # -> FastMCP
+                          capabilities=None)  # -> FastMCP
 ```
 
 1 サーバープロセスにつき 1 つの `Consumer` アイデンティティ。宣言済みハンドラは
@@ -1149,7 +1005,7 @@ from ontary.mcp_server import build_multi_consumer_mcp_server, ConsumerResolver
 
 server = build_multi_consumer_mcp_server(
     ontology, store, *, resolve_consumer, name=None,
-    capabilities=None, effects=None,
+    capabilities=None,
     token_verifier=None, auth=None,
 )  # -> FastMCP
 ```
@@ -1219,7 +1075,7 @@ FastMCP 自身の `json_response` 設定で制御されており、いずれの�
 | `ObjectTypeDef` | `api_name`, `display_name`, `description`, `layer`, `properties`, `primary_key`, `owned` |
 | `PropertyDef` | `name`, `type`, `required`, `sensitivity`, `scope_level` |
 | `LinkTypeDef` | `api_name`, `from_type`, `to_type`, `cardinality`, `description`, `identity_revealing`, `owned` |
-| `ActionTypeDef` | `api_name`, `display_name`, `target_type`, `executable_by_roles`, `description`, `parameters`, `capabilities`, `effects` |
+| `ActionTypeDef` | `api_name`, `display_name`, `target_type`, `executable_by_roles`, `description`, `parameters`, `capabilities` |
 | `ActionParameterDef` | `name`, `type`, `required`, `refers_to`, `scope_semantics` |
 | `FunctionDef` | `api_name`, `description`, `input_description`, `output_description`, `capabilities` |
 | `Sensitivity` | `ai_usable`, `human_visible` |
@@ -1237,16 +1093,13 @@ MCP サーバーがバインドする単位です。この SDK には**モジュ
 **`Declarations`** / `declarations(...)` は宣言された契約をデータとして公開します —
 MCP の `get_declarations` が返すものです: `authority`（モデル宣言・実行時チェック）、
 `capabilities`（action/function ごとに宣言され、未提供・未宣言なら fail-closed。
-provider 自体はサンドボックス化されない作者コード）、`effects`（action ごとに宣言され、
-永続 outbox 経由で at-least-once、コミット後にディスパッチ）、`writeback`
+provider 自体はサンドボックス化されない作者コード）、`writeback`
 （オントロジーへの書き込みはすべてオントロジー所有。実行時自身の外部書き込み経路は
-宣言された effects だが、capability provider はインラインで外部書き込みもできるため、
+持たないが、capability provider はインラインで外部書き込みもできるため、
 これは宣言された規約であって強制された境界ではない）、`reingest`
 （upsert-merge。所有プロパティは残り、削除はない）、`visibility_default`
 （deny-by-default — 未解決のスコープは隠れる）、`transaction_ownership`
-（実行時所有 — 呼び出し元が開いたトランザクションを拒否）、`ontology_evolution`
-（フィンガープリント方式。宣言された型バージョンアップの upcaster チェーンが保存済み
-バージョンをカバーするか、drift が明示的に受け入れられない限り拒否）、
+（実行時所有 — 呼び出し元が開いたトランザクションを拒否）、
 `idempotency`（なし — 再試行は別個の監査済み試行になる）、`audit_scope`
 （テナントスコープの管理者向けビュー。action は常に監査され、function は capability を
 宣言した場合に限り監査される（function 単位の上書きがない限り）。ただし contributor
@@ -1260,9 +1113,7 @@ MCP サーバーでは、この実行時ではなくトランスポートによ�
 渡した resolver（サンドボックス化されない信頼された作者コード）によって `Consumer`
 にマッピングされ、トランスポートが証明した `principal` と解決された `actor` の
 どちらも監査されるため、resolver がすべてのプリンシパルを 1 つの特権的な actor に
-マッピングした場合、それはログ上で可視化されます。再配信された Effect の監査行は
-`actor` は書き戻しますが `principal` は書き戻さず、`invocation_id` で元の行に
-紐付けられます — そのため、それらの行では `principal` が `None` になります。
+マッピングした場合、それはログ上で可視化されます。
 監査された行のすべてが `principal` を持つわけではありません。`min_n`
 はオントロジー固有の唯一の答えで、オントロジー自身の `ScopePolicy.min_n`
 から読み取られます。
@@ -1294,13 +1145,9 @@ MCP サーバーでは、この実行時ではなくトランスポートによ�
 | Code | Meaning |
 | --- | --- |
 | `CALLER_TRANSACTION_REFUSED` | Raised when `ActionExecutor.execute()` (or an ingest entry point, a later task) is called while the caller has already opened a `store.transaction()` block (declared-contracts §3 AC9). `transaction()` is reentrant, so a caller-owned outer transaction could roll back an action after the executor reported success and audited `ok`. The engine must own the transaction/audit boundary and refuses to nest inside the caller's. Deliberately NOT audited (spec §5): an audit row inside the caller's transaction could itself be rolled back, so the refusal is raised before any audit write. |
-| `UPCAST_FAILED` | Raised when a stored row cannot be read as the current declared version. The message distinguishes two causes because their fixes differ: the chain has no step for the carried version (normally a row written by a NEWER ontology than this declaration, i.e. a downgrade, since `ontology.validate()` rejects an incomplete chain), or an author's upcaster raised on this payload. A read failure is deliberately not a silent fallback to the raw payload, which would hand a consumer data in a shape the declaration says does not exist. |
-| `ONTOLOGY_DRIFT` | Raised at construction when the declared ontology is not the one this store's rows were written under (ontology-evolution AC3/AC4). It is refused BEFORE any query, for the same reason as the `STORE_VERSION_UNSUPPORTED` conflict: a store the engine cannot honestly serve must not answer a read half-correctly first. Drift is not hypothetical; the measured mild case is a row the typed reader refuses while the string reader returns it. The message names every changed type. The two explicit ways forward are to migrate rows (`ontary.migrate.migrate_object_type`, then `accept_ontology_fingerprint`) or accept drift at the call site with `ObjectStore(..., accept_ontology_drift=True)`, which proceeds and writes an audit entry. |
 | `CARDINALITY_VIOLATION` | A link creation would violate its LinkTypeDef cardinality. |
-| `OBJECT_ALREADY_ERASED` | An operator erasure targeted an object whose content was already erased; when no newly matched content is found, it returns a coded no-op report rather than raising. |
 | `OBJECT_ALREADY_RETIRED` | A retirement targeted an object whose current row is already closed. |
-| `STORE_SCHEMA_INCOMPATIBLE` | Raised at `ObjectStore.__init__` when a legacy, never-stamped (`user_version == 0`) file's `objects`/`links`/`audit_log` table ALREADY EXISTS but is missing one or more DDL columns, other than the explicitly migrated `objects.page_token`, `audit_log.effects`, and `audit_log.capability_accesses`. Without this check, `_create_or_migrate_unstamped` would migrate known columns, then `CREATE TABLE IF NOT EXISTS` would silently no-op against a narrower existing table and stamp `SCHEMA_VERSION` anyway: a LYING STAMP. A pre-Milestone-3 file missing `objects.extracted_at` and `audit_log.writes` would then open and every read/write would raise an uncoded `sqlite3.OperationalError` forever because `_init_schema` would not re-inspect a file it believed current. Refusing leaves `user_version` at 0 and the file otherwise untouched for a future engine version with a migration; the message names the table and exact missing columns. |
-| `STORE_VERSION_UNSUPPORTED` | Raised at `ObjectStore.__init__` when a store file's `PRAGMA user_version` is HIGHER than this engine's `SCHEMA_VERSION`, or any OTHER non-zero version this engine does not recognize. A newer ontary wrote a schema shape this engine does not know how to read, so construction refuses outright rather than opening and failing later with a confusing SQL error. Version 1 is recognized explicitly and migrated to version 2. The message names BOTH the file's and engine's versions so an operator knows exactly what to upgrade. Never a silent stamp-and-hope: an unreadable version is refused before any other query runs. |
+| `STORE_VERSION_UNSUPPORTED` | Raised at store construction when the store's schema stamp is not this engine's `SCHEMA_VERSION` -- a SQLite file's `PRAGMA user_version`, or a Postgres database's `schema_meta` row. Neither backend carries a migration ladder: a store written by a different ontary schema shape is REFUSED, never migrated in place and never adopted. An unstamped store that already has an `objects` table is refused for the same reason -- stamping a shape this engine cannot read would be a lying stamp, and every later query would fail as a confusing uncoded SQL error instead. The message names BOTH the store's and the engine's versions, so an operator knows exactly what to upgrade; the way forward is a matching ontary version, or a fresh store the data is migrated into. |
 | `STORE_BUSY` | A SQLite transaction could not acquire or retain its database lock within ObjectStore's configured busy timeout; retry after the competing writer finishes or increase busy_timeout. This is a conflict, not a precondition: retrying is the remedy, and the kind travels on the MCP wire so callers can branch on retryability. |
 
 ### `internal`
@@ -1324,7 +1171,6 @@ MCP サーバーでは、この実行時ではなくトランスポートによ�
 | Code | Meaning |
 | --- | --- |
 | `CAPABILITY_NOT_PROVIDED` | A declared capability had no provider bound for this call. |
-| `EFFECT_NOT_DISPATCHABLE` | A declared effect had no dispatcher bound for this call. |
 | `FUNCTION_ERROR` | Registering/calling a Function failed: undeclared api_name, duplicate registration, or no handler bound. |
 | `PRECONDITION_FAILED` | An action's precondition failed; the message names it. The conventional code for `ActionError` (kind precondition); an author may attach their own stable code instead (AC7), e.g. `raise ActionError("...", code="GAP_NOT_ACKNOWLEDGED")`. It is also used with overridden codes for unregistered/unhandled actions (`UNKNOWN_ACTION`) and parameter-validation failures (`INVALID_PARAMS`) -- see the `code=` overrides at those raise sites. |
 
@@ -1333,7 +1179,6 @@ MCP サーバーでは、この実行時ではなくトランスポートによ�
 | Code | Meaning |
 | --- | --- |
 | `AFTER_WITHOUT_LIMIT` | `GuardedQuery.get_objects`'s (or `OntologyClient.list`'s) `after` was given without `limit` (pagination-hardening T2 review P1) -- the unpaginated `Store.read_all` path has no page to resume, so ignoring `after` would let a caller that lost track of its limit silently re-read every visible row and duplicate work; a caller that genuinely wants everything passes no `after` at all. |
-| `ENTITY_KEY_MISMATCH` | Raised by `map_batch` when a `CanonicalBatch`'s entity keys and the `MappingSpec`'s `ObjectBinding.entity` names disagree in the authoring-bug direction (spec m35-sdk-refactor AC10). The check is ONE-DIRECTIONAL: batch keys MUST be a subset of binding keys, so a typo such as `widgits` cannot be swallowed by `CanonicalBatch.get()` as zero objects. Binding keys are NOT required to be a subset of batch keys; a partial or incremental connector run may omit normal entities, which is counted in `RunReport.entities_absent_from_batch` instead of failing. |
 | `INVALID_BATCH` | `Store.read_page`'s `batch` was < 1 (SQLite's LIMIT -1 means unlimited and InMemoryStore's negative slice drops rows -- both the opposite of a bounded read). |
 | `INVALID_CURSOR` | Raised when `Store.read_page`'s `after_key` is malformed OR simply unknown. `after_key` is UNTRUSTED input: it reaches the store from an MCP client via a later page-filling loop, round-tripped from a previous page's cursor without any guarantee the caller did not tamper with it. As amended 2026-07-25 (T2 review, spec §5), it is a random per-row PAGE TOKEN (`objects.page_token`, uuid4 hex), not a decimal row id. Resolving token to row id through the unique index is the ONLY way to turn a cursor into row identity, so every string never issued for a real row (malformed, tampered, or made up) raises this same error on both backends. There is no distinct well-formed but out-of-range case from the old integer design's `OverflowError`/silent-empty-page divergence. A token issued for a row since superseded by `update` still resolves because lookup uses `row_id` independently of `valid_to`, so an in-flight cursor remains a valid resume point (spec §8). |
 | `GROUP_KEY_COLLISION` | Two distinct `group_by` values in one selection release as the same dictionary key, so one cell would have to describe two populations. The released shape is `dict[str, ...]` -- a public return type and MCP's wire shape -- and `str()` is not injective over the values a group key can take: an optional property keys `None` on the rows that lack it, which collides with a row carrying the literal string `"None"`. The populations did not merge; the later one overwrote the earlier, so the released value (and, under `func="count"`, the released size) described whichever rows were inserted last, decided by nothing the caller supplied or could observe. Raised per group as each is released, AFTER that group's min-N check, so the release floor keeps precedence over a shape refusal. |
@@ -1341,19 +1186,15 @@ MCP サーバーでは、この実行時ではなくトランスポートによ�
 | `PAGE_NOT_ITERABLE` | A `Page`/`TypedPage` was iterated, indexed or measured directly instead of through `.items`. Both are pydantic models, so the inherited `BaseModel.__iter__` would otherwise yield `(field_name, value)` pairs -- `for row in page` hands back `('items', [...])` and `('next_cursor', ...)`, and the failure surfaces later as `AttributeError: 'tuple' object has no attribute 'payload'` at whatever touched the row. This refuses at the iteration itself and names `.items` and `limit=None`. |
 | `INVALID_LIMIT` | `GuardedQuery.get_objects`'s (or `OntologyClient.list`'s) `limit` was < 1 -- a silently empty page would hide that the call was malformed rather than legitimately paginated. |
 | `STALE_CURSOR` | An ordered walk's cursor resolved to a row that is no longer current; restart the ordered walk from the first page. |
-| `EFFECT_NOT_SERIALIZABLE` | Raised inside the action transaction when an emitted payload cannot be JSON-encoded for the durable outbox (spec `durable-effect-outbox`). This deliberate M5 behavior change means the action rolls back and nothing is sent: before the outbox, an unencodable payload still dispatched while only the audit record degraded to `_safe_json_dumps`'s placeholder, but a durable work item is what a later attempt sends and must not deliver a placeholder as the author's data. Normal payloads use `model_dump(mode="json")` for datetime, UUID, Decimal, enums, and nested models; this takes an arbitrary Python object on a sufficiently loose field. |
 | `INVALID_PARAMS` | A call's parameters failed declared-shape validation: an action's params, or a read parameter whose SHAPE is wrong -- an `order_by` that is neither a field name nor a (field, direction) pair, or a `where=` that is not a mapping of field name to condition. A parameter naming something that does not exist is `UNKNOWN_FIELD` instead; this code is about the shape, not the name. |
 | `INVALID_RECORD` | A bulk_upsert record failed declared-shape validation (missing primary key, missing required property, unknown property, or a value that does not match its declared type). The validation kind carries the SAME `INVALID_RECORD` code that `bulk_upsert` already reports: from a caller's point of view, a record not matching the declaration is one failure regardless of which write path noticed. This closes the M9 hole where only ingest checked: `Store.insert`/`update` and therefore `ActionContext.insert`/`update` could commit a row missing a required property or carrying a wrong-typed value, report success, and leave the typed reader unable to hydrate it. The same code wraps a Pydantic `ValidationError` while hydrating a stored `OntologyObject` payload (for example, a non-ISO datetime string), never surfacing a bare traceback; a stored row failing declared-shape validation on read-back is the same failure class ingest carries on write. |
 | `LINK_NOT_FOUND` | A link closure found no matching live link. |
-| `MISSING_MAPPED_FIELD` | A map_batch record's property_map referenced a canonical field entirely absent from that record (not merely None). |
 | `NON_NUMERIC_AGGREGATE` | `GuardedQuery.aggregate`'s `value_field` is declared a non-numeric `PropertyType` (anything other than `int`/`float`, such as str/json/datetime/bool). It is checked against the declared type before rows are iterated or coerced, so values that merely look numeric cannot bypass the type contract (spec `m35-sdk-refactor` §6 AC7). |
 | `OBJECT_NOT_FOUND` | An update targeted a non-existent object. |
-| `OBJECT_ERASURE_NOT_FOUND` | An operator erasure targeted an object with no stored row. |
 | `OBJECT_RETIRE_NOT_FOUND` | A retirement targeted an object with no stored row. |
 | `ONTOLOGY_INVALID` | `OntologyRegistry.validate()` rejected a declaration because its cross-references were invalid. |
 | `SCOPE_POLICY_ERROR` | A ScopePolicy declaration is unusable: a rule references an undeclared object type, link type, or scope level; a type declares an empty contributor rule list; or a type is listed in unscoped_types while also declaring scope rules. |
 | `UNDECLARED_CAPABILITY` | A handler requested a capability its action or function did not declare. |
-| `UNDECLARED_EFFECT` | An action emitted an effect it did not declare. |
 | `UNKNOWN_ACTION` | An action name is unregistered on the OntologyRegistry, or has no handler bound to it. |
 | `UNKNOWN_FIELD` | A typed `get`/`list` call named a key that is not one of the target class's declared properties (spec typed-authoring AC7). The existence-only check runs client-side before the guarded read layer; a hidden-but-declared key still reaches the visibility kind unchanged, and the string-form surface keeps its silent-non-match behavior (AC8). The error lives here since C3 of the staged refactor (previously `ontary.functions`, which re-exports it). |
 | `UNKNOWN_LINK_TYPE` | An operation referenced an unregistered link type. |
@@ -1369,7 +1210,7 @@ MCP サーバーでは、この実行時ではなくトランスポートによ�
 | `MIN_N_VIOLATION` | An aggregate would be computed over fewer than min_n distinct contributors. |
 | `VISIBILITY_DENIED` | A single-object read/write targeted an object outside the consumer's scope. |
 
-*全 56 コード / 7 種別。*
+*全 46 コード / 7 種別。*
 
 ---
 
@@ -1380,8 +1221,7 @@ MCP サーバーでは、この実行時ではなくトランスポートによ�
 その code はレポート内の失敗に対応します。すべてのエラーは `ERROR_CODES` の安定した
 `code` を持ちます。特定の種別を捕捉するには `except <KindClass> as e: e.code` を使い、
 `IngestError` を含むすべてのコード付きエラーを捕捉するには `except OntaryError as e: e.code`
-を使います。`MappingValidationError` は binding の事前検証に使う通常の `Exception` で、
-この階層には含まれません。
+を使います。
 
 | 例外 | 親クラス | 送出される場面 |
 | --- | --- | --- |

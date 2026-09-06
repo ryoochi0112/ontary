@@ -15,19 +15,18 @@ Release metadata: version
 From PyPI:
 
 ```bash
-uv add "ontary[mcp,postgres,dlt]==0.10.0"
+uv add "ontary[mcp,postgres]==0.10.0"
 ```
 
 or pin it in `pyproject.toml`:
 
 ```toml
 [project]
-dependencies = ["ontary[mcp,postgres,dlt]==0.10.0"]
+dependencies = ["ontary[mcp,postgres]==0.10.0"]
 ```
 
-The extras are optional: `mcp` serves the ontology to AI agents, `postgres`
-adds the `PostgresStore` backend, and `dlt` adds the connector pipeline. The
-core needs only `pydantic`.
+The extras are optional: `mcp` serves the ontology to AI agents and
+`postgres` adds the `PostgresStore` backend. The core needs only `pydantic`.
 
 Without an index, install the tagged git ref instead (exact tag, no patch
 updates):
@@ -37,8 +36,8 @@ updates):
 ## Quickstart
 
 This short runnable path uses a support-ticket domain. The complete
-`Org → Queue → Ticket → Comment` ontology, connectors, effects, functions, and
-runnable MCP stdio and effects-drain examples are in
+`Org → Queue → Ticket → Comment` ontology, functions, and a
+runnable MCP stdio example are in
 [`examples/tickets/`](examples/tickets/).
 
 <!-- quickstart-runnable:start -->
@@ -95,15 +94,10 @@ assert client.get(Ticket, ticket_id).escalated is True
 | Look up names and errors | [API reference](docs/api-reference.md) · [error-code table](docs/api-reference.md#error-codes) |
 | API リファレンス | [日本語リファレンス](docs/api-reference.ja.md) |
 | Storage and tenancy | [Storage, tenancy, and schema](docs/storage.md) |
-| Connectors | [Connectors and canonical staging](docs/connectors.md) |
 | MCP serving | [MCP serving](docs/mcp-serving.md) |
-| Governed effects | [Governed capabilities and effects](docs/effects.md) |
-| Queries and pagination | [Queries, typed reads, and pagination](docs/queries.md) |
-| Authority and architecture | [Authority, declarations, and architecture](docs/authority.md) |
-| Cookbook recipes | [Cookbook](docs/cookbook.md) |
+| Worked recipes | [Tickets reference app](examples/tickets/README.md) |
 | Compatibility and migration | [CHANGELOG.md](CHANGELOG.md) · [Compatibility](docs/compatibility.md) |
-| v1 release gate | [v1.0.0 acceptance gate](docs/v1-gate.md) |
-| Release runbook | [Releasing](docs/releasing.md) |
+
 ## License
 
 MIT — see [LICENSE](LICENSE). `ontary` continues the `ontos` SDK, which

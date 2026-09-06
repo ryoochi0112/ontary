@@ -2,7 +2,7 @@
 `examples/tickets`' `Ticket.escalated` is declared ontology-owned
 (`owned={"escalated": False}`) while `status` stays source-backed.
 
-This test drives the FULL governed path -- connector ingest, not
+This test drives the FULL governed path -- `OntologyClient.ingest`, not
 `store.update` directly, and `EscalateTicket` through the real
 `ActionExecutor`/`OntologyClient.execute`, not a raw store write -- to prove
 the seam the spec's problem statement calls out is closed end to end:
@@ -34,56 +34,36 @@ from mcp.server.fastmcp import FastMCP
 
 import ontary
 import ontary.cli as cli
-import ontary.diagnose as diagnose_module
 import ontary.mcp_server as mcp_server
-from examples.tickets.connector import TicketsCSVLikeSource, build_tickets_mapping_spec
 from examples.tickets.fixtures import load_fixtures
 from examples.tickets.ontology import (
-    NOTIFY_TICKET_ESCALATION,
     Ticket,
-    TicketEscalationNotification,
     build_ontology,
 )
 from examples.tickets.run_mcp import build_multi_consumer_server
 from ontary import (
-    ActionContext,
     ActionError,
-    ActionParams,
-    BoundQuery,
-    Cardinality,
-    DirectProperty,
     Finding,
     ObjectStore,
     OntaryError,
     Ontology,
     OntologyObject,
-    OutboxRecord,
     Page,
     PermissionDenied,
     PreconditionFailed,
-    RetryPolicy,
-    SelfScope,
     Sensitivity,
     Source,
     TypedPage,
     ValidationFailed,
-    ViaLink,
     prop,
-    target,
-)
-from ontary import (
-    EffectPayload as DeclaredEffectPayload,
 )
 from ontary.client import OntologyClient
-from ontary.connect import oid, run_pipeline
-from ontary.effects import EffectMeta, EffectPayload
 from ontary.meta import OntologyRegistry
 from ontary.security import Consumer
 from ontary.store import Store, WriteRecord
 from ontary.testing import (
     FixedClock,
     SequentialIds,
-    capture_effects,
     consumer,
     make_store,
     raises_code,
@@ -126,150 +106,51 @@ def tickets_store_factory(request: pytest.FixtureRequest) -> StoreFactory:
     factory: StoreFactory = request.param
     return factory
 
-_RAW_OPEN = {
-    "orgs": [{"org_id": "o1", "name": "Acme Support"}],
-    "queues": [{"queue_id": "q1", "org_id": "o1", "name": "Billing"}],
-    "agents": [{"agent_id": "a1", "display_name": "Ada", "email": "ada@acme.test"}],
-    "tickets": [
-        {"ticket_id": "t1", "queue_id": "q1", "subject": "Invoice mismatch",
-         "age_hours": 4.0, "status": "open"},
-    ],
-}
+_INGEST_SOURCE = Source(source_system="tickets_csv")
 
-_RAW_CLOSED = {
-    "orgs": [{"org_id": "o1", "name": "Acme Support"}],
-    "queues": [{"queue_id": "q1", "org_id": "o1", "name": "Billing"}],
-    "agents": [{"agent_id": "a1", "display_name": "Ada", "email": "ada@acme.test"}],
-    "tickets": [
-        {"ticket_id": "t1", "queue_id": "q1", "subject": "Invoice mismatch",
-         "age_hours": 4.0, "status": "closed"},
-    ],
-}
+_TICKETS_OPEN = [
+    {
+        "id": "t1",
+        "queue_id": "q1",
+        "subject": "Invoice mismatch",
+        "age_hours": 4.0,
+        "status": "open",
+    },
+]
 
-
-def _build_pre_t1_ontology() -> Ontology:
-    """Reproduce the declarations that stamped stores before Ticket v2."""
-    ontology = Ontology(name="tickets", scope_levels=["queue", "org"], min_n=2)
-
-    @ontology.object(layer="L0", scope=[SelfScope(level="org")])
-    class Org(OntologyObject):
-        id: str = prop(primary_key=True)
-        name: str
-
-    @ontology.object(
-        layer="L0",
-        scope=[
-            SelfScope(level="queue"),
-            ViaLink(link_api_name="queueOfOrg", direction="from", parent_type="Org"),
-        ],
-    )
-    class Queue(OntologyObject):
-        id: str = prop(primary_key=True)
-        name: str
-
-    @ontology.object(layer="L0", scope="unscoped")
-    class Agent(OntologyObject):
-        id: str = prop(primary_key=True)
-        display_name: str
-        email: str | None = prop(
-            default=None,
-            sensitivity=Sensitivity(human_visible=False),
-        )
-
-    @ontology.object(
-        layer="L0",
-        owned={"escalated": False},
-        scope=[
-            DirectProperty(level="queue", property_name="queue_id"),
-            ViaLink(link_api_name="ticketInQueue", direction="from", parent_type="Queue"),
-        ],
-    )
-    class Ticket(OntologyObject):
-        id: str = prop(primary_key=True)
-        subject: str
-        age_hours: float
-        status: str | None = None
-        queue_id: str | None = prop(default=None, scope_level="queue")
-        escalated: bool | None = prop(default=None)
-
-    @ontology.object(
-        layer="L0",
-        scope=[ViaLink(link_api_name="commentOnTicket", direction="from", parent_type="Ticket")],
-    )
-    class Comment(OntologyObject):
-        id: str = prop(primary_key=True)
-        text: str
-
-    ontology.link("queueOfOrg", Queue, Org, Cardinality.MANY_TO_ONE)
-    ontology.link("ticketInQueue", Ticket, Queue, Cardinality.MANY_TO_ONE)
-    ontology.link("commentOnTicket", Comment, Ticket, Cardinality.MANY_TO_ONE)
-    ontology.link(
-        "commentByAgent",
-        Comment,
-        Agent,
-        Cardinality.MANY_TO_ONE,
-        identity_revealing=True,
-    )
-
-    class TicketEscalationNotification(DeclaredEffectPayload):
-        ticket_id: str
-        reason: str | None = None
-
-    notify = ontology.effect(
-        TicketEscalationNotification,
-        api_name="NotifyTicketEscalation",
-        description="Notifies the owning queue that a ticket was escalated.",
-    )
-
-    class EscalateTicketParams(ActionParams):
-        ticket_id: str = target(Ticket)
-        reason: str | None = None
-
-    @ontology.action(
-        EscalateTicketParams,
-        target=Ticket,
-        roles=["Agent", "Manager"],
-        display_name="Escalate Ticket",
-        description="Escalates a Ticket as urgent.",
-        api_name="EscalateTicket",
-        effects=[notify],
-    )
-    def _escalate_ticket(ctx: ActionContext, params: EscalateTicketParams) -> dict[str, str]:
-        if ctx.read_current("Ticket", params.ticket_id) is None:
-            raise ActionError("no such ticket", code="PRECONDITION_FAILED")
-        ctx.update("Ticket", params.ticket_id, {"escalated": True})
-        ctx.emit(
-            TicketEscalationNotification(ticket_id=params.ticket_id, reason=params.reason)
-        )
-        return {"ticket_id": params.ticket_id}
-
-    @ontology.function(
-        description="Mean ticket age (hours) for a queue.",
-        input_description="A queue_id.",
-        output_description="A mean age_hours value.",
-        api_name="ticketStats",
-    )
-    def _ticket_stats(query: BoundQuery, params: dict[str, Any]) -> float:
-        value = query.aggregate("Ticket", "age_hours", where={"queue_id": params["queue_id"]})
-        assert isinstance(value, float)
-        return value
-
-    ontology.validate()
-    return ontology
+_TICKETS_CLOSED = [
+    {
+        "id": "t1",
+        "queue_id": "q1",
+        "subject": "Invoice mismatch",
+        "age_hours": 4.0,
+        "status": "closed",
+    },
+]
 
 
 def test_ingest_escalate_reingest_survives_via_governed_path() -> None:
     ontology, store = build_ontology()
-    connector = TicketsCSVLikeSource(extracted_at=datetime(2026, 7, 23, tzinfo=timezone.utc))
-    mapping = build_tickets_mapping_spec()
+    loader = OntologyClient(
+        ontology,
+        store,
+        Consumer(
+            actor_id="loader", role="Manager", scope_level="org", scope_id="o1", kind="human"
+        ),
+    )
 
-    # 1. Connector ingest lands the ticket with status="open"; `escalated`
-    #    is not supplied by source (it's ontology-owned) -- the declared
-    #    default (False) is injected on insert.
-    report = run_pipeline(connector, mapping, ontology, store, raw=_RAW_OPEN, run_at="run-1")
+    # 1. Bulk ingest lands the ticket with status="open"; `escalated` is not
+    #    supplied by source (it's ontology-owned) -- the declared default
+    #    (False) is injected on insert.
+    loader.ingest("Org", [{"id": "o1", "name": "Acme Support"}], _INGEST_SOURCE)
+    loader.ingest("Queue", [{"id": "q1", "name": "Billing"}], _INGEST_SOURCE)
+    loader.ingest_links("queueOfOrg", [("q1", "o1")], _INGEST_SOURCE)
+    report = loader.ingest("Ticket", _TICKETS_OPEN, _INGEST_SOURCE)
     assert report.ok, report.errors
+    loader.ingest_links("ticketInQueue", [("t1", "q1")], _INGEST_SOURCE)
 
-    ticket_id = oid("tickets_csv", "Ticket", "t1")
+    ticket_id = "t1"
+    queue_id = "q1"
     ticket = store.read_current("Ticket", ticket_id)
     assert ticket is not None
     assert ticket.payload["status"] == "open"
@@ -277,21 +158,10 @@ def test_ingest_escalate_reingest_survives_via_governed_path() -> None:
 
     # 2. EscalateTicket through the real governed path: OntologyClient ->
     #    ActionExecutor.execute -- not store.update directly.
-    queue_id = oid("tickets_csv", "Queue", "q1")
     consumer = Consumer(
         actor_id="agent-1", role="Agent", scope_level="queue", scope_id=queue_id, kind="human"
     )
-    dispatched: list[EffectPayload] = []
-
-    def record_effect(payload: EffectPayload, _meta: EffectMeta) -> None:
-        dispatched.append(payload)
-
-    client = OntologyClient(
-        ontology,
-        store,
-        consumer,
-        effects={NOTIFY_TICKET_ESCALATION: record_effect},
-    )
+    client = OntologyClient(ontology, store, consumer)
 
     result = client.execute("EscalateTicket", {"ticket_id": ticket_id})
     assert result == {"ticket_id": ticket_id}
@@ -300,9 +170,6 @@ def test_ingest_escalate_reingest_survives_via_governed_path() -> None:
     assert escalated_ticket is not None
     assert escalated_ticket.payload["escalated"] is True
     assert escalated_ticket.payload["status"] == "open"
-    assert dispatched == [
-        TicketEscalationNotification(ticket_id=ticket_id, reason=None)
-    ]
 
     # The escalation's audit entry carries the real WriteRecord(s) + a real
     # target_id (declared-contracts AC11) -- not a guessed value.
@@ -318,51 +185,18 @@ def test_ingest_escalate_reingest_survives_via_governed_path() -> None:
     assert escalate_entry.writes == [
         WriteRecord(op="update", object_type="Ticket", object_id=ticket_id),
     ]
-    finalized_entry = next(
-        entry
-        for entry in entries
-        if entry.action == "EscalateTicket"
-        and entry.outcome == "effects_dispatched"
-    )
-    assert [effect.api_name for effect in finalized_entry.effects] == [
-        "NotifyTicketEscalation"
-    ]
-    assert [effect.outcome for effect in finalized_entry.effects] == [
-        "dispatched"
-    ]
 
     # 3. Re-ingest the SAME ticket from source with status changed to
     #    "closed" -- the source-backed property refreshes, and the
     #    ontology-owned `escalated` (written only by the action, never by
     #    source) survives the merge (spec AC4/AC5).
-    report2 = run_pipeline(connector, mapping, ontology, store, raw=_RAW_CLOSED, run_at="run-2")
+    report2 = loader.ingest("Ticket", _TICKETS_CLOSED, _INGEST_SOURCE)
     assert report2.ok, report2.errors
 
     final_ticket = store.read_current("Ticket", ticket_id)
     assert final_ticket is not None
     assert final_ticket.payload["status"] == "closed"
     assert final_ticket.payload["escalated"] is True
-
-
-def test_pre_t1_store_opens_silently_and_upcasts_ticket_v1(tmp_path: Path) -> None:
-    store_path = tmp_path / "pre-t1.sqlite"
-    old_ontology = _build_pre_t1_ontology()
-    old_store = ObjectStore(old_ontology.registry, store_path)
-    ticket_id = old_store.insert(
-        "Ticket",
-        {"subject": "Legacy email", "age_hours": 2.0, "status": "open"},
-        Source(source_system="pre-t1"),
-    )
-    old_row = old_store.read_current("Ticket", ticket_id)
-    assert old_row is not None
-    assert "channel" not in old_row.payload
-    del old_store
-
-    ontology, _ = build_ontology()
-    reopened = ObjectStore(ontology.registry, store_path)
-    upgraded = reopened.read_current("Ticket", ticket_id)
-    assert upgraded is not None
-    assert upgraded.payload["channel"] == "email"
 
 
 def test_tickets_store_isolates_both_tenants_on_one_file(tmp_path: Path) -> None:
@@ -388,18 +222,15 @@ def test_tickets_store_isolates_both_tenants_on_one_file(tmp_path: Path) -> None
     assert tenant_b.read_current("Ticket", ticket_a) is None
 
 
-def test_testing_harness_captures_escalation_outbox_payload() -> None:
+def test_testing_harness_drives_the_escalation_through_the_public_helpers() -> None:
+    """`ontary.testing` adoption: `make_store`/`consumer`/`FixedClock`/
+    `SequentialIds`/`raises_code` drive the example's own action, and the
+    refusal keeps its full exception identity (`ActionError` IS a
+    `PreconditionFailed` IS an `OntaryError`, carrying the stable code)."""
     ontology, _ = build_ontology()
     store = make_store(ontology)
     ids = load_fixtures(store)
     instant = datetime(2026, 8, 31, 9, 30, tzinfo=timezone.utc)
-    clock = FixedClock(instant)
-    generated_ids = SequentialIds("tickets-e2e")
-
-    def unavailable(_payload: EffectPayload, _meta: EffectMeta) -> None:
-        raise RuntimeError("notification service unavailable")
-
-    retry_policy = RetryPolicy(max_attempts=2)
 
     operator = consumer(
         actor_id="manager-effects",
@@ -407,57 +238,29 @@ def test_testing_harness_captures_escalation_outbox_payload() -> None:
         scope_level="queue",
         scope_id=ids["queue_a_id"],
     )
-    failing_client = ontology.bind(
+    client = ontology.bind(
         store,
-        clock=clock,
-        id_factory=generated_ids,
-        effects={NOTIFY_TICKET_ESCALATION: unavailable},
+        clock=FixedClock(instant),
+        id_factory=SequentialIds("tickets-e2e"),
     ).for_consumer(operator)
 
     with raises_code("PRECONDITION_FAILED"):
-        failing_client.execute(
+        client.execute(
             "EscalateTicket", {"ticket_id": "missing-ticket", "reason": "missing"}
         )
-    failing_client.execute(
+
+    client.execute(
         "EscalateTicket",
         {"ticket_id": ids["ticket_1_id"], "reason": "SLA exceeded"},
     )
 
-    pending = failing_client.outbox()
-    assert len(pending) == 1
-    assert isinstance(pending[0], OutboxRecord)
-    assert pending[0].state == "pending"
-    assert pending[0].attempts == 1
-    assert pending[0].next_attempt_at == instant + retry_policy.initial_backoff
-
-    captured = capture_effects()
-    draining_client = OntologyClient(
-        ontology,
-        store,
-        operator,
-        effects={NOTIFY_TICKET_ESCALATION: captured},
-        effect_retry=retry_policy,
-    )
-    report = draining_client.drain_effects(now=datetime(2026, 9, 1, tzinfo=timezone.utc))
-
-    assert report.delivered == 1
-    assert report.failed == 0
-    delivered = draining_client.outbox()
-    assert len(delivered) == 1
-    assert isinstance(delivered[0], OutboxRecord)
-    assert delivered[0].state == "delivered"
-    assert delivered[0].attempts == retry_policy.max_attempts
-    assert len(captured.effects) == 1
-    payload, meta = captured.effects[0]
-    assert payload == TicketEscalationNotification(
-        ticket_id=ids["ticket_1_id"], reason="SLA exceeded"
-    )
-    assert meta.actor_id == "manager-effects"
-    assert meta.ts == instant
-    assert meta.effect_id == "tickets-e2e-3"
+    entry = store.audit_entries()[-1]
+    assert (entry.action, entry.outcome) == ("EscalateTicket", "ok")
+    assert entry.ts == instant
+    assert entry.invocation_id == "tickets-e2e-2"
 
     with pytest.raises(ActionError) as caught_precondition:
-        failing_client.execute(
+        client.execute(
             "EscalateTicket", {"ticket_id": "missing-ticket", "reason": "missing"}
         )
     assert isinstance(caught_precondition.value, PreconditionFailed)
@@ -747,87 +550,6 @@ def test_tickets_cli_validate_and_version_in_subprocesses() -> None:
     assert versioned.stderr == ""
 
 
-def test_tickets_cli_explain_names_the_matching_scope_rule(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    ontology, _ = build_ontology()
-    store_path = tmp_path / "explain.sqlite"
-    store = ObjectStore(ontology.registry, store_path)
-    ids = load_fixtures(store)
-
-    code = cli.main(
-        [
-            "explain",
-            "examples.tickets.ontology:build_ontology",
-            "--consumer",
-            f"Agent:queue:{ids['queue_a_id']}",
-            "--read",
-            f"Ticket:{ids['ticket_1_id']}",
-            "--store",
-            str(store_path),
-            "--json",
-        ]
-    )
-    captured = capsys.readouterr()
-    trace = json.loads(captured.out)
-
-    assert code == 0
-    assert trace["verdict"] == "visible"
-    assert any(
-        rule["rule_kind"] == "DirectProperty"
-        and rule["property_name"] == "queue_id"
-        and rule["matched"] is True
-        and rule["resolved_scope_id"] == ids["queue_a_id"]
-        for rule in trace["rules"]
-    )
-    assert captured.err == ""
-
-
-def test_tickets_cli_erase_purges_agent_content_and_preserves_audit(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    ontology, _ = build_ontology()
-    store_path = tmp_path / "erase.sqlite"
-    store = ObjectStore(ontology.registry, store_path)
-    ids = load_fixtures(store)
-    agent_id = ids["agent_1_id"]
-    before = store.read_current("Agent", agent_id)
-    assert before is not None
-    assert before.payload["display_name"] == "Ada"
-
-    code = cli.main(
-        [
-            "erase",
-            "examples.tickets.ontology:build_ontology",
-            "--store",
-            str(store_path),
-            "--type",
-            "Agent",
-            "--id",
-            agent_id,
-            "--operator",
-            "tickets-privacy-operator",
-        ]
-    )
-    captured = capsys.readouterr()
-    reopened = ObjectStore(ontology.registry, store_path)
-    erasure = reopened.audit_entries()[-1]
-
-    assert code == 0
-    assert "outcome: erased" in captured.out
-    assert reopened.read_current("Agent", agent_id) is None
-    assert reopened.object_erasure_state("Agent", agent_id) == (True, False)
-    assert erasure.kind == "erasure"
-    assert erasure.actor == "tickets-privacy-operator"
-    assert erasure.role == "operator"
-    assert erasure.action == "erase_object"
-    assert erasure.target_type == "Agent"
-    assert erasure.target_id == agent_id
-    assert erasure.outcome == "erased"
-    assert erasure.params["object_rows_purged"] == 1
-    assert captured.err == ""
-
-
 def test_tickets_cli_serve_hands_runner_exact_dev_configuration(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -896,46 +618,6 @@ def test_tickets_ontology_diagnose_is_clean() -> None:
     ontology, _ = build_ontology()
 
     assert ontology.diagnose() == []
-
-
-def test_tickets_ontology_diagnose_storage_envelope_exceeded(
-    tickets_store_factory: StoreFactory,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    ontology, _ = build_ontology()
-    store = tickets_store_factory(ontology.registry)
-    load_fixtures(store)
-
-    backend = type(store).__name__
-    monkeypatch.setattr(
-        diagnose_module,
-        "STORAGE_ENVELOPE",
-        {backend: diagnose_module.StorageEnvelope(rows=0, seconds_per_row=0.0001, label=backend)},
-    )
-
-    findings = ontology.diagnose(store=store)
-
-    ticket_finding = next(
-        finding
-        for finding in findings
-        if finding.code == "STORAGE_ENVELOPE_EXCEEDED"
-        and finding.location == "Ticket"
-    )
-    assert ticket_finding.severity == "warn"
-
-
-def test_tickets_ontology_diagnose_storage_envelope_is_silent_at_ordinary_size(
-    tickets_store_factory: StoreFactory,
-) -> None:
-    ontology, _ = build_ontology()
-    store = tickets_store_factory(ontology.registry)
-    load_fixtures(store)
-
-    findings = ontology.diagnose(store=store)
-
-    assert not any(
-        finding.code == "STORAGE_ENVELOPE_EXCEEDED" for finding in findings
-    )
 
 
 def test_diagnose_returns_typed_findings_for_lint_dirty_scratch_ontology() -> None:

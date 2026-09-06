@@ -40,8 +40,6 @@ STORE_EXCEPTION_CODES: dict[str, tuple[type[OntaryError], str]] = {
     "INVALID_CURSOR": (ValidationFailed, "validation"),
     "STORE_VERSION_UNSUPPORTED": (ConflictError, "conflict"),
     "INVALID_RECORD": (ValidationFailed, "validation"),
-    "ONTOLOGY_DRIFT": (ConflictError, "conflict"),
-    "STORE_SCHEMA_INCOMPATIBLE": (ConflictError, "conflict"),
     "AUTHORITY_ERROR": (AuthorityError, "authority"),
     "SOURCE_CREATE_REFUSED": (AuthorityError, "authority"),
     "UNDECLARED_SOURCE_WRITE": (AuthorityError, "authority"),
@@ -62,10 +60,6 @@ ENGINE_EXCEPTION_CODES: dict[str, tuple[type[OntaryError], str]] = {
     "ONTOLOGY_INVALID": (ValidationFailed, "validation"),
     "UNDECLARED_CAPABILITY": (ValidationFailed, "validation"),
     "CAPABILITY_NOT_PROVIDED": (PreconditionFailed, "precondition"),
-    "EFFECT_NOT_DISPATCHABLE": (PreconditionFailed, "precondition"),
-    "UNDECLARED_EFFECT": (ValidationFailed, "validation"),
-    "EFFECT_NOT_SERIALIZABLE": (ValidationFailed, "validation"),
-    "UPCAST_FAILED": (ConflictError, "conflict"),
     "UNKNOWN_FIELD": (ValidationFailed, "validation"),
     "UNKNOWN_NAME": (ValidationFailed, "validation"),
     "INVALID_LIMIT": (ValidationFailed, "validation"),
@@ -75,7 +69,6 @@ ENGINE_EXCEPTION_CODES: dict[str, tuple[type[OntaryError], str]] = {
     "NON_NUMERIC_AGGREGATE": (ValidationFailed, "validation"),
     "UNKNOWN_OPERATOR": (ValidationFailed, "validation"),
     "OPERATOR_TYPE_MISMATCH": (ValidationFailed, "validation"),
-    "ENTITY_KEY_MISMATCH": (ValidationFailed, "validation"),
 }
 
 # T4 (multi-consumer-mcp): the two new permission-refusal codes the
@@ -640,15 +633,6 @@ def test_kind_class_raise_sites_use_literal_catalog_codes() -> None:
         # validator into a report row; both keywords and the exact forwarded
         # expression stay pinned here, in the key.
         ("ingest.py", "bulk_upsert", "IngestError", "code", _NO_MESSAGE),
-        # _map_objects remaps the index of an already-validated ingest report
-        # row while forwarding that row's code unchanged.
-        (
-            "connect/mapper.py",
-            "_map_objects",
-            "IngestError",
-            "e.code",
-            _NO_MESSAGE,
-        ),
     }
     ingest_batch_report_sites: set[_Site] = {
         # These are the two client raising-policy boundaries. Their code is
@@ -1059,8 +1043,8 @@ def test_a_coded_error_survives_pickle_and_copy() -> None:
     `BaseException.__reduce__` rebuilds via `cls(*self.args)`, which stopped
     working when `code` became required -- unpickling raised `TypeError` and a
     worker raising a coded refusal came back to the parent as a broken pool,
-    with the refusal destroyed. `docs/storage.md` documents outbox drainers
-    running in separate processes, so this path is real.
+    with the refusal destroyed. A coded refusal really does cross process
+    boundaries (multi-process serving), so this path is real.
 
     Driven over the exported taxonomy, and over an UNREGISTERED author code
     (AC7) whose `kind` cannot be re-derived from the catalog.

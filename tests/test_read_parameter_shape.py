@@ -67,7 +67,7 @@ from ontary import (
     Source,
     prop,
 )
-from ontary.client import OntologyClient, OntologyRuntime
+from ontary.client import OntologyClient
 from ontary.errors import ValidationFailed, VisibilityError
 from ontary.mcp_server import build_mcp_server
 from ontary.ontology import OntologyDef
@@ -503,17 +503,6 @@ def test_the_typed_spelling_refuses_on_shape_not_on_shredded_field_names(
 
     with raises_code(ValidationFailed, "INVALID_PARAMS"):
         client.exists(Record, operand)
-
-
-def test_the_explain_path_refuses_the_same_shape() -> None:
-    """`explain` snapshots `where` through the same helper and must not
-    diverge from the ordinary read whose refusals it exists to mirror."""
-    definition, _Record, store = _build(min_n=1)
-    _seed(store, _declared_rows(3))
-    runtime = OntologyRuntime(definition, store)
-
-    with raises_code(ValidationFailed, "INVALID_PARAMS"):
-        runtime.explain_list(CONSUMER, "Record", "r0")
 
 
 def test_the_mcp_boundary_still_refuses_before_the_engine_does() -> None:

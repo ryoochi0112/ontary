@@ -7,21 +7,17 @@ Test matrix #1 (field defaults) plus #2 (the structural AST-walk over every
 would silently write `principal = None` and no functional test would
 notice, so it is guarded structurally rather than per-site) plus #3/#4/#5
 (integration coverage, through a REAL store, that a principal-stamped
-consumer's audit entries actually carry it: ok, denied, error, the
-function-audit boundary, the `effects_dispatched` entry produced by the
-SAME `execute()` that ran the action, and the outbox-redelivery entry that
-deliberately does not).
+consumer's audit entries actually carry it: ok, denied, error, and the
+function-audit boundary).
 
 #2 is FAIL-CLOSED: every `AuditEntry(...)` construction under `src/ontary`
 must pass `principal=`, unless its `(module, enclosing function)` pair is on
 the small, reasoned `_ALLOWLIST` below of sites that are genuinely
-consumer-free (engine migrations, outbox redelivery). This is deliberately
-NOT "look for the `actor=<x>.actor_id, role=<x>.role` shape a Consumer-built
-call happens to have today" -- that shape is exactly what a future call
-site is free to not match (e.g. building the entry from an already-built
-`AuditEntry`, as `execute()`'s `effects_dispatched` finalization does at
-`actions.py`'s `pending_entry.actor`/`.role`/`.principal`) while still being
-a real, consumer-derived, must-stamp site. Keying the allowlist on the
+consumer-free (engine migrations). This is deliberately NOT "look for the
+`actor=<x>.actor_id, role=<x>.role` shape a Consumer-built call happens to
+have today" -- that shape is exactly what a future call site is free to not
+match (e.g. building the entry from an already-built `AuditEntry`) while
+still being a real, consumer-derived, must-stamp site. Keying the allowlist on the
 ENCLOSING FUNCTION NAME rather than a line number means it survives
 unrelated edits; asserting every allowlist entry is actually matched by a
 real call site means a renamed/deleted allowlisted function fails loudly
@@ -33,7 +29,6 @@ from __future__ import annotations
 
 import ast
 from collections.abc import Callable
-from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
@@ -44,14 +39,12 @@ from ontary import (
     ActionContext,
     ActionParams,
     Consumer,
-    EffectPayload,
     Ontology,
     OntologyObject,
     prop,
 )
 from ontary.audit import AuditEntry
 from ontary.client import OntologyClient
-from ontary.effects import EffectMeta
 from ontary.errors import PermissionDenied
 from ontary.store import Store
 
@@ -116,31 +109,18 @@ def _is_audit_entry_call(node: ast.AST) -> bool:
     return isinstance(fn, ast.Attribute) and fn.attr == "AuditEntry"
 
 
-# The ONLY sites where an `AuditEntry(...)` is built without a `Consumer`
-# available to stamp a `principal` from at all -- verified by hand against
-# every one of the 15 `AuditEntry(...)` call sites under `src/ontary` on
-# 2026-07-27 (`grep -rn "AuditEntry(" src/ontary`), not merely inherited
-# from a claim. Every other site passes `principal=` directly. Keyed on the
-# ENCLOSING FUNCTION NAME (not a line number) so it survives edits elsewhere
-# in the file; `test_allowlist_entries_all_still_match_a_real_site` asserts
-# every entry here is still actually matched by a real, unstamped call, so a
-# rename/deletion of the function fails loudly instead of rotting silently.
-_ALLOWLIST: dict[tuple[str, str], str] = {
-    ("outbox_drain.py", "drain_effect_outbox"): (
-        "outbox redelivery: the durable OutboxRecord being replayed has no "
-        "principal field of its own (spec multi-consumer-mcp §4.2) -- "
-        "actor/role/principal all come off the row, not a live Consumer"
-    ),
-    ("migrate.py", "_audit_migration"): (
-        "engine-driven object-type migration (`migrate_object_type`) -- "
-        "no consumer initiates it, so there is nothing to stamp a "
-        "principal from"
-    ),
-    ("protocol.py", "check_ontology_fingerprint"): (
-        "engine-driven ontology-fingerprint check/migration (both its "
-        "audit sites) -- no consumer initiates it"
-    ),
-}
+# Sites where an `AuditEntry(...)` is built without a `Consumer` available to
+# stamp a `principal` from at all. EMPTY as of the OSS v0 cut: the two entries
+# it held named engine-driven machinery that has since been removed, so
+# every `AuditEntry(...)` call site under `src/ontary` now stamps `principal=`
+# and nothing is exempt. The mechanism is kept -- entries are keyed on the
+# ENCLOSING FUNCTION NAME (not a line number) so an exemption survives edits
+# elsewhere in the file, and `test_allowlist_entries_all_still_match_a_real_site`
+# asserts every entry is still matched by a real, unstamped call, so a
+# rename/deletion fails loudly instead of rotting silently. The guard's match
+# and rot-detection paths stay exercised through the injectable `allowlist`
+# argument below.
+_ALLOWLIST: dict[tuple[str, str], str] = {}
 
 
 def _audit_entry_calls_by_function(tree: ast.Module) -> list[tuple[ast.Call, str]]:
@@ -167,7 +147,9 @@ def _audit_entry_calls_by_function(tree: ast.Module) -> list[tuple[ast.Call, str
     return calls
 
 
-def _find_unstamped_audit_entry_sites(root: Path) -> tuple[list[str], set[tuple[str, str]]]:
+def _find_unstamped_audit_entry_sites(
+    root: Path, allowlist: dict[tuple[str, str], str] | None = None
+) -> tuple[list[str], set[tuple[str, str]]]:
     """FAIL CLOSED (spec §7/§9): every `AuditEntry(...)` call under `root`
     must pass `principal=`, unless its `(module filename, enclosing
     function)` is in `_ALLOWLIST`. Returns the offending sites (any
@@ -175,6 +157,7 @@ def _find_unstamped_audit_entry_sites(root: Path) -> tuple[list[str], set[tuple[
     actually matched by a real, unstamped call in this tree -- so a caller
     can separately detect a ROTTED allowlist entry (one naming a function
     that no longer exists, or no longer calls `AuditEntry` unstamped)."""
+    allowlist = _ALLOWLIST if allowlist is None else allowlist
     offenders: list[str] = []
     used: set[tuple[str, str]] = set()
     for path in sorted(root.rglob("*.py")):
@@ -184,7 +167,7 @@ def _find_unstamped_audit_entry_sites(root: Path) -> tuple[list[str], set[tuple[
             if "principal" in keywords:
                 continue
             key = (path.name, func_name)
-            if key in _ALLOWLIST:
+            if key in allowlist:
                 used.add(key)
                 continue
             try:
@@ -246,9 +229,7 @@ def test_structural_guard_catches_a_new_unstamped_site(tmp_path: Path) -> None:
 def test_structural_guard_catches_the_already_built_entry_style(tmp_path: Path) -> None:
     """The style P1-1 found the OLD (consumer-derived-shape) guard blind to:
     an `AuditEntry(...)` built from an ALREADY-BUILT entry's own fields
-    (`pending_entry.actor`/`.role`, mirroring `actions.py`'s real
-    `effects_dispatched` finalization site) rather than a `Consumer`
-    directly. The fail-closed guard does not care what the values come
+    (`pending_entry.actor`/`.role`) rather than a `Consumer` directly. The fail-closed guard does not care what the values come
     from -- only that `principal=` is present -- so this is caught too."""
     (tmp_path / "already_built.py").write_text(
         "from ontary.store import AuditEntry\n"
@@ -259,7 +240,7 @@ def test_structural_guard_catches_the_already_built_entry_style(tmp_path: Path) 
         "        role=pending_entry.role,\n"
         "        action=pending_entry.action,\n"
         "        target_type=pending_entry.target_type,\n"
-        "        outcome='effects_dispatched',\n"
+        "        outcome='ok',\n"
         "    )\n",
         encoding="utf-8",
     )
@@ -293,39 +274,43 @@ def test_structural_guard_passes_once_the_site_stamps_principal(tmp_path: Path) 
 
 
 def test_structural_guard_does_not_flag_an_allowlisted_site(tmp_path: Path) -> None:
-    """A call inside a real allowlisted `(module, function)` pair -- here
-    `outbox_drain.py`'s `drain_effect_outbox` -- is exempt from requiring
-    `principal=`, AND is recorded as a MATCH (not silently ignored), so the
-    rot-detection test below has something real to check against."""
-    (tmp_path / "outbox_drain.py").write_text(
+    """A call inside an allowlisted `(module, function)` pair is exempt from
+    requiring `principal=`, AND is recorded as a MATCH (not silently
+    ignored), so the rot-detection test below has something real to check
+    against. `src/ontary` itself has no exempt site left, so the allowlist is
+    injected here -- the MECHANISM is what this pins, and it must keep
+    working the day a genuinely consumer-free site reappears."""
+    (tmp_path / "engine.py").write_text(
         "from ontary.store import AuditEntry\n"
         "\n"
-        "def drain_effect_outbox(record):\n"
+        "def _audit_engine_write(record):\n"
         "    return AuditEntry(\n"
-        "        actor=record.actor_id,\n"
-        "        role=record.role,\n"
+        "        actor='engine',\n"
+        "        role='engine',\n"
         "        action='X',\n"
         "        target_type='Y',\n"
-        "        outcome='effects_dispatched',\n"
+        "        outcome='ok',\n"
         "    )\n",
         encoding="utf-8",
     )
 
-    offenders, used = _find_unstamped_audit_entry_sites(tmp_path)
+    allowlist = {("engine.py", "_audit_engine_write"): "engine-driven, no consumer"}
+    offenders, used = _find_unstamped_audit_entry_sites(tmp_path, allowlist)
     assert offenders == []
-    assert ("outbox_drain.py", "drain_effect_outbox") in used
+    assert ("engine.py", "_audit_engine_write") in used
 
 
 def test_structural_guard_flags_a_rotted_allowlist_entry(tmp_path: Path) -> None:
     """The allowlist's rot-detection mechanism itself, exercised directly:
     on a tree containing NONE of the allowlisted sites (here, simply
-    empty), none of `_ALLOWLIST`'s entries can have been matched --
+    empty), none of the allowlist's entries can have been matched --
     mirroring what `test_allowlist_entries_all_still_match_a_real_site`
     would report as a failure if a real allowlisted site disappeared from
     `src/ontary`."""
-    _offenders, used = _find_unstamped_audit_entry_sites(tmp_path)
+    allowlist = {("engine.py", "_audit_engine_write"): "engine-driven, no consumer"}
+    _offenders, used = _find_unstamped_audit_entry_sites(tmp_path, allowlist)
     assert used == set()
-    assert set(_ALLOWLIST) - used == set(_ALLOWLIST)
+    assert set(allowlist) - used == set(allowlist)
 
 
 # -- #3/#4/#5: integration, through a real store ----------------------------
@@ -337,11 +322,6 @@ def _ontology() -> tuple[Ontology, Any]:
     @ontology.object(layer="L0", scope="unscoped", owned=True)
     class Record(OntologyObject):
         id: str = prop(primary_key=True)
-
-    class Notice(EffectPayload):
-        label: str
-
-    notice = ontology.effect(Notice)
 
     class TouchParams(ActionParams):
         id: str
@@ -368,33 +348,18 @@ def _ontology() -> tuple[Ontology, Any]:
     def _fail(ctx: ActionContext, params: FailParams) -> dict[str, str]:
         raise RuntimeError("handler always fails")
 
-    class EmitParams(ActionParams):
-        label: str
-
-    @ontology.action(
-        EmitParams,
-        target=Record,
-        roles=["Operator"],
-        effects=[notice],
-        api_name="Emit",
-    )
-    def _emit(ctx: ActionContext, params: EmitParams) -> dict[str, str]:
-        ctx.insert("Record", {"id": params.label})
-        ctx.emit(Notice(label=params.label))
-        return {"id": params.label}
-
     @ontology.function(api_name="pureButAudited", audit=True)
     def _pure_but_audited(_query: Any, _params: dict[str, Any]) -> int:
         return 7
 
     ontology.validate()
-    return ontology, notice
+    return ontology
 
 
 def test_ok_action_writes_principal_on_its_audit_entry(
     make_consumer: ConsumerFactory, make_store: StoreFactory
 ) -> None:
-    ontology, _notice = _ontology()
+    ontology = _ontology()
     store = make_store(ontology.registry)
     client = OntologyClient(
         ontology,
@@ -420,7 +385,7 @@ def test_ok_action_writes_principal_on_its_audit_entry(
 def test_denied_action_writes_principal_on_its_audit_entry(
     make_consumer: ConsumerFactory, make_store: StoreFactory
 ) -> None:
-    ontology, _notice = _ontology()
+    ontology = _ontology()
     store = make_store(ontology.registry)
     client = OntologyClient(
         ontology,
@@ -446,7 +411,7 @@ def test_denied_action_writes_principal_on_its_audit_entry(
 def test_error_action_writes_principal_on_its_audit_entry(
     make_consumer: ConsumerFactory, make_store: StoreFactory
 ) -> None:
-    ontology, _notice = _ontology()
+    ontology = _ontology()
     store = make_store(ontology.registry)
     client = OntologyClient(
         ontology,
@@ -475,7 +440,7 @@ def test_single_consumer_execution_leaves_principal_none(
     """Direct-Python / single-consumer execution never stamps a principal
     (spec AC8) -- the default `None` still round-trips through a real store,
     not just the model."""
-    ontology, _notice = _ontology()
+    ontology = _ontology()
     store = make_store(ontology.registry)
     client = OntologyClient(
         ontology,
@@ -498,7 +463,7 @@ def test_single_consumer_execution_leaves_principal_none(
 def test_function_boundary_writes_principal_on_its_audit_entry(
     make_consumer: ConsumerFactory, make_store: StoreFactory
 ) -> None:
-    ontology, _notice = _ontology()
+    ontology = _ontology()
     store = make_store(ontology.registry)
     client = OntologyClient(
         ontology,
@@ -519,109 +484,3 @@ def test_function_boundary_writes_principal_on_its_audit_entry(
     assert len(entries) == 1
     assert entries[0].kind == "function"
     assert entries[0].principal == "svc-agent-7"
-
-
-def test_effects_dispatched_entry_carries_principal_and_shares_invocation_id_with_ok(
-    make_consumer: ConsumerFactory, make_store: StoreFactory
-) -> None:
-    """P1-2: a BEHAVIORAL pin for `actions.py`'s `execute()` finalization
-    path (the `effects_dispatched` entry built from `pending_entry.actor`/
-    `.role`/`.principal`, not directly from the `Consumer`). The structural
-    guard above only proves `principal=` is PRESENT at that call site; it
-    would not notice a future refactor that passes the WRONG value (e.g. a
-    different consumer's principal, or a stale one) as long as the keyword
-    stays. Here the dispatcher succeeds INLINE (no interruption, no drain),
-    so this is the same `execute()` call's own `effects_dispatched` entry --
-    proving it carries the acting consumer's principal and joins the
-    preceding `outcome == "ok"` entry by `invocation_id`, exactly as a
-    reader correlating the two would expect (spec §4.2/§6/AC9)."""
-    ontology, notice = _ontology()
-    store = make_store(ontology.registry)
-
-    def delivered(_payload: EffectPayload, _meta: EffectMeta) -> None:
-        pass
-
-    client = OntologyClient(
-        ontology,
-        store,
-        make_consumer(
-            actor_id="ryo",
-            role="Operator",
-            scope_level="org",
-            scope_id="org-1",
-            kind="human",
-            principal="svc-agent-7",
-        ),
-        effects={notice: delivered},
-    )
-
-    client.execute("Emit", {"label": "two"})
-
-    entries = store.audit_entries()
-    ok_entry = next(e for e in entries if e.outcome == "ok")
-    dispatched_entry = next(e for e in entries if e.outcome == "effects_dispatched")
-    assert dispatched_entry.principal == "svc-agent-7"
-    assert dispatched_entry.invocation_id == ok_entry.invocation_id
-
-
-def test_redelivered_outbox_effect_audits_no_principal_but_joins_to_the_entry_that_does(
-    make_consumer: ConsumerFactory, make_store: StoreFactory
-) -> None:
-    """Spec §4.2/§6: the outbox row carries no principal of its own, so a
-    redelivery's `effects_dispatched` entry reads `principal = None` --
-    while the ORIGINAL entry it joins to by `invocation_id` (the one written
-    when the action ran) does carry the principal-stamped consumer's value.
-    """
-    ontology, _notice = _ontology()
-    store = make_store(ontology.registry)
-
-    def interrupted(_payload: EffectPayload, _meta: EffectMeta) -> None:
-        raise KeyboardInterrupt
-
-    stamped_consumer = make_consumer(
-        actor_id="ryo",
-        role="Operator",
-        scope_level="org",
-        scope_id="org-1",
-        kind="human",
-        principal="svc-agent-7",
-    )
-    emitting_client = OntologyClient(
-        ontology, store, stamped_consumer, effects={_notice: interrupted}
-    )
-
-    with pytest.raises(KeyboardInterrupt):
-        emitting_client.execute("Emit", {"label": "one"})
-
-    original = store.audit_entries()[-1]
-    assert original.outcome == "ok"
-    assert original.principal == "svc-agent-7"
-    row = store.outbox_entries()[0]
-    assert row.lease_until is not None  # still held by the dead invocation
-
-    def delivered(_payload: EffectPayload, _meta: EffectMeta) -> None:
-        pass
-
-    # A drain is machinery, not a governed act by any particular consumer
-    # (`OntologyClient.drain_effects`'s own docstring) -- it has no
-    # `Consumer` to stamp a principal from at all.
-    draining_client = OntologyClient(
-        ontology,
-        store,
-        make_consumer(
-            actor_id="ryo",
-            role="Operator",
-            scope_level="org",
-            scope_id="org-1",
-            kind="human",
-            principal=None,
-        ),
-        effects={_notice: delivered},
-    )
-    report = draining_client.drain_effects(now=row.emitted_at + timedelta(minutes=5))
-    assert report.delivered == 1
-
-    entries = store.audit_entries()
-    redelivery = next(e for e in entries if e.outcome == "effects_dispatched")
-    assert redelivery.principal is None
-    assert redelivery.invocation_id == original.invocation_id

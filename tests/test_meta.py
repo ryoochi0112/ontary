@@ -9,8 +9,6 @@ from ontary.meta import (
     ActionTypeDef,
     CapabilityDef,
     Cardinality,
-    EffectFieldDef,
-    EffectTypeDef,
     FunctionDef,
     LinkTypeDef,
     ObjectTypeDef,
@@ -89,7 +87,6 @@ def test_valid_registration_and_validate_passes() -> None:
         ("get_action_type", "UNKNOWN_ACTION"),
         ("get_function", "UNKNOWN_NAME"),
         ("get_capability", "UNKNOWN_NAME"),
-        ("get_effect_type", "UNKNOWN_NAME"),
     ],
 )
 def test_unknown_registry_lookup_raises_coded_validation_not_key_error(
@@ -359,29 +356,17 @@ def test_owned_link_type_defaults_to_false() -> None:
     assert owned_link.owned is True
 
 
-def test_capability_and_effect_descriptors_are_reachable_and_json_serializable() -> None:
+def test_capability_descriptors_are_reachable_and_json_serializable() -> None:
     registry = OntologyRegistry()
     capability = CapabilityDef(
         api_name="WeatherReader",
         description="Reads the current weather.",
     )
-    effect = EffectTypeDef(
-        api_name="SendNotification",
-        description="Sends a notification after commit.",
-        payload=[
-            EffectFieldDef(name="recipient", type_name="str", required=True),
-            EffectFieldDef(name="tags", type_name="list[str]", required=False),
-        ],
-    )
     registry.register_capability(capability)
-    registry.register_effect_type(effect)
 
     assert registry.get_capability("WeatherReader") is capability
-    assert registry.get_effect_type("SendNotification") is effect
     assert registry.capabilities == {"WeatherReader": capability}
-    assert registry.effect_types == {"SendNotification": effect}
     json.dumps(capability.model_dump(mode="json"))
-    json.dumps(effect.model_dump(mode="json"))
 
 
 def test_duplicate_capability_api_name_raises_with_descriptor_name() -> None:
@@ -392,20 +377,6 @@ def test_duplicate_capability_api_name_raises_with_descriptor_name() -> None:
     with raises_code(ValidationFailed, "ONTOLOGY_INVALID") as exc_info:
         registry.register_capability(capability)
     assert "duplicate CapabilityDef api_name: 'WeatherReader'" in str(exc_info.value)
-
-
-def test_duplicate_effect_api_name_raises_with_descriptor_name() -> None:
-    registry = OntologyRegistry()
-    effect = EffectTypeDef(
-        api_name="SendNotification",
-        description="Notify.",
-        payload=[],
-    )
-    registry.register_effect_type(effect)
-
-    with raises_code(ValidationFailed, "ONTOLOGY_INVALID") as exc_info:
-        registry.register_effect_type(effect)
-    assert "duplicate EffectTypeDef api_name: 'SendNotification'" in str(exc_info.value)
 
 
 def test_validate_rejects_action_with_unregistered_capability() -> None:
@@ -429,39 +400,11 @@ def test_validate_rejects_action_with_unregistered_capability() -> None:
     )
 
 
-def test_validate_rejects_action_with_unregistered_effect() -> None:
-    registry = OntologyRegistry()
-    registry.register_object_type(_team_type())
-    registry.register_action_type(
-        ActionTypeDef(
-            api_name="DefineGoal",
-            display_name="Define Goal",
-            target_type="Team",
-            executable_by_roles=["TeamOwner"],
-            description="Defines a goal.",
-            effects=["SendNotification"],
-        )
-    )
-
-    with raises_code(ValidationFailed, "ONTOLOGY_INVALID") as exc_info:
-        registry.validate()
-    assert "ActionTypeDef 'DefineGoal': dangling effect 'SendNotification'" in str(
-        exc_info.value
-    )
-
-
-def test_validate_passes_when_action_capability_and_effect_resolve() -> None:
+def test_validate_passes_when_action_capability_resolves() -> None:
     registry = OntologyRegistry()
     registry.register_object_type(_team_type())
     registry.register_capability(
         CapabilityDef(api_name="WeatherReader", description="Weather.")
-    )
-    registry.register_effect_type(
-        EffectTypeDef(
-            api_name="SendNotification",
-            description="Notify.",
-            payload=[],
-        )
     )
     registry.register_action_type(
         ActionTypeDef(
@@ -471,7 +414,6 @@ def test_validate_passes_when_action_capability_and_effect_resolve() -> None:
             executable_by_roles=["TeamOwner"],
             description="Defines a goal.",
             capabilities=["WeatherReader"],
-            effects=["SendNotification"],
         )
     )
 

@@ -76,9 +76,9 @@ class OntaryError(Exception):
         `BaseException.__reduce__` rebuilds via `cls(*self.args)`, which
         stopped working the moment `code` became required -- so a coded
         refusal crossing a process boundary would die on unpickling and the
-        caller would see a broken worker instead of the refusal. The engine's
-        own outbox drainers are documented as running in separate processes
-        (`docs/storage.md`), so this is a real path, not a theoretical one.
+        caller would see a broken worker instead of the refusal. A coded
+        refusal really does cross process boundaries (multi-process serving),
+        so this is a real path, not a theoretical one.
         """
         return (
             _rebuild_error,
@@ -150,21 +150,9 @@ ERROR_CODES: dict[str, ErrorCodeInfo] = {
         kind="validation",
         description="An update targeted a non-existent object.",
     ),
-    "OBJECT_ERASURE_NOT_FOUND": ErrorCodeInfo(
-        kind="validation",
-        description="An operator erasure targeted an object with no stored row.",
-    ),
     "OBJECT_RETIRE_NOT_FOUND": ErrorCodeInfo(
         kind="validation",
         description="A retirement targeted an object with no stored row.",
-    ),
-    "OBJECT_ALREADY_ERASED": ErrorCodeInfo(
-        kind="conflict",
-        description=(
-            "An operator erasure targeted an object whose content was already "
-            "erased; when no newly matched content is found, it returns a "
-            "coded no-op report rather than raising."
-        ),
     ),
     "OBJECT_ALREADY_RETIRED": ErrorCodeInfo(
         kind="conflict",
@@ -298,59 +286,6 @@ ERROR_CODES: dict[str, ErrorCodeInfo] = {
     "CAPABILITY_NOT_PROVIDED": ErrorCodeInfo(
         kind="precondition",
         description="A declared capability had no provider bound for this call.",
-    ),
-    "EFFECT_NOT_DISPATCHABLE": ErrorCodeInfo(
-        kind="precondition",
-        description="A declared effect had no dispatcher bound for this call.",
-    ),
-    "UNDECLARED_EFFECT": ErrorCodeInfo(
-        kind="validation",
-        description="An action emitted an effect it did not declare.",
-    ),
-    "UPCAST_FAILED": ErrorCodeInfo(
-        kind="conflict",
-        description=(
-            "Raised when a stored row cannot be read as the current declared "
-            "version. The message distinguishes two causes because their fixes "
-            "differ: the chain has no step for the carried version (normally a "
-            "row written by a NEWER ontology than this declaration, i.e. a "
-            "downgrade, since `ontology.validate()` rejects an incomplete chain), "
-            "or an author's upcaster raised on this payload. A read failure is "
-            "deliberately not a silent fallback to the raw payload, which would "
-            "hand a consumer data in a shape the declaration says does not exist."
-        ),
-    ),
-    "ONTOLOGY_DRIFT": ErrorCodeInfo(
-        kind="conflict",
-        description=(
-            "Raised at construction when the declared ontology is not the one "
-            "this store's rows were written under (ontology-evolution AC3/AC4). "
-            "It is refused BEFORE any query, for the same reason as "
-            "the `STORE_VERSION_UNSUPPORTED` conflict: a store the engine cannot honestly serve "
-            "must not answer a read half-correctly first. Drift is not hypothetical; "
-            "the measured mild case is a row the typed reader refuses while the "
-            "string reader returns it. The message names every changed type. The "
-            "two explicit ways forward are to migrate rows "
-            "(`ontary.migrate.migrate_object_type`, then "
-            "`accept_ontology_fingerprint`) or accept drift at the call site with "
-            "`ObjectStore(..., accept_ontology_drift=True)`, which proceeds and "
-            "writes an audit entry."
-        ),
-    ),
-    "EFFECT_NOT_SERIALIZABLE": ErrorCodeInfo(
-        kind="validation",
-        description=(
-            "Raised inside the action transaction when an emitted payload cannot "
-            "be JSON-encoded for the durable outbox (spec "
-            "`durable-effect-outbox`). This deliberate M5 behavior change means "
-            "the action rolls back and nothing is sent: before the outbox, an "
-            "unencodable payload still dispatched while only the audit record "
-            "degraded to `_safe_json_dumps`'s placeholder, but a durable work item "
-            "is what a later attempt sends and must not deliver a placeholder as "
-            "the author's data. Normal payloads use `model_dump(mode=\"json\")` "
-            "for datetime, UUID, Decimal, enums, and nested models; this takes "
-            "an arbitrary Python object on a sufficiently loose field."
-        ),
     ),
     "MIN_N_VIOLATION": ErrorCodeInfo(
         kind="visibility",
@@ -572,27 +507,6 @@ ERROR_CODES: dict[str, ErrorCodeInfo] = {
             "precedence over a shape refusal."
         ),
     ),
-    "ENTITY_KEY_MISMATCH": ErrorCodeInfo(
-        kind="validation",
-        description=(
-            "Raised by `map_batch` when a `CanonicalBatch`'s entity keys and the "
-            "`MappingSpec`'s `ObjectBinding.entity` names disagree in the "
-            "authoring-bug direction (spec m35-sdk-refactor AC10). The check is "
-            "ONE-DIRECTIONAL: batch keys MUST be a subset of binding keys, so a "
-            "typo such as `widgits` cannot be swallowed by `CanonicalBatch.get()` "
-            "as zero objects. Binding keys are NOT required to be a subset of "
-            "batch keys; a partial or incremental connector run may omit normal "
-            "entities, which is counted in `RunReport.entities_absent_from_batch` "
-            "instead of failing."
-        ),
-    ),
-    "MISSING_MAPPED_FIELD": ErrorCodeInfo(
-        kind="validation",
-        description=(
-            "A map_batch record's property_map referenced a canonical "
-            "field entirely absent from that record (not merely None)."
-        ),
-    ),
     "INVALID_LIMIT": ErrorCodeInfo(
         kind="validation",
         description=(
@@ -615,36 +529,18 @@ ERROR_CODES: dict[str, ErrorCodeInfo] = {
     "STORE_VERSION_UNSUPPORTED": ErrorCodeInfo(
         kind="conflict",
         description=(
-            "Raised at `ObjectStore.__init__` when a store file's `PRAGMA "
-            "user_version` is HIGHER than this engine's `SCHEMA_VERSION`, or "
-            "any OTHER non-zero version this engine does not recognize. A newer "
-            "ontary wrote a schema shape this engine does not know how to read, "
-            "so construction refuses outright rather than opening and failing "
-            "later with a confusing SQL error. Version 1 is recognized explicitly "
-            "and migrated to version 2. The message names BOTH the file's and "
-            "engine's versions so an operator knows exactly what to upgrade. "
-            "Never a silent stamp-and-hope: an unreadable version is refused "
-            "before any other query runs."
-        ),
-    ),
-    "STORE_SCHEMA_INCOMPATIBLE": ErrorCodeInfo(
-        kind="conflict",
-        description=(
-            "Raised at `ObjectStore.__init__` when a legacy, never-stamped "
-            "(`user_version == 0`) file's `objects`/`links`/`audit_log` table "
-            "ALREADY EXISTS but is missing one or more DDL columns, other than "
-            "the explicitly migrated `objects.page_token`, `audit_log.effects`, "
-            "and `audit_log.capability_accesses`. Without this check, "
-            "`_create_or_migrate_unstamped` would migrate known columns, then "
-            "`CREATE TABLE IF NOT EXISTS` would silently no-op against a narrower "
-            "existing table and stamp `SCHEMA_VERSION` anyway: a LYING STAMP. A "
-            "pre-Milestone-3 file missing `objects.extracted_at` and "
-            "`audit_log.writes` would then open and every read/write would raise "
-            "an uncoded `sqlite3.OperationalError` forever because `_init_schema` "
-            "would not re-inspect a file it believed current. Refusing leaves "
-            "`user_version` at 0 and the file otherwise untouched for a future "
-            "engine version with a migration; the message names the table and "
-            "exact missing columns."
+            "Raised at store construction when the store's schema stamp is not "
+            "this engine's `SCHEMA_VERSION` -- a SQLite file's `PRAGMA "
+            "user_version`, or a Postgres database's `schema_meta` row. Neither "
+            "backend carries a migration ladder: a store written by a different "
+            "ontary schema shape is REFUSED, never migrated in place and never "
+            "adopted. An unstamped store that already has an `objects` table is "
+            "refused for the same reason -- stamping a shape this engine cannot "
+            "read would be a lying stamp, and every later query would fail as a "
+            "confusing uncoded SQL error instead. The message names BOTH the "
+            "store's and the engine's versions, so an operator knows exactly "
+            "what to upgrade; the way forward is a matching ontary version, or "
+            "a fresh store the data is migrated into."
         ),
     ),
     "INTERNAL_ERROR": ErrorCodeInfo(

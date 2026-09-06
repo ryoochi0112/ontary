@@ -59,10 +59,8 @@ ENGINE_IDENTIFIERS = {
     "FunctionDef",
     "LinkTypeDef",
     "ObjectTypeDef",
-    "OntologyFingerprint",
     "PropertyDef",
     "ScopePolicy",
-    "migrate_object_type",
 }
 
 # These are the actual objects behind the engine names that may be used as

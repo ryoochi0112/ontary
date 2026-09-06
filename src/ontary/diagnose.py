@@ -9,7 +9,6 @@ with advisory rules without changing the collector contract.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, ConfigDict
@@ -30,12 +29,10 @@ from ontary.scope import (
     ViaLink,
     incoherent_scope_declarations,
 )
-from ontary.store.values import DEFAULT_BATCH
 from ontary.typesys import validate_scalar
 
 if TYPE_CHECKING:
     from ontary.ontology import OntologyDef
-    from ontary.store import Store
 
 __all__ = ["Finding"]
 
@@ -52,7 +49,7 @@ class Finding(BaseModel):
     fix_hint: str
 
 
-DiagnosticRule = Callable[["OntologyDef", "Store | None"], tuple[Finding, ...]]
+DiagnosticRule = Callable[["OntologyDef"], tuple[Finding, ...]]
 
 
 # Advisory name heuristics from docs/ontology-design.md.  They are deliberately
@@ -72,250 +69,6 @@ AGGREGATE_PROPERTY_SUFFIXES: tuple[str, ...] = (
     "_total",
     "_rate",
 )
-@dataclass(frozen=True)
-class StorageEnvelope:
-    """One backend's measured storage envelope: mirrors ``ErrorCodeInfo``
-    (``ontary.errors``) -- a catalog value type, not a public API model.
-
-    ``rows`` is the row ceiling under which a governed ``aggregate`` or
-    narrow-scope read stays under one second; ``seconds_per_row`` is the
-    measured marginal cost past it; ``label`` is the human-readable backend
-    name a :class:`Finding` message quotes. All three are ONE record per
-    backend (E5, 2026-09-02 human decision) precisely so a backend with a
-    row ceiling cannot structurally lack its cost or its label -- three
-    parallel dicts, each independently ``.get(backend, <fallback>)``-ed,
-    previously let a rows-only entry produce a self-contradictory message
-    ("... is ~50,000 rows ... expect ~0.0s") that nothing caught, because
-    the missing keys silently defaulted instead of the lookup failing.
-    See docs/storage.md#storage-envelope for what each number means and
-    the environment it was measured on.
-    """
-
-    rows: int
-    seconds_per_row: float
-    label: str
-
-
-# E5 (2026-09-02) re-measured both backends against shipped 0.9 (the memo,
-# `889b60f`, and the `exists()` early exit, `707cd3f`, both landed first --
-# spec storage-envelope.md §6: "measure after the memo"). ObjectStore/SQLite
-# is unchanged from E5 and remains a LOCAL, single-sample, single-laptop
-# measurement -- AC1 requires only the Postgres curve to be CI-produced, and
-# docs/storage.md#storage-envelope now says so in prose, not just here, now
-# that the Postgres figure below carries a stated dispersion caveat and an
-# unqualified SQLite number beside it would otherwise look equally well
-# evidenced. Every field below is measured, none defaulted: `rows` is a
-# round number just under the `seconds_per_row`-implied one-second crossing
-# (never derived by the engine at runtime, only quoted in messages and
-# docs). Every record here also satisfies this module's own invariant,
-# `0.9 <= rows * seconds_per_row <= 1.0` (tests/test_diagnose_lints.py).
-#
-# ObjectStore/SQLite: `scripts/scan_curve.py 100000` (memo on), aggregate_mean
-# 3089.4ms / 100,000 rows = 30.9us/row -> 0.000031; 1/0.000031 ~= 32,258, so
-# 32,000 stays under a second (32,000 * 0.000031 = 0.99s). Machine: macOS
-# 26.5.1 (Darwin 25.5.0), arm64, Python 3.12.13, SQLite 3.53.4 (Python's
-# bundled `sqlite3`), 2026-09-02.
-#
-# PostgresStore/PostgreSQL -- E5c (2026-09-02), REPLACING E5b's derivation
-# RULE, not just its number. E5b derived rows=3_200 from ONE CI run
-# (33623316425, job 100225149283, `postgres:16`, ubuntu-latest,
-# 2026-09-02T11:12Z) via "top of the tested range, on whichever class is slower
-# in that run" -- narrow_page_1000 @ n=25,000, 311.7us/row. Pushing E5b
-# triggered a SECOND run of the identical workflow and curve step, 33630090428
-# (job 100247114881, same `postgres:16` service, same ubuntu-latest label,
-# 2026-09-02T12:29Z, 77 minutes later). Re-read either job's raw log directly
-# rather than trusting this comment's copy of the numbers: `gh run view --job
-# 100225149283 --log` (run 1) or `gh run view --job 100247114881 --log` (run
-# 2). On the two LINEAR classes (aggregate_mean, narrow_page_1000), EVERY
-# point in run 2 measured slower than EVERY point in run 1 (run 2's fastest
-# sample, 539.3us/row, still exceeds run 1's slowest, 344.0us/row) -- the flat
-# bounded-page column does not hold this: run 2's bounded-page minimum
-# (24.2us/row, at n=25,000) is faster than run 1's bounded-page maximum
-# (311.0us/row, at n=1,000); see docs/storage.md#storage-envelope for that
-# column's own table. **1.77x** slower at the pair E5b happened to publish
-# (narrow @ n=25,000: 311.7 -> 550.2us/row) -- and the two runs also DISAGREE
-# on which class is slower (run 1: narrow > aggregate by 8%; run 2: aggregate
-# > narrow by 0.7%, the opposite direction). GitHub-hosted runners are shared
-# VMs with variable co-tenancy, not the "fixed hardware" spec §3 assumed when
-# it moved this measurement off a laptop -- so E5b's rule broke on exactly the
-# two assumptions it made: a monotone curve, and a stable class ordering. No
-# single CI sample can support a ceiling quoted to two significant figures.
-#
-# The rule is REPLACED, not patched: the published `rows` is the round
-# number just under the one-second crossing implied by the SLOWEST per-row
-# rate in any published sample, across every class (`aggregate_mean` and
-# `narrow_page_1000`) and every steady-state n. The four PUBLISHED runs
-# (1-4; see the T3 note below for two further OBSERVED runs that neither
-# set nor lowered the floor) are flat from n=5,000 up; n=1,000's rate is
-# noisier -- e.g. run 1's OWN worst point is
-# narrow @ n=1,000, 344.0us/row, not its n=25,000 figure -- and across runs
-# 1-3, n=1,000's own worst rate was 545.0us/row (run 3's narrow_page_1000),
-# still below the 563.7us/row peak run 3 reached at n=5,000, which is why
-# an earlier draft of this comment called whether n=1,000 counts MOOT --
-# but the rule deliberately does not hard-code an exclusion for it, and
-# run 4 (E5f, below) is exactly the slower n=1,000 sample that MOOT
-# framing anticipated: run 4's global worst, 608.6us/row, sits AT n=1,000,
-# not at n=5,000 or n=25,000 -- so n=1,000 counting was never actually
-# moot, only unexercised until a fourth sample arrived. Adding a slower
-# future sample therefore LOWERS the ceiling by construction -- deliberate:
-# this envelope is an ADVISORY warning, never an enforced limit, so a lower
-# ceiling warns earlier, which is the safe direction to be wrong in.
-#
-# Run 1 (33623316425) rates, us/row: aggregate_mean 254.9/298.9/287.4,
-# narrow_page_1000 344.0/310.8/311.7 at n=1,000/5,000/25,000 -> worst 344.0.
-# Run 2 (33630090428) rates, us/row: aggregate_mean 539.3/548.1/553.8,
-# narrow_page_1000 542.3/542.5/550.2 at n=1,000/5,000/25,000 -> worst 553.8
-# (aggregate @ n=25,000: 13845.2ms / 25,000 rows). The floor across runs 1
-# and 2 alone was therefore run 2's aggregate @ n=25,000: 553.8us/row ->
-# seconds_per_row=0.000554, rows=1_800 -- SUPERSEDED by E5d below, which
-# adds a third, slower sample.
-#
-# PostgresStore/PostgreSQL -- E5d (2026-09-02) applied the SAME rule (not a
-# new one) to a THIRD CI run. Pushing E5c+E7 triggered 33651633373 (job
-# 100319828397, same `postgres:16` service, same ubuntu-latest label,
-# 2026-09-02T15:56Z -- 3h27m after run 2, 4h44m after run 1). Re-read the
-# raw log directly rather than trusting this comment's copy: `gh run view
-# --job 100319828397 --log` (run 3). Run 3 (33651633373) rates, us/row:
-# aggregate_mean 541.6/563.7/557.4, narrow_page_1000 545.0/552.7/558.1 at
-# n=1,000/5,000/25,000 -> worst 563.7 (aggregate @ n=5,000: 2818.6ms /
-# 5,000 rows = 563.720us/row).
-#
-# THE RULE EARNED ITS KEEP HERE: run 3's worst point is at n=5,000, NOT
-# the top of the tested range (n=25,000, where the aggregate rate is only
-# 557.4us/row) -- run 3's own aggregate rate rises from 541.6 (n=1,000) to
-# a peak of 563.7 (n=5,000) and eases back to 557.4 (n=25,000), so the
-# curve is non-monotone again, on a third independent sample. E5b's
-# retired rule -- top of the tested range, on whichever class is slower
-# in that run -- binds at n=25,000; that is narrow_page_1000, 558.1us/row
-# (13951.4ms / 25,000 rows), not the aggregate figure above -- and would
-# still have MISSED the true worst point entirely. E5c's
-# max-across-every-class-and-every-n rule catches it because it never
-# assumed monotonicity in the first place -- this is the first published
-# evidence that replacing the rule (not just the number) was for cause,
-# not for taste.
-#
-# The worst across ALL THREE runs and BOTH classes was run 3's
-# aggregate @ n=5,000: 563.720us/row -> seconds_per_row=0.000564
-# (rounded UP, the conservative direction). 1/0.000564 ~= 1,773.0, so
-# 1,700 was the round hundred just under that crossing. Invariant
-# check: 1,700 * 0.000564 = 0.9588, inside [0.9, 1.0]. E5c's published
-# rows=1_800 sat 1.5% ABOVE the crossing this third sample implied
-# (1,800 * 0.000564 = 1.0152s, over one second) -- not "close enough":
-# D1's conservative-floor rule exists precisely to replace that
-# judgment call with this arithmetic, so 1.5% over is over. That pair
-# was SUPERSEDED by E5f below, which adds a fourth, slower sample.
-#
-# PostgresStore/PostgreSQL -- E5f (2026-09-02) applied the SAME rule (not
-# a new one) to a FOURTH CI run. Pushing a97ba03..28f2aff triggered
-# 33697469943 (job `postgres`, 100469367996, same `postgres:16` service,
-# same ubuntu-latest label, 2026-09-02T23:59Z). Re-read the raw log
-# directly rather than trusting this comment's copy: `gh run view --job
-# 100469367996 --log` (run 4). Run 4 (33697469943) rates, us/row:
-# aggregate_mean 593.6/596.5/587.7, narrow_page_1000 608.6/594.7/586.1 at
-# n=1,000/5,000/25,000 -> worst 608.6 (narrow_page_1000 @ n=1,000:
-# 608.6ms / 1,000 rows = 608.600us/row).
-#
-# THE RULE EARNED ITS KEEP AGAIN, DIFFERENTLY: run 4's GLOBAL worst point
-# sits at the BOTTOM of the tested range (n=1,000) -- not a new position
-# for a run's OWN worst (run 1's own worst sat there too, per the note
-# above), but -- UNDER THIS RULE (the E5c-onward max-across-every-class-
-# and-every-n rule; "worst point" is not a well-defined notion under the
-# retired top-of-range rule at all) -- the first time n=1,000 has produced
-# the worst point across all FOUR PUBLISHED runs and both classes: runs
-# 1-3's own worst points sat at n=1,000, n=25,000, and n=5,000 respectively
-# (run 1 narrow 344.0, run 2 aggregate 553.8, run 3 aggregate 563.7); the
-# two later OBSERVED runs (T3, below) do not change this -- run 5's own
-# worst (555.3, aggregate @ n=25,000) and run 6's own worst (351.5, narrow
-# @ n=5,000) both sit well under run 4's 608.6us/row, so run 4 stays the
-# global-worst holder, and n=1,000 stays the site of it, whether "all
-# runs" is read as the four published or all six observed. The class
-# holding each run's own global-worst point has moved back to
-# narrow_page_1000 for the second time (run 1 narrow, runs 2-3 aggregate,
-# run 4 narrow); read at n=25,000 the way the retired rule would, the
-# slower class has flipped a third time, this time onto aggregate_mean
-# rather than narrow_page_1000
-# (run 1 narrow, run 2 aggregate, run 3 narrow, run 4 aggregate). At run
-# 4's OWN n=25,000 the slower class is aggregate_mean, 587.7us/row
-# (14693.7ms / 25,000 rows) -- not the narrow figure, 586.1us/row -- so
-# the retired "top of the tested range, on whichever class is slower"
-# rule would have read 587.7us/row, 3.4% below run 4's true worst point
-# (608.6us/row), and MISSED it. E5c's max-across-every-class-and-every-n
-# rule catches it regardless of where in the range, or on which class,
-# the worst point falls.
-#
-# The new global worst across ALL FOUR runs and BOTH classes is
-# therefore run 4's narrow_page_1000 @ n=1,000: 608.600us/row ->
-# seconds_per_row=0.000609 (rounded UP, the conservative direction).
-# 1/0.000609 ~= 1,642.0, so 1,600 is the round hundred just under the
-# crossing. Invariant check: 1,600 * 0.000609 = 0.9744,
-# inside [0.9, 1.0]. E5d's published rows=1_700 sat 1.035s at run 4's
-# worst point (1,700 * 0.000609 = 1.0353, over one second) -- not
-# "close enough": D1's conservative-floor rule exists precisely to
-# replace that judgment call with this arithmetic. A hypothetical FASTER
-# future run would leave 1,600 unchanged (the rule takes the WORST rate
-# across every published sample, not the newest one); a SLOWER one would
-# lower it again, exactly as this run just did to E5d's 1,700. All four
-# runs' full tables, and the four-run dispersion stated in prose, are
-# published side by side in docs/storage.md#storage-envelope;
-# `tests/test_docs.py` parses those tables and re-derives this same
-# floor from them (S2: one generating rule, not a fifth hand-copied
-# constant).
-#
-# T3 (envelope-backlog, 2026-09-03), clause c'': two FURTHER executions of
-# the identical curve step were READ after E5f shipped and are deliberately
-# NOT a fifth/sixth SUPERSEDED entry below, because neither one SET or
-# LOWERED the floor -- the publication RULE this task made explicit in
-# docs/storage.md#storage-envelope is that a run earns its own `#### Run
-# <id>` table only when it does either; every run actually read, published
-# or not, is recorded by id and its own worst rate in that section's
-# observed log (`OBSERVED_POSTGRES_RUN_IDS` in `tests/test_docs.py` pins
-# the SET of ids that log is allowed to contain, structurally, the same way
-# `PUBLISHED_POSTGRES_RUN_IDS` already pinned the four run headings). Run 5
-# (33704034596, job `postgres` 100489214750, 2026-09-03T01:32Z) rates,
-# us/row: aggregate_mean 538.1/544.0/555.3, narrow_page_1000
-# 538.5/542.3/551.2 at n=1,000/5,000/25,000 -> worst 555.292 (aggregate @
-# n=25,000: 13882.3ms / 25,000 rows = 555.292us/row). Run 6 (33705109711,
-# job `postgres` 100493794533, 2026-09-03T01:48Z) rates, us/row:
-# aggregate_mean 323.7/326.1/350.4, narrow_page_1000 333.2/351.5/351.0 at
-# n=1,000/5,000/25,000 -> worst 351.480 (narrow @ n=5,000: 1757.4ms /
-# 5,000 rows = 351.480us/row). Re-read either raw log directly rather than
-# trusting this comment's copy: `gh run view --job 100489214750 --log`
-# (run 5) or `gh run view --job 100493794533 --log` (run 6). Both worsts
-# sit well below E5f's 608.600us/row (run 5 by 8.8%, run 6 by 42.2%), so
-# `STORAGE_ENVELOPE["PostgresStore"]` stays exactly as E5f left it -- this
-# is a CONFIRMATION, not a fifth derivation. It closes whole-branch item 7
-# (read runs 5/6 before tagging) by making both visible in the tree, not
-# only in a prior handoff document -- and it does NOT close silent
-# OMISSION: `OBSERVED_POSTGRES_RUN_IDS` stays hand-maintained, so a run
-# that was actually executed but never recorded in the doc stays invisible
-# to every guard here and in `tests/test_docs.py` alike.
-#
-# SUPERSEDED (E5d, 2026-09-02): rows=1_700, seconds_per_row=0.000564,
-# derived from runs 1, 2, and 3 ALONE -- see above for why a fourth,
-# slower sample lowers it.
-#
-# SUPERSEDED (E5c, 2026-09-02): rows=1_800, seconds_per_row=0.000554,
-# derived from runs 1 and 2 ALONE -- see above for why a third, slower
-# sample lowers it.
-#
-# SUPERSEDED (E5b, 2026-09-02): rows=3_200, seconds_per_row=0.000312,
-# derived from run 33623316425 ALONE -- see above for why a single-run,
-# fixed-class-ordering rule does not survive a second sample.
-#
-# SUPERSEDED (E5, 2026-09-02): rows=10_000, seconds_per_row=0.000097
-# (97.0us/row), measured on LOCAL Homebrew PostgreSQL 17.11, same machine
-# as ObjectStore above, because no CI number existed yet (no Docker daemon
-# was running locally, spec §4). Run 1 alone already measured 2.96x SLOWER
-# than that laptop (287.4 vs 97.0us/row at n=25,000) -- a laptop number was
-# optimistic by about 3x, exactly what spec §4/§5's "a laptop number is not
-# reproducible by a reader" existed to catch; CI then turned out to have
-# its own, smaller version of the same non-reproducibility problem.
-STORAGE_ENVELOPE: dict[str, StorageEnvelope] = {
-    "ObjectStore": StorageEnvelope(rows=32_000, seconds_per_row=0.000031, label="SQLite"),
-    "PostgresStore": StorageEnvelope(
-        rows=1_600, seconds_per_row=0.000609, label="PostgreSQL"
-    ),
-}
 CRUD_ACTION_PREFIXES: tuple[str, ...] = (
     "Set",
     "Update",
@@ -399,70 +152,8 @@ def _linked_source_type(definition: "OntologyDef", object_type: str) -> str:
     return "source"
 
 
-def _registry_upcaster_findings(
-    definition: "OntologyDef", _store: "Store | None"
-) -> tuple[Finding, ...]:
-    registry = definition.registry
-    object_types = registry.object_types
-    findings: list[Finding] = []
-
-    for (api_name, from_version) in sorted(registry.upcasters):
-        obj = object_types.get(api_name)
-        location = f"OntologyRegistry.upcasters[{api_name!r}, {from_version}]"
-        if obj is None:
-            findings.append(
-                _error(
-                    "ONTOLOGY_INVALID",
-                    location,
-                    f"upcaster for unregistered object type {api_name!r} "
-                    f"(from version {from_version})",
-                    "Register the object type before declaring its upcaster, "
-                    "or remove the orphaned upcaster.",
-                )
-            )
-            continue
-        if from_version >= obj.version:
-            findings.append(
-                _error(
-                    "ONTOLOGY_INVALID",
-                    location,
-                    f"upcaster for {api_name!r} reads from version "
-                    f"{from_version}, which is not older than the declared "
-                    f"version {obj.version} -- it could never apply to a "
-                    "stored row",
-                    "Declare the step from an older stored version, or remove "
-                    "this upcaster.",
-                )
-            )
-
-    for api_name in sorted(object_types):
-        obj = object_types[api_name]
-        if obj.version <= 1:
-            continue
-        missing = [
-            version
-            for version in range(1, obj.version)
-            if (api_name, version) not in registry.upcasters
-        ]
-        if missing:
-            findings.append(
-                _error(
-                    "ONTOLOGY_INVALID",
-                    f"ObjectTypeDef[{api_name!r}].version",
-                    f"ObjectTypeDef {api_name!r} is declared version "
-                    f"{obj.version} but has no upcaster from version(s) "
-                    f"{missing} -- a row stored at any of those versions "
-                    "could not be read. Declare one upcaster per step, or "
-                    "migrate the rows and drop the version bump",
-                    "Declare one upcaster for every missing version step, or "
-                    "migrate those rows and remove the version bump.",
-                )
-            )
-    return tuple(findings)
-
-
 def _registry_owned_default_findings(
-    definition: "OntologyDef", _store: "Store | None"
+    definition: "OntologyDef"
 ) -> tuple[Finding, ...]:
     registry = definition.registry
     findings: list[Finding] = []
@@ -533,7 +224,7 @@ def _registry_owned_default_findings(
 
 
 def _registry_link_findings(
-    definition: "OntologyDef", _store: "Store | None"
+    definition: "OntologyDef"
 ) -> tuple[Finding, ...]:
     registry = definition.registry
     object_types = registry.object_types
@@ -567,12 +258,11 @@ def _registry_link_findings(
 
 
 def _registry_action_findings(
-    definition: "OntologyDef", _store: "Store | None"
+    definition: "OntologyDef"
 ) -> tuple[Finding, ...]:
     registry = definition.registry
     object_types = registry.object_types
     capabilities = registry.capabilities
-    effect_types = registry.effect_types
     findings: list[Finding] = []
 
     for api_name in sorted(registry.action_types):
@@ -599,19 +289,6 @@ def _registry_action_findings(
                         f"ActionTypeDef {api_name!r}: dangling capability "
                         f"{capability!r}",
                         "Declare the capability before using it on the action, "
-                        "or remove the reference.",
-                    )
-                )
-
-        for effect in sorted(action.effects):
-            if effect not in effect_types:
-                findings.append(
-                    _error(
-                        "ONTOLOGY_INVALID",
-                        f"{base}.effects[{effect!r}]",
-                        f"ActionTypeDef {api_name!r}: dangling effect "
-                        f"{effect!r}",
-                        "Declare the effect type before using it on the action, "
                         "or remove the reference.",
                     )
                 )
@@ -646,7 +323,7 @@ def _registry_action_findings(
 
 
 def _registry_function_findings(
-    definition: "OntologyDef", _store: "Store | None"
+    definition: "OntologyDef"
 ) -> tuple[Finding, ...]:
     registry = definition.registry
     capabilities = registry.capabilities
@@ -670,7 +347,7 @@ def _registry_function_findings(
 
 
 def _scope_policy_findings(
-    definition: "OntologyDef", _store: "Store | None"
+    definition: "OntologyDef"
 ) -> tuple[Finding, ...]:
     policy: ScopePolicy = definition.policy
     registry = definition.registry
@@ -885,7 +562,7 @@ def _scope_rule_list_findings(
 
 
 def _stored_derivable_findings(
-    definition: "OntologyDef", _store: "Store | None"
+    definition: "OntologyDef"
 ) -> tuple[Finding, ...]:
     """Warn on aggregate-shaped properties that look like stored rollups."""
     findings: list[Finding] = []
@@ -909,7 +586,7 @@ def _stored_derivable_findings(
 
 
 def _crud_action_name_findings(
-    definition: "OntologyDef", _store: "Store | None"
+    definition: "OntologyDef"
 ) -> tuple[Finding, ...]:
     """Warn when an action API name exposes a storage-level CRUD operation."""
     findings: list[Finding] = []
@@ -929,7 +606,7 @@ def _crud_action_name_findings(
 
 
 def _forbidden_type_name_findings(
-    definition: "OntologyDef", _store: "Store | None"
+    definition: "OntologyDef"
 ) -> tuple[Finding, ...]:
     """Warn on version/history clones, except explicitly declared snapshots."""
     findings: list[Finding] = []
@@ -949,7 +626,7 @@ def _forbidden_type_name_findings(
                 f"object {api_name}",
                 "object type name looks like a version, history, or snapshot "
                 "clone",
-                "Keep one object type and use versioning/upcasters; declare a "
+                "Keep one object type and let row history carry the past; declare a "
                 "snapshot explicitly when a point-in-time value is first-class.",
             )
         )
@@ -957,7 +634,7 @@ def _forbidden_type_name_findings(
 
 
 def _micro_action_findings(
-    definition: "OntologyDef", _store: "Store | None"
+    definition: "OntologyDef"
 ) -> tuple[Finding, ...]:
     """Warn on the declared shape of a likely one-property write action.
 
@@ -993,7 +670,7 @@ def _micro_action_findings(
 
 
 def _unscoped_sensitive_findings(
-    definition: "OntologyDef", _store: "Store | None"
+    definition: "OntologyDef"
 ) -> tuple[Finding, ...]:
     """Warn when a non-default sensitive property lacks scope or an exemption."""
     findings: list[Finding] = []
@@ -1020,7 +697,7 @@ def _unscoped_sensitive_findings(
 
 
 def _min_n_unset_findings(
-    definition: "OntologyDef", _store: "Store | None"
+    definition: "OntologyDef"
 ) -> tuple[Finding, ...]:
     """Nudge authors to choose ``min_n`` when sensitivity is declared.
 
@@ -1048,110 +725,7 @@ def _min_n_unset_findings(
     )
 
 
-def _storage_envelope_findings(
-    definition: "OntologyDef", store: "Store | None"
-) -> tuple[Finding, ...]:
-    """Warn when a stored type has crossed its backend's measured envelope."""
-    if store is None:
-        return ()
-    backend = type(store).__name__
-    envelope = STORAGE_ENVELOPE.get(backend)
-    if envelope is None:
-        return ()
-
-    findings: list[Finding] = []
-    for api_name in sorted(definition.registry.object_types):
-        row_count = 0
-        after_key: str | None = None
-        try:
-            while True:
-                page = store.read_page(
-                    api_name, after_key=after_key, batch=DEFAULT_BATCH
-                )
-                row_count += len(page)
-                if len(page) < DEFAULT_BATCH:
-                    break
-                after_key = page[-1].key
-        except Exception:
-            # `Exception` (not a narrower type) is DELIBERATE, pinned by
-            # `test_storage_envelope_mid_walk_failure_is_isolated_per_type`
-            # in tests/test_diagnose_lints.py. `read_page` on a real backend
-            # can fail for reasons far broader than "the declared type is
-            # unavailable or stale": `PostgresStore` and `ObjectStore` both
-            # execute raw SQL through `store/_sql.py`'s `execute()`, which
-            # does not wrap driver errors -- a dropped connection or a query
-            # timeout surfaces as a bare `psycopg`/`sqlite3` exception, and a
-            # corrupted payload fails `json.loads` inside `_row_to_stored` as
-            # a bare `ValueError`. No exception type narrower than
-            # `Exception` is common to all of those, and the `Store` protocol
-            # does not promise one either.
-            #
-            # The catch's actual job is PER-TYPE ISOLATION within this rule,
-            # not keeping `diagnose()` from raising at all -- the outer
-            # `_collect_findings` already wraps every whole rule in its own
-            # `try/except Exception`, so `diagnose()` cannot raise regardless
-            # of what this inner catch does. Without this inner catch, one
-            # type failing here would abort the entire
-            # `_storage_envelope_findings` rule (via the outer catch),
-            # losing every OTHER type's STORAGE_ENVELOPE_EXCEEDED finding
-            # too -- not just the failing type's -- and reporting one
-            # generic DIAGNOSE_RULE_FAILED instead of whatever real findings
-            # the other types had. That is strictly worse for a reader than
-            # silently skipping the one type that could not be counted.
-            #
-            # This makes "counted, found under the envelope" and "could not
-            # count" indistinguishable to a caller, BY DESIGN: diagnose() is
-            # advisory and scoped to ontology-authoring shape (see the
-            # module docstring), not store health, and this rule already has
-            # two other silent "could not evaluate" exits alongside this one
-            # -- `store is None` and an unpublished `backend`, both above --
-            # neither of which is surfaced as a finding either. An operator
-            # who suspects their store is actually unhealthy already has a
-            # direct signal for that (the same exception, raised for real
-            # the next time they read that type) and does not need
-            # diagnose() to duplicate it; doing so would need a new Finding
-            # code whose actionability at the ontology-authoring level is
-            # unclear -- nothing about the ontology's SHAPE changes because
-            # one read attempt failed once.
-            continue
-        if row_count <= envelope.rows:
-            continue
-        # ERRATA, stated plainly rather than left implicit: this message used
-        # to name only "governed aggregate". Commit 4be6109 (E5c) widened it
-        # to name both read classes, and that commit's own message records
-        # the single-class wording as one of two FALSIFIED claims it
-        # removed -- the rate that first crosses `envelope.rows` can be
-        # EITHER class (the constant above is the max across both, never
-        # aggregate alone), so "aggregate" on its own was factually wrong at
-        # the time, not merely narrower. The current wording is a deliberate
-        # widening for that reason, not an accident this comment is silently
-        # pretending always read this way.
-        #
-        # This widening has not been carried everywhere the message is quoted:
-        # spec storage-envelope.md §3's golden sample still reads the narrower
-        # "governed aggregate" wording, and the E3 ledger row that shipped this
-        # Finding still claims the message matches that golden sample
-        # "verbatim". Both are recorded here as a KNOWN, standing divergence --
-        # not repaired here, and not to be silently re-aligned to make either
-        # one agree with the code again.
-        findings.append(
-            _warn(
-                "STORAGE_ENVELOPE_EXCEEDED",
-                api_name,
-                f"{api_name} holds {row_count:,} rows. The measured envelope for "
-                f"{backend} ({envelope.label}) is ~{envelope.rows:,} rows for a "
-                f"governed aggregate or narrow-scope read under one second; at "
-                f"this size expect ~{row_count * envelope.seconds_per_row:.1f}s. "
-                "Bounded, unordered page reads are unaffected.",
-                "Narrow the population with `where=` before aggregating, or split "
-                "the type. See docs/storage.md#storage-envelope.",
-            )
-        )
-    return tuple(findings)
-
-
 RULES: tuple[DiagnosticRule, ...] = (
-    _registry_upcaster_findings,
     _registry_owned_default_findings,
     _registry_link_findings,
     _registry_action_findings,
@@ -1163,18 +737,15 @@ RULES: tuple[DiagnosticRule, ...] = (
     _micro_action_findings,
     _unscoped_sensitive_findings,
     _min_n_unset_findings,
-    _storage_envelope_findings,
 )
 
 
-def _collect_findings(
-    definition: "OntologyDef", store: "Store | None"
-) -> list[Finding]:
+def _collect_findings(definition: "OntologyDef") -> list[Finding]:
     """Run every rule, turning an unexpected rule failure into a finding."""
     findings: list[Finding] = []
     for rule in RULES:
         try:
-            findings.extend(rule(definition, store))
+            findings.extend(rule(definition))
         except Exception as exc:
             findings.append(
                 _error(

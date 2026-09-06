@@ -6,8 +6,8 @@ DSO/domain module (spec AC1).
 This module is the SDK's front door: an ontology author or app developer
 should be able to author, ingest, read, act, and call functions through the
 curated names in `__all__`. The rest of the engine surface remains available
-from its canonical submodule (`ontary.meta`, `ontary.store`, `ontary.connect`,
-and so on), rather than being flattened into the authoring vocabulary.
+from its canonical submodule (`ontary.meta`, `ontary.store`, and so on),
+rather than being flattened into the authoring vocabulary.
 
 `PagedRow` is an engine-internal pagination row. If you are extending the
 engine, import it from `ontary.store`.
@@ -31,7 +31,6 @@ from ontary.actions import (
 from ontary.authoring import (
     ActionParams,
     CapabilityHandle,
-    EffectHandle,
     LinkHandle,
     Ontology,
     OntologyObject,
@@ -41,20 +40,8 @@ from ontary.authoring import (
     target,
 )
 from ontary.client import OntologyClient
-from ontary.connect import (
-    BaseConnector,
-    CanonicalBatch,
-    CanonicalRecord,
-    LinkBinding,
-    MappingSpec,
-    ObjectBinding,
-    RawTables,
-    oid,
-    run_pipeline,
-)
 from ontary.declarations import Declarations, declarations
 from ontary.diagnose import Finding
-from ontary.effects import EffectDispatcher, EffectMeta, EffectPayload
 from ontary.errors import (
     AuthorityError,
     ConflictError,
@@ -76,7 +63,6 @@ from ontary.meta import (
     Cardinality,
     Sensitivity,
 )
-from ontary.outbox import DrainReport, OutboxRecord, RetryPolicy
 from ontary.query import Page, TypedPage
 from ontary.scope import (
     CustomResolver,
@@ -125,10 +111,7 @@ __all__ = [
     "ActionError",
     "ActionParams",
     "AuthorityError",
-    "BaseConnector",
     "BoundQuery",
-    "CanonicalBatch",
-    "CanonicalRecord",
     "CapabilityHandle",
     "Cardinality",
     "ConflictError",
@@ -136,30 +119,19 @@ __all__ = [
     "CustomResolver",
     "Declarations",
     "DirectProperty",
-    "DrainReport",
-    "EffectDispatcher",
-    "EffectHandle",
-    "EffectMeta",
-    "EffectPayload",
     "Finding",
     "InMemoryStore",
     "InternalError",
-    "LinkBinding",
     "LinkHandle",
-    "MappingSpec",
-    "ObjectBinding",
     "ObjectStore",
     "OntaryError",
     "Ontology",
     "OntologyClient",
     "OntologyObject",
-    "OutboxRecord",
     "Page",
     "PermissionDenied",
     "PostgresStore",
     "PreconditionFailed",
-    "RawTables",
-    "RetryPolicy",
     "RowVisibilityStore",
     "ScopePolicy",
     "SelfScope",
@@ -173,10 +145,8 @@ __all__ = [
     "__version__",
     "build_mcp_server",
     "declarations",
-    "oid",
     "prop",
     "ref",
-    "run_pipeline",
     "scope_ref",
     "target",
 ]

@@ -18,9 +18,8 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import datetime, timedelta
 from typing import Any
 
 from ontary.audit import (
@@ -28,13 +27,10 @@ from ontary.audit import (
     WriteRecord,
 )
 from ontary.errors import ConflictError
-from ontary.fingerprint import OntologyFingerprint
 from ontary.meta import Cardinality, OntologyRegistry
-from ontary.outbox import OutboxRecord, OutboxState
 from ontary.store import _sql
 from ontary.store._shared import (
     WriteCapture,
-    check_claim_limit,
     check_link_removal_authority,
     check_link_write_authority,
     check_object_removal_authority,
@@ -42,17 +38,14 @@ from ontary.store._shared import (
     check_update_authority,
     decode_audit_entry,
     encode_audit_entry,
-    json_references_object,
     live_link_not_found,
     merge_update,
     prepare_insert,
     resolve_link_type,
     retire_object_refusal,
     unknown_page_token,
-    write_references_object,
 )
-from ontary.store.migration import SqliteSchemaMigrator
-from ontary.store.protocol import EraseResult, check_ontology_fingerprint
+from ontary.store.migration import SqliteSchemaGate
 from ontary.store.values import (
     DEFAULT_BATCH,
     DEFAULT_TENANT,
@@ -62,7 +55,6 @@ from ontary.store.values import (
     StoredObject,
     _utcnow_iso,
 )
-from ontary.upcast import upcast_payload
 
 
 def _is_busy_error(exc: sqlite3.OperationalError) -> bool:
@@ -75,17 +67,17 @@ def _is_busy_error(exc: sqlite3.OperationalError) -> bool:
     return "database is locked" in message or "database table is locked" in message
 
 
-class ObjectStore(SqliteSchemaMigrator):
+class ObjectStore(SqliteSchemaGate):
     """SQLite-backed store for canonical objects, links, and audit log.
 
     Postgres-shaped SQL (standard types, no SQLite-only quirks) so the schema
     can be lifted to Postgres later with minimal changes.
 
-    File upgrades require a quiesced rollout. A v1 process whose connection
-    was already open can finish old-shape inserts after a v2 migration because
-    the new audit columns have constant defaults, but an old v1 binary opening
-    the file after its v2 stamp will reject it. No v2 implementation can alter
-    an already-deployed v1 reader's version gate.
+    Every file is stamped with `SCHEMA_VERSION` and there is no migration
+    ladder: a file written by a different ontary schema shape is refused with
+    `STORE_VERSION_UNSUPPORTED` rather than upgraded in place. Moving a store
+    between schema versions is an explicit operator step -- open it with the
+    matching ontary version, or migrate the data into a fresh file.
     """
 
     def __init__(
@@ -93,31 +85,15 @@ class ObjectStore(SqliteSchemaMigrator):
         registry: OntologyRegistry,
         path: str = ":memory:",
         *,
-        accept_ontology_drift: bool = False,
         tenant: str = DEFAULT_TENANT,
         busy_timeout: float = 5.0,
     ) -> None:
-        """`accept_ontology_drift=True` opens a store whose recorded ontology
-        fingerprint does not match `registry`, re-stamps it, and appends an
-        audit entry recording the change (spec AC5).
-
-        A call-site argument on purpose -- not an environment variable, not a
-        config key. Someone taking this risk names it where the store is opened,
-        and the audit log records that they did. It is also the honest escape
-        hatch for a legitimate case: an additive change to a type whose existing
-        rows genuinely satisfy the new shape needs no migration, only an
-        acknowledgement.
-
-        `tenant` scopes EVERY read and write this store performs (M8b). Two
+        """`tenant` scopes EVERY read and write this store performs (M8b). Two
         stores on the same file with different tenants cannot see each other's
-        objects, links, audit entries, or outbox rows. It is a constructor
+        objects, links, or audit entries. It is a constructor
         argument rather than a per-call one on purpose: a tenant passed per call
         is a tenant somebody eventually forgets to pass, and the failure mode of
         that mistake is a cross-tenant read.
-
-        Note what this is NOT: the ontology fingerprint stays per STORE, not per
-        tenant, because one process serves one declaration. Per-tenant migration
-        timing would need its own design.
 
         `busy_timeout` is the number of seconds SQLite waits for a locked table
         before refusing the operation. The default matches `sqlite3.connect`.
@@ -131,7 +107,6 @@ class ObjectStore(SqliteSchemaMigrator):
         self._txn_depth = 0
         self._write_capture = WriteCapture()
         self._init_schema()
-        check_ontology_fingerprint(self, registry, accept_drift=accept_ontology_drift)
 
     @contextmanager
     def transaction(self) -> Iterator[sqlite3.Connection]:
@@ -148,8 +123,8 @@ class ObjectStore(SqliteSchemaMigrator):
         raising `SystemExit`/`GeneratorExit` mid-transaction, previously left the
         transaction un-rolled-back, so writes made before the interrupt could be
         read by a later caller on this connection or swept into an outer commit.
-        Pre-existing, but M5's atomicity claim -- the pending effect record and
-        the ontology writes are ONE fact -- rests directly on this, so it is fixed
+        Pre-existing, but the atomicity claim -- an action's audit entry and its
+        ontology writes are ONE fact -- rests directly on this, so it is fixed
         here rather than left as a footnote. The exception is always re-raised:
         process-control exceptions are cleaned up after, never swallowed.
         """
@@ -179,10 +154,9 @@ class ObjectStore(SqliteSchemaMigrator):
                 # `_txn_depth` returned to 0. The caller's error handler then
                 # called `append_audit`, which opens a fresh transaction, and its
                 # commit committed the abandoned work too. Reproduced: an action
-                # whose commit failed had its object write and its `pending`
-                # effect record become DURABLE, with audit rows ["ok", "error"],
-                # while the caller received the commit error and no dispatcher
-                # ever ran. Same silent transactional-integrity class as the
+                # whose commit failed had its object write become DURABLE, with
+                # audit rows ["ok", "error"], while the caller received the
+                # commit error. Same silent transactional-integrity class as the
                 # BaseException rollback gap, one branch over.
                 try:
                     self._conn.commit()
@@ -229,7 +203,7 @@ class ObjectStore(SqliteSchemaMigrator):
         prepared = prepare_insert(
             self._registry, obj_type, payload, capturing=self._write_capture.active
         )
-        obj_def, payload, obj_id = prepared.obj_def, prepared.payload, prepared.obj_id_raw
+        payload, obj_id = prepared.payload, prepared.obj_id_raw
 
         now = _utcnow_iso()
         with self.transaction() as conn:
@@ -238,8 +212,8 @@ class ObjectStore(SqliteSchemaMigrator):
                 INSERT INTO objects
                     (object_type, id, payload, valid_from, valid_to,
                      source_system, source_id, extracted_at, page_token,
-                     type_version, tenant)
-                VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)
+                     tenant)
+                VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)
                 """,
                 (
                     obj_type,
@@ -250,7 +224,6 @@ class ObjectStore(SqliteSchemaMigrator):
                     source.source_id,
                     source.extracted_at,
                     uuid.uuid4().hex,
-                    obj_def.version,
                     self._tenant,
                 ),
             )
@@ -288,8 +261,8 @@ class ObjectStore(SqliteSchemaMigrator):
                 INSERT INTO objects
                     (object_type, id, payload, valid_from, valid_to,
                      source_system, source_id, extracted_at, page_token,
-                     type_version, tenant)
-                VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)
+                     tenant)
+                VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)
                 """,
                 (
                     obj_type,
@@ -300,11 +273,6 @@ class ObjectStore(SqliteSchemaMigrator):
                     source.source_id,
                     source.extracted_at,
                     uuid.uuid4().hex,
-                    # A write always lands at the CURRENT declared version --
-                    # `update` merges a current-shape change over an
-                    # already-upcast payload (see `_row_to_stored`), so the
-                    # result is current by construction.
-                    obj_def.version,
                     self._tenant,
                 ),
             )
@@ -362,175 +330,8 @@ class ObjectStore(SqliteSchemaMigrator):
         )
         return retired
 
-    def erase_object_content(self, object_type: str, obj_id: str) -> EraseResult:
-        """Tombstone one object's content across all durable content stores."""
-        self._registry.get_object_type(object_type)
-        object_rows_purged = 0
-        audit_entries_purged = 0
-        outbox_rows_purged = 0
-
-        def object_row_exists(row_type: str, row_id: str) -> bool:
-            return (
-                self._conn.execute(
-                    """
-                    SELECT 1 FROM objects
-                    WHERE object_type = ? AND id = ? AND tenant = ?
-                    LIMIT 1
-                    """,
-                    (row_type, row_id, self._tenant),
-                ).fetchone()
-                is not None
-            )
-
-        def references_erased_object(write: dict[str, Any]) -> bool:
-            return write_references_object(
-                write, object_type, obj_id, self._registry, object_row_exists
-            )
-
-        with self.transaction() as conn:
-            live = conn.execute(
-                """
-                SELECT 1 FROM objects
-                WHERE object_type = ? AND id = ? AND valid_to IS NULL
-                  AND tenant = ?
-                LIMIT 1
-                """,
-                (object_type, obj_id, self._tenant),
-            ).fetchone()
-            if live is not None:
-                # Reuse the public close operation so its timestamp/refusal
-                # semantics cannot drift from erasure's close-if-live step.
-                self.retire_object(object_type, obj_id)
-
-            object_rows = conn.execute(
-                """
-                SELECT row_id, payload FROM objects
-                WHERE object_type = ? AND id = ? AND tenant = ?
-                """,
-                (object_type, obj_id, self._tenant),
-            ).fetchall()
-            for row in object_rows:
-                if json.loads(row["payload"]):
-                    conn.execute(
-                        "UPDATE objects SET payload = ? WHERE row_id = ? AND tenant = ?",
-                        ("{}", row["row_id"], self._tenant),
-                    )
-                    object_rows_purged += 1
-
-            matching_invocations: set[str] = set()
-            audit_rows = conn.execute(
-                """
-                SELECT seq, kind, target_type, target_id, params, effects,
-                       writes, invocation_id
-                FROM audit_log WHERE tenant = ? ORDER BY seq ASC
-                """,
-                (self._tenant,),
-            ).fetchall()
-            for row in audit_rows:
-                if row["kind"] == "erasure":
-                    continue
-                params = json.loads(row["params"])
-                effects = json.loads(row["effects"])
-                writes = json.loads(row["writes"])
-                references_object = (
-                    row["target_type"] == object_type and row["target_id"] == obj_id
-                ) or json_references_object(
-                    params, object_type, obj_id
-                ) or json_references_object(
-                    effects, object_type, obj_id
-                ) or any(
-                    references_erased_object(write) for write in writes
-                )
-                if not references_object:
-                    continue
-                if row["invocation_id"] is not None:
-                    matching_invocations.add(str(row["invocation_id"]))
-                effects_have_content = any(
-                    effect["payload"] or effect.get("error") is not None
-                    for effect in effects
-                )
-                if params or effects_have_content:
-                    scrubbed_effects = [
-                        {**effect, "payload": {}, "error": None}
-                        for effect in effects
-                    ]
-                    conn.execute(
-                        """
-                        UPDATE audit_log SET params = ?, effects = ?
-                        WHERE seq = ? AND tenant = ?
-                        """,
-                        (
-                            "{}",
-                            json.dumps(scrubbed_effects),
-                            row["seq"],
-                            self._tenant,
-                        ),
-                    )
-                    audit_entries_purged += 1
-
-            outbox_rows = conn.execute(
-                """
-                SELECT effect_id, invocation_id, payload, last_error
-                FROM effect_outbox WHERE tenant = ?
-                ORDER BY emitted_at ASC, seq ASC
-                """,
-                (self._tenant,),
-            ).fetchall()
-            for row in outbox_rows:
-                payload = json.loads(row["payload"])
-                references_object = (
-                    row["invocation_id"] in matching_invocations
-                    or json_references_object(payload, object_type, obj_id)
-                )
-                if references_object and (
-                    payload or row["last_error"] is not None
-                ):
-                    conn.execute(
-                        """
-                        UPDATE effect_outbox SET payload = ?, last_error = NULL
-                        WHERE effect_id = ? AND tenant = ?
-                        """,
-                        ("{}", row["effect_id"], self._tenant),
-                    )
-                    outbox_rows_purged += 1
-
-        return EraseResult(
-            object_rows_purged=object_rows_purged,
-            audit_entries_purged=audit_entries_purged,
-            outbox_rows_purged=outbox_rows_purged,
-        )
-
-    def object_erasure_state(
-        self, object_type: str, obj_id: str
-    ) -> tuple[bool, bool]:
-        """Return whether object rows and erasable object content exist."""
-        self._registry.get_object_type(object_type)
-        rows = self._conn.execute(
-            """
-            SELECT valid_to, payload FROM objects
-            WHERE object_type = ? AND id = ? AND tenant = ?
-            """,
-            (object_type, obj_id, self._tenant),
-        ).fetchall()
-        has_content = any(
-            row["valid_to"] is None or bool(json.loads(row["payload"]))
-            for row in rows
-        )
-        return bool(rows), has_content
-
     def _row_to_stored(self, row: sqlite3.Row) -> StoredObject:
         payload: dict[str, Any] = json.loads(row["payload"])
-        # THE read boundary (M9b). Every path above this -- typed client, string
-        # and MCP surfaces, guarded query, aggregates, scope resolution -- goes
-        # through `_row_to_stored`, so upcasting here is what makes "one row, one
-        # reality" true for all of them at once.
-        payload = upcast_payload(
-            self._registry,
-            row["object_type"],
-            payload,
-            row["type_version"],
-            object_id=str(row["id"]),
-        )
         return StoredObject(
             payload=payload,
             lineage=Lineage(
@@ -807,7 +608,6 @@ class ObjectStore(SqliteSchemaMigrator):
                     fields.params,
                     fields.outcome,
                     fields.writes,
-                    fields.effects,
                     fields.capability_accesses,
                     fields.invocation_id,
                     fields.kind,
@@ -816,206 +616,6 @@ class ObjectStore(SqliteSchemaMigrator):
                 ),
                 dialect="sqlite",
             )
-
-    # -- effect outbox ---------------------------------------------------
-
-    @staticmethod
-    def _row_to_outbox(row: sqlite3.Row) -> OutboxRecord:
-        lease_until = row["lease_until"]
-        return OutboxRecord(
-            effect_id=row["effect_id"],
-            invocation_id=row["invocation_id"],
-            seq=row["seq"],
-            api_name=row["api_name"],
-            payload=json.loads(row["payload"]),
-            action=row["action"],
-            actor_id=row["actor_id"],
-            role=row["role"],
-            emitted_at=datetime.fromisoformat(row["emitted_at"]),
-            state=row["state"],
-            attempts=row["attempts"],
-            next_attempt_at=datetime.fromisoformat(row["next_attempt_at"]),
-            lease_until=(
-                datetime.fromisoformat(lease_until) if lease_until is not None else None
-            ),
-            last_error=row["last_error"],
-            updated_at=datetime.fromisoformat(row["updated_at"]),
-        )
-
-    def enqueue_effects(self, records: Sequence[OutboxRecord]) -> None:
-        """Insert outbox rows inside the caller's transaction (spec AC1).
-
-        Deliberately NOT `_safe_json_dumps` like `append_audit`: an audit entry
-        must persist even when a param cannot be encoded, because a
-        half-described record of something that happened beats no record. An
-        outbox row is the opposite -- it is the instruction for something that
-        has NOT happened yet, and a payload placeholder would be dispatched
-        outward as though it were the author's data. A payload that cannot be
-        JSON-encoded raises here, inside the action transaction, so the whole
-        action rolls back and nothing is sent."""
-        with self.transaction() as conn:
-            for record in records:
-                _sql.execute(
-                    conn,
-                    _sql.render(
-                        _sql.EFFECT_OUTBOX_INSERT_TEMPLATE,
-                        "sqlite",
-                        placeholder_count=len(_sql.EFFECT_OUTBOX_COLUMNS),
-                    ),
-                    (
-                        record.effect_id,
-                        record.invocation_id,
-                        record.seq,
-                        record.api_name,
-                        json.dumps(record.payload),
-                        record.action,
-                        record.actor_id,
-                        record.role,
-                        record.emitted_at.isoformat(),
-                        record.state,
-                        record.attempts,
-                        record.next_attempt_at.isoformat(),
-                        (
-                            record.lease_until.isoformat()
-                            if record.lease_until is not None
-                            else None
-                        ),
-                        record.last_error,
-                        record.updated_at.isoformat(),
-                        self._tenant,
-                    ),
-                    dialect="sqlite",
-                )
-
-    def claim_due_effects(
-        self, *, limit: int, now: datetime, lease: timedelta
-    ) -> list[OutboxRecord]:
-        """Select-then-lease in ONE transaction (spec AC5).
-
-        The `UPDATE` re-states the whole eligibility predicate rather than
-        trusting the ids the `SELECT` just produced: on this engine's
-        connections nothing else can interleave inside the transaction, but
-        repeating the predicate means the claim is still correct if a future
-        backend runs it at a weaker isolation level, and it costs one indexed
-        comparison. ISO-8601 UTC strings compare lexicographically in the same
-        order as the instants they denote, which is what makes
-        `next_attempt_at <= ?` a valid SQL comparison against TEXT.
-        """
-        check_claim_limit(limit)
-        now_iso = now.isoformat()
-        lease_until = (now + lease).isoformat()
-        with self.transaction() as conn:
-            rows = _sql.execute(
-                conn,
-                _sql.render(_sql.EFFECT_OUTBOX_CLAIM_SELECT_TEMPLATE, "sqlite"),
-                (now_iso, now_iso, self._tenant, limit),
-                dialect="sqlite",
-            ).rows
-            claimed: list[OutboxRecord] = []
-            for row in rows:
-                updated = _sql.execute(
-                    conn,
-                    _sql.render(_sql.EFFECT_OUTBOX_CLAIM_UPDATE_TEMPLATE, "sqlite"),
-                    (
-                        lease_until,
-                        now_iso,
-                        row["effect_id"],
-                        now_iso,
-                        now_iso,
-                        self._tenant,
-                    ),
-                    dialect="sqlite",
-                )
-                if updated.rowcount == 1:
-                    claimed.append(
-                        self._row_to_outbox(row).model_copy(
-                            update={
-                                "lease_until": datetime.fromisoformat(lease_until),
-                                "updated_at": now,
-                            }
-                        )
-                    )
-        return claimed
-
-    def release_effect_claim(self, effect_id: str, *, now: datetime) -> None:
-        with self.transaction() as conn:
-            _sql.execute(
-                conn,
-                _sql.render(_sql.EFFECT_OUTBOX_RELEASE_TEMPLATE, "sqlite"),
-                (now.isoformat(), effect_id, self._tenant),
-                dialect="sqlite",
-            )
-
-    def resolve_effect(
-        self,
-        effect_id: str,
-        *,
-        state: OutboxState,
-        next_attempt_at: datetime,
-        error: str | None,
-        now: datetime,
-    ) -> None:
-        with self.transaction() as conn:
-            _sql.execute(
-                conn,
-                _sql.render(_sql.EFFECT_OUTBOX_RESOLVE_TEMPLATE, "sqlite"),
-                (
-                    state,
-                    next_attempt_at.isoformat(),
-                    error,
-                    now.isoformat(),
-                    effect_id,
-                    self._tenant,
-                ),
-                dialect="sqlite",
-            )
-
-    def outbox_entries(self) -> list[OutboxRecord]:
-        rows = _sql.execute(
-            self._conn,
-            _sql.render(_sql.EFFECT_OUTBOX_SELECT_TEMPLATE, "sqlite"),
-            (self._tenant,),
-            dialect="sqlite",
-        ).rows
-        return [self._row_to_outbox(row) for row in rows]
-
-    # -- ontology fingerprint --------------------------------------------
-
-    def read_ontology_fingerprint(self) -> OntologyFingerprint | None:
-        rows = _sql.execute(
-            self._conn,
-            _sql.render(_sql.ONTOLOGY_FINGERPRINT_SELECT_TEMPLATE, "sqlite"),
-            dialect="sqlite",
-        ).rows
-        row = rows[0] if rows else None
-        if row is None:
-            return None
-        return OntologyFingerprint(
-            digest=row["digest"],
-            types=json.loads(row["types"]),
-            versions=json.loads(row["versions"]),
-        )
-
-    def write_ontology_fingerprint(
-        self, fingerprint: OntologyFingerprint, *, adopted: bool
-    ) -> None:
-        with self.transaction() as conn:
-            _sql.execute(
-                conn,
-                _sql.render(_sql.ONTOLOGY_FINGERPRINT_UPSERT_TEMPLATE, "sqlite"),
-                (
-                    fingerprint.digest,
-                    json.dumps(fingerprint.types, sort_keys=True),
-                    _utcnow_iso(),
-                    int(adopted),
-                    json.dumps(fingerprint.versions, sort_keys=True),
-                ),
-                dialect="sqlite",
-            )
-        # `first_seen` is NOT updated by the upsert above: it records when this
-        # store first had a fingerprint at all, which stays true across a later
-        # re-stamp. An accepted drift changes the shape of record, not the date
-        # the store started keeping one.
 
     def audit_entries(self) -> list[AuditEntry]:
         cur = self._conn.execute(

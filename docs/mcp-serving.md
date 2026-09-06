@@ -131,8 +131,7 @@ ontology action or Function.
 Once a request resolves, audit entries retain both identities: `principal` records
 who the transport proved and `actor`/`role` records the consumer the resolver
 selected. That makes a resolver which maps every principal to one privileged actor
-visible to an auditor. A redelivered effect records its actor and joins back by
-`invocation_id`, but has no new transport principal.
+visible to an auditor.
 
 ## Transport requirements
 
@@ -149,7 +148,8 @@ process. The SDK does not provide its own HTTP entrypoint: the deployer runs the
 FastMCP server or wraps its ASGI application in the host's process.
 
 See [the API reference MCP section](api-reference.md#mcp-server) for the builder
-signatures and tool behavior. See [authority and architecture](authority.md) for
-the runtime's declared identity contract.
+signatures and tool behavior, and its
+[`Declarations`](api-reference.md#descriptor-authoring) paragraph for the runtime's
+declared identity contract.
 
 [Return to the README](../README.md) · [Return to the API reference](api-reference.md)

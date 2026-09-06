@@ -67,11 +67,10 @@ types. New `ObjectTypeDef`, `LinkTypeDef`, `ActionTypeDef`, and `FunctionDef`
 declarations can extend a stable core. Existing API names, property semantics, link
 directions, and action outcomes are contracts for human applications and agents.
 
-When an existing object shape genuinely evolves, change the same type deliberately:
-the stored `OntologyFingerprint` detects undeclared drift, and
-`migrate_object_type` applies a declared version change and its upcasters. Do not
-pre-build speculative extension points, and do not silently reinterpret an old
-property to accommodate a new use case.
+When an existing object shape genuinely evolves, change the same type deliberately
+and keep its history in the store's own row history. Do not pre-build speculative
+extension points, and do not silently reinterpret an old property to accommodate a
+new use case.
 
 *Source: Palantir, "Ontology design: Best practices".*
 
@@ -196,10 +195,12 @@ remains present in history. `ActionContext.retire` also cascade-closes every liv
 that references the object on the side its link type declares for that object type, in
 the same transaction.
 
-Erasure for a right-to-erasure request under GDPR/APPI is an operator runbook tool,
-not an ontology concept. It is not an action, Function, client operation, or MCP tool;
-do not declare an `Erase*` action to reach it. Keep operator erasure separate from the
-business action that retires an object.
+Erasure is not an ontology concept, and this SDK gives you no erasure verb. Retirement
+is the lifecycle verb: do not declare an `Erase*` or `Delete*` action, Function, client
+operation, or MCP tool to serve a right-to-erasure request under GDPR/APPI. Destroying
+stored bytes is an operational matter for whoever runs the database, decided outside the
+declared ontology and separate from the business action that retires an object. Audit
+stays the engine's `AuditEntry`; never declare a type or an action to record it.
 
 A governed action may retire an object only when its whole type declares `owned=True`,
 and may close a link only when that link type declares `owned=True`. Partial ownership
@@ -242,11 +243,12 @@ system, so its table names, identifiers, and quirks become the public domain mod
 integration details; and the same real-world entity arrives as several
 source-specific objects with no stable identity.
 
-**In ontary:** keep a vendor-independent canonical staging model. Each connector
-maps source data to canonical records, then canonical records to the ontology:
-source → canonical → ontology. Use `Source` to preserve lineage and use `owned`
-declarations to keep source-backed facts separate from ontology-owned state. Design
-`ObjectTypeDef` and `LinkTypeDef` names from the domain, never from an extract.
+**In ontary:** keep the ontology vendor-independent. Name `ObjectTypeDef` and
+`LinkTypeDef` from the domain, never from an extract. Load source data through
+`OntologyClient.ingest`, which maps each incoming record onto those declared types
+rather than letting the extract's own shape through. Use `Source` to preserve
+lineage, and use `owned` declarations to keep source-backed facts separate from
+ontology-owned state.
 
 *Source: Palantir, "Ontology design: Anti-patterns".*
 
@@ -330,8 +332,8 @@ and audit records describe storage mechanics instead of business intent.
 
 **In ontary:** declare a small `ActionTypeDef` set named with business verbs and
 aligned to real outcomes. One action should own the complete invariant-preserving
-transition, including its target, permitted roles, declared capabilities and effects,
-and ontology-owned writes. Never expose generic create, update, or set-property
+transition, including its target, permitted roles, declared capabilities, and
+ontology-owned writes. Never expose generic create, update, or set-property
 actions. The tickets example's [ticket-escalation action](../examples/tickets/ontology.py)
 escalates a ticket; its name tells a reviewer what happened.
 
@@ -349,8 +351,7 @@ across clones; "current state" becomes a convention instead of a query.
 (`valid_from`/`valid_to`, close-old-insert-new), so history is a storage concern,
 not a modeling problem. If a point-in-time value must be first-class, declare it
 explicitly as a snapshot type (e.g. `EngagementScoreSnapshot`) — the only sanctioned
-duplicate of a derivable fact. Schema evolution goes through
-`migrate_object_type` and type `version` plus upcasters, never a `V2` type.
+duplicate of a derivable fact. History is row history, never a `V2` type.
 
 *Source: Palantir, "Ontology design: Anti-patterns".*
 

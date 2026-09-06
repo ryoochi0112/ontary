@@ -26,7 +26,6 @@ dependencies = [
 Repository = "https://github.com/ryoochi0112/ontary"
 Changelog = "https://github.com/ryoochi0112/ontary/blob/main/CHANGELOG.md"
 Documentation = "https://github.com/ryoochi0112/ontary/blob/main/docs/api-reference.md"
-Compatibility = "https://github.com/ryoochi0112/ontary/blob/main/docs/compatibility.md"
 License = "https://github.com/ryoochi0112/ontary/blob/main/LICENSE"
 
 [project.optional-dependencies]
@@ -46,27 +45,17 @@ mcp = [
     # integration surface.
     "mcp>=1.27.2,<2",
 ]
-dlt = [
-    "dlt>=1.0,<2.0",
-    "duckdb>=1.0,<2.0",
-]
 postgres = [
     # psycopg 3. `[binary]` so an adopter does not need libpq headers to install
     # it; a deployment that prefers the system libpq can depend on plain
     # `psycopg` instead.
     "psycopg[binary]>=3.1,<4",
 ]
-bq = [
-    "ontary[dlt]",
-    "dlt[bigquery]>=1.0,<2.0",
-]
 dev = [
     "pytest>=8",
     "ruff>=0.5",
     "mypy>=1.10",
     "ontary[mcp]",
-    "ontary[dlt]",
-    "ontary[bq]",
     "ontary[postgres]",
 ]
 
@@ -94,13 +83,6 @@ default = true
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-# Frozen per-tag fixture writers (spec `v1-acceptance-gate` §6 "AC4"): each is
-# written against ITS OWN tag's `ontary` API and is only ever executed under
-# that tag's venv, never under this repo's HEAD -- so it must not be
-# reformatted/fixed/relinted to match a lint config that postdates it. The
-# `tests/test_upgrade_fixtures.py` (T8) + fixture-honesty CI job (T9) are
-# what keep it honest instead; see that directory's module docstrings.
-extend-exclude = ["tests/fixtures/upgrade/writers"]
 
 [tool.ruff.lint]
 extend-select = ["I", "B", "C901"]

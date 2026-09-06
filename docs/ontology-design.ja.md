@@ -65,9 +65,8 @@ DRY が当てはまるのは綴りだけでなく意味にも及びます。人�
 コアを拡張できます。既存の API 名、プロパティの意味、リンクの方向、Action の結果は、
 人間向けアプリケーションとエージェントにとっての契約です。
 
-既存のオブジェクト形が本当に進化するときは、同じ型を意図的に変更します。保存された
-`OntologyFingerprint` が未宣言のドリフトを検出し、`migrate_object_type` が宣言された
-バージョン変更とそのアップキャスターを適用します。投機的な拡張ポイントを先に作らず、
+既存のオブジェクト形が本当に進化するときは、同じ型を意図的に変更し、その履歴は
+ストアの行履歴に任せます。投機的な拡張ポイントを先に作らず、
 新しいユースケースに合わせて古いプロパティの意味を黙って書き換えないでください。
 
 *Source: Palantir, "Ontology design: Best practices".*
@@ -184,10 +183,12 @@ Foundry の object-backed link type は関係にプロパティを付けます�
 宣言している側でそのオブジェクトを参照するすべての live link も、同じ transaction で
 cascade-close されます。
 
-right-to-erasure 要求（GDPR/APPI）に対応する erasure は、オペレーターが実行する runbook ツールで
-あり、オントロジーの概念ではありません。Action、Function、client operation、MCP tool のいずれ
-でもありません。そこへ到達するための `Erase*` Action を宣言しないでください。オペレーターの
-erasure は、オブジェクトをリタイアするビジネス Action とは分離して扱います。
+erasure はオントロジーの概念ではなく、この SDK は erasure の動詞を提供しません。ライフサイクルの
+動詞はリタイアです。right-to-erasure 要求（GDPR/APPI）に応じるために `Erase*` や `Delete*` の
+Action、Function、client operation、MCP tool を宣言しないでください。保存されたバイト列の破棄は
+データベースを運用する側の運用上の判断であり、宣言されたオントロジーの外で決めます。オブジェクトを
+リタイアするビジネス Action とは分離して扱ってください。監査はエンジンの `AuditEntry` のままです。
+記録のための型や Action を宣言しないでください。
 
 統制された Action は、型全体が `owned=True` を宣言している場合に限りオブジェクトをリタイア
 できます。リンクを close できるのは、そのリンク型が `owned=True` を宣言している場合だけです。
@@ -230,11 +231,11 @@ min-N のために異なる候補者を数えることができます。これ�
 覚え、同じ現実世界の実体がソース固有の複数オブジェクトとして到着し、安定した同一性が
 なくなります。
 
-**In ontary:** ベンダー非依存の正規ステージングモデルを保ちます。各コネクタはソース
-データを正規レコードへ、正規レコードをオントロジーへ写します。source → canonical →
-ontology です。系譜を残すには `Source` を使い、`owned` 宣言でソース由来の事実と
-オントロジー所有の状態を分けます。`ObjectTypeDef` と `LinkTypeDef` の名前は抽出物ではなく
-ドメインから付けます。
+**In ontary:** オントロジーをベンダー非依存に保ちます。`ObjectTypeDef` と
+`LinkTypeDef` の名前は抽出物ではなくドメインから付けます。ソースデータは
+`OntologyClient.ingest` 経由で読み込み、各レコードを宣言済みの型へ写します。
+抽出物の形をそのまま通してはいけません。系譜を残すには `Source` を使い、`owned`
+宣言でソース由来の事実とオントロジー所有の状態を分けます。
 
 *Source: Palantir, "Ontology design: Anti-patterns".*
 
@@ -312,7 +313,7 @@ Action、ライフサイクルを所有すること。
 ストレージ操作を記述します。
 
 **In ontary:** ビジネス動詞で名付け、実際の結果に沿った小さな `ActionTypeDef` 集合を
-宣言します。一つの Action が、対象、許可ロール、宣言された capability と effect、
+宣言します。一つの Action が、対象、許可ロール、宣言された capability、
 オントロジー所有の書き込みを含む、不変条件を保つ遷移全体を所有すべきです。汎用の create、
 update、set-property Action を公開してはいけません。
 チケット例の [ticket-escalation Action](../examples/tickets/ontology.py) はチケットを
@@ -332,8 +333,7 @@ update、set-property Action を公開してはいけません。
 close-old-insert-new）を保持するため、履歴はストレージの関心事であり、モデリング問題では
 ありません。時点の値を第一級にする必要があるなら、スナップショット型（例:
 `EngagementScoreSnapshot`）として明示的に宣言します。導出可能な事実の複製として
-認められるのはこれだけです。スキーマ進化は `migrate_object_type` と型の `version` と
-アップキャスターで行い、`V2` 型は使いません。
+認められるのはこれだけです。履歴は行履歴であり、`V2` 型は使いません。
 
 *Source: Palantir, "Ontology design: Anti-patterns".*
 

@@ -33,7 +33,6 @@ from pydantic import Field
 from ontary.actions import ActionContext, TypedHandler
 from ontary.client import OntologyRuntime
 from ontary.diagnose import Finding, _collect_findings
-from ontary.effects import EffectDispatcher, EffectPayload
 from ontary.errors import ValidationFailed
 from ontary.functions import FunctionHandler, FunctionRegistry
 from ontary.meta import (
@@ -41,19 +40,15 @@ from ontary.meta import (
     ActionTypeDef,
     CapabilityDef,
     Cardinality,
-    EffectFieldDef,
-    EffectTypeDef,
     FunctionDef,
     LinkTypeDef,
     ObjectTypeDef,
     OntologyRegistry,
     PropertyDef,
     Sensitivity,
-    Upcaster,
 )
 from ontary.model import ActionParams as ActionParams
 from ontary.model import CapabilityHandle as CapabilityHandle
-from ontary.model import EffectHandle as EffectHandle
 from ontary.model import LinkHandle as LinkHandle
 from ontary.model import OntologyObject as OntologyObject
 from ontary.model import _class_stamp as _class_stamp
@@ -66,7 +61,6 @@ from ontary.typesys import PropertyType
 __all__ = [
     "ActionParams",
     "CapabilityHandle",
-    "EffectHandle",
     "LinkHandle",
     "Ontology",
     "OntologyObject",
@@ -92,8 +86,6 @@ _ANNOTATION_MAP: dict[Any, PropertyType] = {
     date: "date",
     datetime: "datetime",
 }
-
-
 
 
 def prop(
@@ -172,9 +164,9 @@ def _repair_optional_default(field_info: Any, is_optional: bool) -> bool:
     default: without one, Pydantic still treats it as required at
     construction (`X | None` doesn't imply `= None`). Returns whether the
     field was mutated -- the caller collects that into its `needs_rebuild`
-    flag and calls `model_rebuild(force=True)` once. The one fixup all
-    three derive loops (`_derive_properties`/`_derive_action_params`/
-    `_derive_effect_payload`) share."""
+    flag and calls `model_rebuild(force=True)` once. The one fixup both
+    derive loops (`_derive_properties`/`_derive_action_params`)
+    share."""
     if is_optional and field_info.is_required():
         field_info.default = None
         return True
@@ -255,7 +247,6 @@ def _derive_properties(cls: type["OntologyObject"]) -> tuple[list[PropertyDef], 
     return props, primary_keys[0]
 
 
-
 _T = TypeVar("_T", bound=OntologyObject)
 _P = TypeVar("_P", bound=ActionParams)
 
@@ -303,7 +294,6 @@ def ref(cls: type["OntologyObject"], **field_kwargs: Any) -> Any:
     `str`-annotation requirement as `target()`/`scope_ref()`.
     """
     return _marker(cls, None, **field_kwargs)
-
 
 
 def _api_name_for_registered(
@@ -392,49 +382,6 @@ def _derive_action_params(
 _C = TypeVar("_C", bound=OntologyObject)
 _F = TypeVar("_F", bound=OntologyObject)
 _ProviderT_co = TypeVar("_ProviderT_co", covariant=True)
-_EffectT_co = TypeVar("_EffectT_co", bound=EffectPayload, covariant=True)
-
-
-
-def _effect_field_type_name(annotation: Any) -> str:
-    """Return a compact, JSON-safe display name for effect field IR.
-
-    Effect descriptors describe payload structure without retaining Python
-    annotation objects. Builtins use their ordinary names (`str`); parameterized
-    forms use Python's stable spelling (`list[str]`) with an incidental
-    `typing.` prefix removed. Validation remains Pydantic's responsibility --
-    unlike ontology properties, effect data is not restricted to the SDK's
-    scalar property type system.
-    """
-    if isinstance(annotation, type):
-        return annotation.__name__
-    return str(annotation).replace("typing.", "")
-
-
-def _derive_effect_payload(cls: type[EffectPayload]) -> list[EffectFieldDef]:
-    """Derive serializable field IR with the action-params requiredness rule.
-
-    In particular, `X | None` is optional even when the author omitted
-    `= None`; as in `_derive_action_params`, the Pydantic field is repaired and
-    the model rebuilt so construction semantics agree with the declaration.
-    The Optional wrapper is omitted from `type_name` because requiredness
-    carries that information independently.
-    """
-    payload: list[EffectFieldDef] = []
-    needs_rebuild = False
-    for field_name, field_info in cls.model_fields.items():
-        annotation, is_optional = _unwrap_optional(field_info.annotation)
-        needs_rebuild = _repair_optional_default(field_info, is_optional) or needs_rebuild
-        payload.append(
-            EffectFieldDef(
-                name=field_name,
-                type_name=_effect_field_type_name(annotation),
-                required=not is_optional,
-            )
-        )
-    if needs_rebuild:
-        cls.model_rebuild(force=True)
-    return payload
 
 
 class Ontology:
@@ -496,10 +443,10 @@ class Ontology:
         """Declare one outside-world read and return its typed handle.
 
         The protocol belongs only to authoring/type checking; the registry gets
-        a plain `CapabilityDef`, keeping the ontology IR serializable. Unlike
-        effect payload classes, protocols are not stamped: the same provider
-        interface may intentionally be declared by multiple independent
-        ontologies, while each returned handle still carries registry identity.
+        a plain `CapabilityDef`, keeping the ontology IR serializable.
+        Protocols are not stamped: the same provider interface may
+        intentionally be declared by multiple independent ontologies, while
+        each returned handle still carries registry identity.
 
         **Why two overloads.** A `Protocol` is the single most natural thing to
         declare a capability with -- it is a natural fit for an `LLMClient`
@@ -533,60 +480,6 @@ class Ontology:
             api_name=api_name, proto=proto, registry=self.registry
         )
 
-    def effect(
-        self,
-        payload_cls: type[_EffectT_co],
-        *,
-        api_name: str | None = None,
-        description: str | None = None,
-    ) -> EffectHandle[_EffectT_co]:
-        """Declare one outside-world write payload and return its typed handle.
-
-        Payload classes are identity-stamped exactly like action params classes:
-        one class may describe one declaration on one ontology. Crucially the
-        stamp read goes through `_class_stamp`, hence `cls.__dict__`, so an
-        undecorated subclass does not inherit its parent's declaration and
-        silently resolve to the parent's api-name (the M4a T3 regression).
-        """
-        name = api_name if api_name is not None else payload_cls.__name__
-        self._check_not_frozen(f"effect {name!r}")
-        if not issubclass(payload_cls, EffectPayload):
-            raise ValidationFailed(
-                f"{payload_cls.__name__!r} must subclass EffectPayload to be "
-                "declared with ontology.effect(...)",
-                code="ONTOLOGY_INVALID",
-            )
-
-        existing_name, existing_registry = _class_stamp(payload_cls)
-        if existing_registry is not None:
-            if existing_registry is not self.registry:
-                raise ValidationFailed(
-                    f"{payload_cls.__name__!r} is already declared as an "
-                    "effect payload on another Ontology (a payload class may "
-                    "only be declared once, on a single Ontology)",
-                    code="ONTOLOGY_INVALID",
-                )
-            raise ValidationFailed(
-                f"{payload_cls.__name__!r} is already declared as effect "
-                f"{existing_name!r} (a payload class may be declared once)",
-                code="ONTOLOGY_INVALID",
-            )
-
-        effect_def = EffectTypeDef(
-            api_name=name,
-            description=description
-            if description is not None
-            else f"Emits {name}.",
-            payload=_derive_effect_payload(payload_cls),
-        )
-        self.registry.register_effect_type(effect_def)
-        # setattr keeps mypy off the TypeVar-bound class (B010 exempted).
-        setattr(payload_cls, "_ontary_api_name", name)  # noqa: B010
-        setattr(payload_cls, "_ontary_registry", self.registry)  # noqa: B010
-        return EffectHandle(
-            api_name=name, payload_cls=payload_cls, registry=self.registry
-        )
-
     def _capability_api_names(
         self,
         handles: Sequence[CapabilityHandle[builtins.object]],
@@ -610,24 +503,6 @@ class Ontology:
             names.append(handle.api_name)
         return names
 
-    def _effect_api_names(
-        self,
-        handles: Sequence[EffectHandle[EffectPayload]],
-        *,
-        declared_on: str,
-    ) -> list[str]:
-        """Effect counterpart to `_capability_api_names`."""
-        names: list[str] = []
-        for handle in handles:
-            if handle.registry is not self.registry:
-                raise ValidationFailed(
-                    f"effect {handle.api_name!r} for {declared_on} is "
-                    "registered on a different Ontology",
-                    code="ONTOLOGY_INVALID",
-                )
-            names.append(handle.api_name)
-        return names
-
     def object(
         self,
         *,
@@ -639,18 +514,10 @@ class Ontology:
         scope: Any = None,
         contributor: Any = None,
         row_visibility: Any = None,
-        version: int = 1,
     ) -> Callable[[type[_C]], type[_C]]:
         """Derives an `ObjectTypeDef` from `model_fields` and registers it.
         `scope`/`contributor`/`row_visibility` are stored per-class and
         assembled into the `ScopePolicy` lazily, by `.definition`.
-
-        `version` (M9b) declares which iteration of this type's shape the code
-        describes. Leave it at 1 until you change a declared property under data
-        that already exists; then bump it and declare an
-        `@ontology.upcaster(cls, from_version=...)` for each step. A changed shape
-        WITHOUT a bump is still refused as drift -- the bump is how an author says
-        the change was deliberate.
         """
 
         def decorator(cls: type[_C]) -> type[_C]:
@@ -673,7 +540,6 @@ class Ontology:
                 properties=props,
                 primary_key=primary_key,
                 owned=owned,
-                version=version,
             )
             self.registry.register_object_type(obj_def)
             cls._ontary_api_name = name
@@ -686,43 +552,6 @@ class Ontology:
                 "row_visibility": row_visibility,
             }
             return cls
-
-        return decorator
-
-    def upcaster(
-        self, cls: type[OntologyObject], *, from_version: int
-    ) -> Callable[[Upcaster], Upcaster]:
-        """Declare how to read a `from_version` row of `cls` as the next version.
-
-        ```python
-        @ontology.object(layer="L0", version=2, scope=[...])
-        class Widget(OntologyObject):
-            id: str = prop(primary_key=True)
-            label_v2: str | None = None
-
-        @ontology.upcaster(Widget, from_version=1)
-        def widget_v1_to_v2(payload: dict[str, Any]) -> dict[str, Any]:
-            payload["label_v2"] = payload.pop("label", None)
-            return payload
-        ```
-
-        The function is returned unchanged, so it stays directly callable and
-        directly testable -- an upcaster is the piece of an evolution most worth
-        unit-testing on its own, before any store is involved.
-
-        Registration is per STEP (`n` -> `n+1`); see
-        `OntologyRegistry.register_upcaster` for why a v1->v3 jump is refused.
-        `ontology.validate()` then checks the chain is complete, so a missing step
-        fails at declaration time rather than on the first read of the one row
-        that still needs it.
-        """
-
-        def decorator(fn: Upcaster) -> Upcaster:
-            self._check_not_frozen(f"upcaster for {cls.__name__!r}")
-            self.registry.register_upcaster(
-                self._registered_api_name(cls), from_version, fn
-            )
-            return fn
 
         return decorator
 
@@ -781,7 +610,6 @@ class Ontology:
         description: str | None = None,
         api_name: str | None = None,
         capabilities: Sequence[CapabilityHandle[builtins.object]] = (),
-        effects: Sequence[EffectHandle[EffectPayload]] = (),
     ) -> Callable[
         [Callable[[ActionContext, _P], dict[str, Any]]],
         Callable[[ActionContext, _P], dict[str, Any]],
@@ -833,9 +661,6 @@ class Ontology:
             capability_names = self._capability_api_names(
                 capabilities, declared_on=f"action {name!r}"
             )
-            effect_names = self._effect_api_names(
-                effects, declared_on=f"action {name!r}"
-            )
             action_def = ActionTypeDef(
                 api_name=name,
                 display_name=display_name if display_name is not None else name,
@@ -846,7 +671,6 @@ class Ontology:
                 else f"Executes {name}.",
                 parameters=parameters,
                 capabilities=capability_names,
-                effects=effect_names,
             )
             self.registry.register_action_type(action_def)  # dup api_name raises
             params_cls._ontary_api_name = name
@@ -864,7 +688,6 @@ class Ontology:
         output_description: str = "",
         api_name: str | None = None,
         capabilities: Sequence[CapabilityHandle[builtins.object]] = (),
-        effects: Sequence[EffectHandle[EffectPayload]] | None = None,
         audit: bool | None = None,
     ) -> Callable[[FunctionHandler], FunctionHandler]:
         """Derives a `FunctionDef` and declares the decorated handler
@@ -885,13 +708,6 @@ class Ontology:
         def decorator(fn: FunctionHandler) -> FunctionHandler:
             resolved_name = name if name is not None else fn.__name__
             self._check_not_frozen(f"function {resolved_name!r}")
-            if effects is not None:
-                raise ValidationFailed(
-                    f"function {resolved_name!r} cannot declare effects "
-                    "(functions may read outside-world capabilities but may "
-                    "not write outside the ontology)",
-                    code="ONTOLOGY_INVALID",
-                )
             capability_names = self._capability_api_names(
                 capabilities, declared_on=f"function {resolved_name!r}"
             )
@@ -1021,15 +837,13 @@ class Ontology:
             min_n=self.min_n,
         )
 
-    def diagnose(self, store: Store | None = None) -> list[Finding]:
+    def diagnose(self) -> list[Finding]:
         """Return all validation findings without raising mid-sweep.
 
-        ``store`` is accepted for rules that need runtime data in later
-        diagnostic tasks and is passed through to every rule.  T8's core
-        validation-parity rules do not use it.  If this ontology is still
-        being authored, diagnostics build a transient definition from the
-        same pre-freeze structures used by ``validate``; the cached definition
-        is left untouched so registration can continue afterwards.
+        If this ontology is still being authored, diagnostics build a
+        transient definition from the same pre-freeze structures used by
+        ``validate``; the cached definition is left untouched so
+        registration can continue afterwards.
         """
         if self._definition is not None:
             definition = self._definition
@@ -1043,7 +857,7 @@ class Ontology:
                 registry=self.registry,
                 policy=policy,
             )
-        return _collect_findings(definition, store)
+        return _collect_findings(definition)
 
     def bind(
         self,
@@ -1052,7 +866,6 @@ class Ontology:
         clock: Callable[[], datetime] | None = None,
         id_factory: Callable[[], str] | None = None,
         capabilities: Mapping[CapabilityHandle[Any], builtins.object] | None = None,
-        effects: Mapping[EffectHandle[Any], EffectDispatcher] | None = None,
     ) -> OntologyRuntime:
         """Builds an `OntologyRuntime` (spec `typed-actions.md` AC6): ONE
         `GuardedQuery` + ONE `ActionExecutor` bound to `store`, with every
@@ -1067,5 +880,4 @@ class Ontology:
             clock=clock,
             id_factory=id_factory,
             capabilities=capabilities,
-            effects=effects,
         )

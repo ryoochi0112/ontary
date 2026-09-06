@@ -22,12 +22,11 @@ What genuinely differs from SQLite, and why each choice was made:
 - **A `schema_meta` table, not `PRAGMA user_version`.** Postgres has no
   per-database integer to stamp, and inventing one on `pg_class` comments would
   be worse than a table anyone can read.
-- **No migration ladder.** SQLite carries v1 -> v8 migrations because files
-  written by older engines exist in the world. This backend ships AT the current
-  SCHEMA_VERSION, so a
-  store it did not create at the current version is refused rather than
-  migrated. A migration path that has never had anything to migrate is untested
-  code pretending to be a safety net.
+- **No migration ladder** -- which is now what SQLite does too, so this is a
+  shared rule rather than a Postgres-only one. Both backends ship AT the current
+  SCHEMA_VERSION, so a store they did not create at that version is refused
+  rather than migrated. A migration path is untested code pretending to be a
+  safety net unless something is actually exercising it.
 - **`payload` is `TEXT`, not `JSONB`.** JSONB is what a Postgres deployment
   eventually wants (indexing, containment queries), and it also normalizes: key
   order changes, duplicate keys collapse, numeric literals are rewritten. The
@@ -35,20 +34,14 @@ What genuinely differs from SQLite, and why each choice was made:
   above the seam -- so JSONB would buy nothing today and cost byte-for-byte
   parity with the other two backends. Revisit when a query actually needs it,
   with its own parity review.
-- **`FOR UPDATE SKIP LOCKED` for outbox claims.** The lease semantics are
-  identical to the other backends (that is the contract), but Postgres can also
-  make two concurrent drainers cheap and correct at the row level instead of
-  relying on the lease alone. This is the one place where the same declared
-  behavior gets a genuinely better implementation.
 """
 
 from __future__ import annotations
 
 import json
 import uuid
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import datetime, timedelta
 from typing import Any
 
 from ontary.audit import (
@@ -56,13 +49,10 @@ from ontary.audit import (
     WriteRecord,
 )
 from ontary.errors import ConflictError
-from ontary.fingerprint import OntologyFingerprint
 from ontary.meta import Cardinality, OntologyRegistry
-from ontary.outbox import OutboxRecord, OutboxState
 from ontary.store import _sql
 from ontary.store._shared import (
     WriteCapture,
-    check_claim_limit,
     check_link_removal_authority,
     check_link_write_authority,
     check_object_removal_authority,
@@ -70,16 +60,13 @@ from ontary.store._shared import (
     check_update_authority,
     decode_audit_entry,
     encode_audit_entry,
-    json_references_object,
     live_link_not_found,
     merge_update,
     prepare_insert,
     resolve_link_type,
     retire_object_refusal,
     unknown_page_token,
-    write_references_object,
 )
-from ontary.store.protocol import EraseResult, check_ontology_fingerprint
 from ontary.store.schema import SCHEMA_VERSION
 from ontary.store.values import (
     DEFAULT_BATCH,
@@ -90,7 +77,6 @@ from ontary.store.values import (
     StoredObject,
     _utcnow_iso,
 )
-from ontary.upcast import upcast_payload
 
 __all__ = ["POSTGRES_EXTRA_HINT", "PostgresStore"]
 
@@ -153,8 +139,6 @@ ALTER TABLE links ENABLE ROW LEVEL SECURITY;
 ALTER TABLE links FORCE ROW LEVEL SECURITY;
 ALTER TABLE audit_log ENABLE ROW LEVEL SECURITY;
 ALTER TABLE audit_log FORCE ROW LEVEL SECURITY;
-ALTER TABLE effect_outbox ENABLE ROW LEVEL SECURITY;
-ALTER TABLE effect_outbox FORCE ROW LEVEL SECURITY;
 
 CREATE POLICY tenant_isolation ON objects USING
     (tenant = current_setting('ontary.tenant', true))
@@ -165,15 +149,11 @@ CREATE POLICY tenant_isolation ON links USING
 CREATE POLICY tenant_isolation ON audit_log USING
     (tenant = current_setting('ontary.tenant', true))
     WITH CHECK (tenant = current_setting('ontary.tenant', true));
-CREATE POLICY tenant_isolation ON effect_outbox USING
-    (tenant = current_setting('ontary.tenant', true))
-    WITH CHECK (tenant = current_setting('ontary.tenant', true));
 """
 """Applied once at schema creation, when `rls=True` (the default).
 
-Deliberately NOT applied to `schema_meta` or `ontology_fingerprint`: both are
-per-DEPLOYMENT rather than per-tenant (one process serves one declaration), and a
-policy on them would make the drift check invisible to every tenant but one.
+Deliberately NOT applied to `schema_meta`: it is per-DEPLOYMENT rather than
+per-tenant (one process serves one declaration).
 """
 
 
@@ -199,7 +179,6 @@ class PostgresStore:
         registry: OntologyRegistry,
         dsn: str,
         *,
-        accept_ontology_drift: bool = False,
         tenant: str = DEFAULT_TENANT,
         rls: bool = True,
     ) -> None:
@@ -232,7 +211,6 @@ class PostgresStore:
         with self._conn.cursor() as cur:
             cur.execute("SELECT set_config('ontary.tenant', %s, false)", (tenant,))
         self._conn.commit()
-        check_ontology_fingerprint(self, registry, accept_drift=accept_ontology_drift)
 
     # -- schema ----------------------------------------------------------
 
@@ -240,13 +218,12 @@ class PostgresStore:
         """Create the schema at `SCHEMA_VERSION`, or refuse a store this engine
         did not write.
 
-        No migration ladder, and that is a decision rather than an omission: the
-        SQLite backend carries v1 -> v8 migrations because files written by older
-        engines exist. Nothing has ever written a Postgres store with this
-        package, so every database is either empty (create it) or already at this
-        version (use it). Anything else is refused with the same coded error a
-        wrong-version SQLite file gets, because the honest answer is identical:
-        this engine cannot read it, and guessing is worse than stopping.
+        No migration ladder, and that is a decision rather than an omission --
+        the same decision the SQLite backend makes. Every database is either
+        empty (create it) or already at this version (use it). Anything else is
+        refused with the same coded error a wrong-version SQLite file gets,
+        because the honest answer is identical: this engine cannot read it, and
+        guessing is worse than stopping.
         """
         with self._conn.cursor() as cur:
             cur.execute(
@@ -358,7 +335,7 @@ class PostgresStore:
         prepared = prepare_insert(
             self._registry, obj_type, payload, capturing=self._write_capture.active
         )
-        obj_def, payload, obj_id = prepared.obj_def, prepared.payload, prepared.obj_id
+        payload, obj_id = prepared.payload, prepared.obj_id
 
         # `json.dumps` here, not `_safe_json_dumps`: an unencodable payload must
         # fail the write on every backend (SQLite raises from its own
@@ -373,8 +350,8 @@ class PostgresStore:
                     INSERT INTO objects
                         (object_type, id, payload, valid_from, valid_to,
                          source_system, source_id, extracted_at, page_token,
-                         type_version, tenant)
-                    VALUES (%s, %s, %s, %s, NULL, %s, %s, %s, %s, %s, %s)
+                         tenant)
+                    VALUES (%s, %s, %s, %s, NULL, %s, %s, %s, %s, %s)
                     """,
                     (
                         obj_type,
@@ -385,7 +362,6 @@ class PostgresStore:
                         source.source_id,
                         source.extracted_at,
                         uuid.uuid4().hex,
-                        obj_def.version,
                         self._tenant,
                     ),
                 )
@@ -422,8 +398,8 @@ class PostgresStore:
                     INSERT INTO objects
                         (object_type, id, payload, valid_from, valid_to,
                          source_system, source_id, extracted_at, page_token,
-                         type_version, tenant)
-                    VALUES (%s, %s, %s, %s, NULL, %s, %s, %s, %s, %s, %s)
+                         tenant)
+                    VALUES (%s, %s, %s, %s, NULL, %s, %s, %s, %s, %s)
                     """,
                     (
                         obj_type,
@@ -434,7 +410,6 @@ class PostgresStore:
                         source.source_id,
                         source.extracted_at,
                         uuid.uuid4().hex,
-                        obj_def.version,
                         self._tenant,
                     ),
                 )
@@ -489,182 +464,6 @@ class PostgresStore:
         )
         return retired
 
-    def erase_object_content(self, object_type: str, obj_id: str) -> EraseResult:
-        """Tombstone one object's content in one Postgres transaction."""
-        self._registry.get_object_type(object_type)
-        object_rows_purged = 0
-        audit_entries_purged = 0
-        outbox_rows_purged = 0
-
-        def object_row_exists(row_type: str, row_id: str) -> bool:
-            with self._conn.cursor() as probe:
-                probe.execute(
-                    """
-                    SELECT 1 FROM objects
-                    WHERE object_type = %s AND id = %s AND tenant = %s
-                    LIMIT 1
-                    """,
-                    (row_type, row_id, self._tenant),
-                )
-                return probe.fetchone() is not None
-
-        def references_erased_object(write: dict[str, Any]) -> bool:
-            return write_references_object(
-                write, object_type, obj_id, self._registry, object_row_exists
-            )
-
-        with self.transaction() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT 1 FROM objects
-                    WHERE object_type = %s AND id = %s AND valid_to IS NULL
-                      AND tenant = %s
-                    LIMIT 1
-                    """,
-                    (object_type, obj_id, self._tenant),
-                )
-                if cur.fetchone() is not None:
-                    # Nested calls share this transaction and keep the public
-                    # close operation as the single owner of retirement rules.
-                    self.retire_object(object_type, obj_id)
-
-                cur.execute(
-                    """
-                    SELECT row_id, payload FROM objects
-                    WHERE object_type = %s AND id = %s AND tenant = %s
-                    """,
-                    (object_type, obj_id, self._tenant),
-                )
-                for row_id, encoded_payload in cur.fetchall():
-                    if json.loads(encoded_payload):
-                        cur.execute(
-                            """
-                            UPDATE objects SET payload = %s
-                            WHERE row_id = %s AND tenant = %s
-                            """,
-                            ("{}", row_id, self._tenant),
-                        )
-                        object_rows_purged += 1
-
-                matching_invocations: set[str] = set()
-                cur.execute(
-                    """
-                    SELECT seq, kind, target_type, target_id, params, effects,
-                           writes, invocation_id
-                    FROM audit_log WHERE tenant = %s ORDER BY seq ASC
-                    """,
-                    (self._tenant,),
-                )
-                for (
-                    seq,
-                    kind,
-                    target_type,
-                    target_id,
-                    encoded_params,
-                    encoded_effects,
-                    encoded_writes,
-                    invocation_id,
-                ) in cur.fetchall():
-                    if kind == "erasure":
-                        continue
-                    params = json.loads(encoded_params)
-                    effects = json.loads(encoded_effects)
-                    writes = json.loads(encoded_writes)
-                    references_object = (
-                        target_type == object_type and target_id == obj_id
-                    ) or json_references_object(
-                        params, object_type, obj_id
-                    ) or json_references_object(
-                        effects, object_type, obj_id
-                    ) or any(
-                        references_erased_object(write) for write in writes
-                    )
-                    if not references_object:
-                        continue
-                    if invocation_id is not None:
-                        matching_invocations.add(str(invocation_id))
-                    effects_have_content = any(
-                        effect["payload"] or effect.get("error") is not None
-                        for effect in effects
-                    )
-                    if params or effects_have_content:
-                        scrubbed_effects = [
-                            {**effect, "payload": {}, "error": None}
-                            for effect in effects
-                        ]
-                        cur.execute(
-                            """
-                            UPDATE audit_log SET params = %s, effects = %s
-                            WHERE seq = %s AND tenant = %s
-                            """,
-                            (
-                                "{}",
-                                json.dumps(scrubbed_effects),
-                                seq,
-                                self._tenant,
-                            ),
-                        )
-                        audit_entries_purged += 1
-
-                cur.execute(
-                    """
-                    SELECT effect_id, invocation_id, payload, last_error
-                    FROM effect_outbox WHERE tenant = %s
-                    ORDER BY emitted_at ASC, seq ASC
-                    """,
-                    (self._tenant,),
-                )
-                for (
-                    effect_id,
-                    invocation_id,
-                    encoded_payload,
-                    last_error,
-                ) in cur.fetchall():
-                    payload = json.loads(encoded_payload)
-                    references_object = (
-                        invocation_id in matching_invocations
-                        or json_references_object(payload, object_type, obj_id)
-                    )
-                    if references_object and (
-                        payload or last_error is not None
-                    ):
-                        cur.execute(
-                            """
-                            UPDATE effect_outbox
-                            SET payload = %s, last_error = NULL
-                            WHERE effect_id = %s AND tenant = %s
-                            """,
-                            ("{}", effect_id, self._tenant),
-                        )
-                        outbox_rows_purged += 1
-
-        return EraseResult(
-            object_rows_purged=object_rows_purged,
-            audit_entries_purged=audit_entries_purged,
-            outbox_rows_purged=outbox_rows_purged,
-        )
-
-    def object_erasure_state(
-        self, object_type: str, obj_id: str
-    ) -> tuple[bool, bool]:
-        """Return whether object rows and erasable object content exist."""
-        self._registry.get_object_type(object_type)
-        with self._conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT valid_to, payload FROM objects
-                WHERE object_type = %s AND id = %s AND tenant = %s
-                """,
-                (object_type, obj_id, self._tenant),
-            )
-            rows = cur.fetchall()
-            has_content = any(
-                valid_to is None or bool(json.loads(payload))
-                for valid_to, payload in rows
-            )
-            return bool(rows), has_content
-
     _OBJECT_COLUMNS = ", ".join(_sql.OBJECT_COLUMNS)
 
     def _row_to_stored(self, row: tuple[Any, ...]) -> StoredObject:
@@ -679,19 +478,9 @@ class PostgresStore:
             source_id,
             extracted_at,
             _page_token,
-            type_version,
         ) = row
-        # The read boundary, same as the other two backends: upcast an older row
-        # here so every surface above sees one shape (M9b).
-        upcast = upcast_payload(
-            self._registry,
-            object_type,
-            json.loads(payload),
-            type_version,
-            object_id=str(obj_id),
-        )
         return StoredObject(
-            payload=upcast,
+            payload=json.loads(payload),
             lineage=Lineage(
                 object_type=object_type,
                 object_id=str(obj_id),
@@ -926,7 +715,6 @@ class PostgresStore:
                     fields.params,
                     fields.outcome,
                     fields.writes,
-                    fields.effects,
                     fields.capability_accesses,
                     fields.invocation_id,
                     fields.kind,
@@ -946,172 +734,6 @@ class PostgresStore:
         return [
             decode_audit_entry(dict(zip(_sql.AUDIT_LOG_COLUMNS, row, strict=True))) for row in rows
         ]
-
-    # -- effect outbox ---------------------------------------------------
-
-    @staticmethod
-    def _row_to_outbox(row: tuple[Any, ...]) -> OutboxRecord:
-        return OutboxRecord(
-            effect_id=row[0],
-            invocation_id=row[1],
-            seq=row[2],
-            api_name=row[3],
-            payload=json.loads(row[4]),
-            action=row[5],
-            actor_id=row[6],
-            role=row[7],
-            emitted_at=datetime.fromisoformat(row[8]),
-            state=row[9],
-            attempts=row[10],
-            next_attempt_at=datetime.fromisoformat(row[11]),
-            lease_until=(datetime.fromisoformat(row[12]) if row[12] is not None else None),
-            last_error=row[13],
-            updated_at=datetime.fromisoformat(row[14]),
-        )
-
-    def enqueue_effects(self, records: Sequence[OutboxRecord]) -> None:
-        with self.transaction() as conn:
-            for record in records:
-                _sql.execute(
-                    conn,
-                    _sql.render(
-                        _sql.EFFECT_OUTBOX_INSERT_TEMPLATE,
-                        "postgres",
-                        placeholder_count=len(_sql.EFFECT_OUTBOX_COLUMNS),
-                    ),
-                    (
-                        record.effect_id,
-                        record.invocation_id,
-                        record.seq,
-                        record.api_name,
-                        json.dumps(record.payload),
-                        record.action,
-                        record.actor_id,
-                        record.role,
-                        record.emitted_at.isoformat(),
-                        record.state,
-                        record.attempts,
-                        record.next_attempt_at.isoformat(),
-                        (
-                            record.lease_until.isoformat()
-                            if record.lease_until is not None
-                            else None
-                        ),
-                        record.last_error,
-                        record.updated_at.isoformat(),
-                        self._tenant,
-                    ),
-                    dialect="postgres",
-                )
-
-    def claim_due_effects(
-        self, *, limit: int, now: datetime, lease: timedelta
-    ) -> list[OutboxRecord]:
-        """Lease due rows, using `FOR UPDATE SKIP LOCKED`.
-
-        The declared semantics are the other backends' (state, due time, and
-        lease decide eligibility). Postgres adds real row-level exclusion on top,
-        so two drainers in two processes never even contend for the same row --
-        the difference between a lease that is the ONLY protection and a lease
-        that is the recovery mechanism for a crashed holder.
-        """
-        check_claim_limit(limit)
-        now_iso = now.isoformat()
-        lease_until = (now + lease).isoformat()
-        with self.transaction() as conn:
-            rows = _sql.execute(
-                conn,
-                _sql.render(_sql.EFFECT_OUTBOX_POSTGRES_CLAIM_TEMPLATE, "postgres"),
-                (
-                    lease_until,
-                    now_iso,
-                    now_iso,
-                    now_iso,
-                    self._tenant,
-                    limit,
-                ),
-                dialect="postgres",
-            ).rows
-        claimed = [self._row_to_outbox(row) for row in rows]
-        # `RETURNING` hands back the post-update row, so ordering is not
-        # guaranteed by the UPDATE itself -- restore emission order here, which is
-        # the contract the other backends satisfy via their ORDER BY.
-        claimed.sort(key=lambda record: (record.emitted_at, record.seq))
-        return claimed
-
-    def release_effect_claim(self, effect_id: str, *, now: datetime) -> None:
-        with self.transaction() as conn:
-            _sql.execute(
-                conn,
-                _sql.render(_sql.EFFECT_OUTBOX_RELEASE_TEMPLATE, "postgres"),
-                (now.isoformat(), effect_id, self._tenant),
-                dialect="postgres",
-            )
-
-    def resolve_effect(
-        self,
-        effect_id: str,
-        *,
-        state: OutboxState,
-        next_attempt_at: datetime,
-        error: str | None,
-        now: datetime,
-    ) -> None:
-        with self.transaction() as conn:
-            _sql.execute(
-                conn,
-                _sql.render(_sql.EFFECT_OUTBOX_RESOLVE_TEMPLATE, "postgres"),
-                (
-                    state,
-                    next_attempt_at.isoformat(),
-                    error,
-                    now.isoformat(),
-                    effect_id,
-                    self._tenant,
-                ),
-                dialect="postgres",
-            )
-
-    def outbox_entries(self) -> list[OutboxRecord]:
-        rows = _sql.execute(
-            self._conn,
-            _sql.render(_sql.EFFECT_OUTBOX_SELECT_TEMPLATE, "postgres"),
-            (self._tenant,),
-            dialect="postgres",
-        ).rows
-        return [self._row_to_outbox(row) for row in rows]
-
-    # -- ontology fingerprint --------------------------------------------
-
-    def read_ontology_fingerprint(self) -> OntologyFingerprint | None:
-        rows = _sql.execute(
-            self._conn,
-            _sql.render(_sql.ONTOLOGY_FINGERPRINT_SELECT_TEMPLATE, "postgres"),
-            dialect="postgres",
-        ).rows
-        row = rows[0] if rows else None
-        if row is None:
-            return None
-        return OntologyFingerprint(
-            digest=row[0], types=json.loads(row[1]), versions=json.loads(row[2])
-        )
-
-    def write_ontology_fingerprint(
-        self, fingerprint: OntologyFingerprint, *, adopted: bool
-    ) -> None:
-        with self.transaction() as conn:
-            _sql.execute(
-                conn,
-                _sql.render(_sql.ONTOLOGY_FINGERPRINT_UPSERT_TEMPLATE, "postgres"),
-                (
-                    fingerprint.digest,
-                    json.dumps(fingerprint.types, sort_keys=True),
-                    _utcnow_iso(),
-                    int(adopted),
-                    json.dumps(fingerprint.versions, sort_keys=True),
-                ),
-                dialect="postgres",
-            )
 
     # -- lifecycle -------------------------------------------------------
 

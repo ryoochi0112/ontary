@@ -269,4 +269,5 @@ def test_serve_help_documents_fail_closed_dev_scope(
     assert exc_info.value.code == 0
     assert "dev consumer sees unscoped rows only" in captured.out
     assert "unless the ontology declares matching dev scopes" in captured.out
-    assert "ontary explain" in captured.out
+    assert "Hidden rows are governed by ScopePolicy" in captured.out
+    assert "docs/api-reference.md#scope-policy" in captured.out

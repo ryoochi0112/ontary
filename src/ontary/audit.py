@@ -32,44 +32,8 @@ class WriteRecord(BaseModel):
     to_id: str | None = None
 
 
-class EffectRecord(BaseModel):
-    """One outward effect an action emitted, plus its delivery state
-    (spec `governed-effects` AC14).
-
-    `outcome` is `pending` on the entry written INSIDE the action's own
-    transaction -- so the record of what the action intended to send outside
-    commits atomically with the ontology writes -- and
-    `dispatched`/`retrying`/`failed` on a follow-up entry written after an
-    attempt. Finalization is best-effort: the process can die after the outside
-    call, so **`pending` means "may or may not have been delivered"**, never
-    "was not sent".
-
-    Since `durable-effect-outbox`, the audit log is no longer the only record:
-    the delivery STATE lives in the `effect_outbox` table, which is mutable and
-    authoritative, while these entries stay append-only evidence of what each
-    attempt did. `effect_id` joins the two.
-    """
-
-    api_name: str
-    payload: dict[str, Any]
-    outcome: Literal["pending", "dispatched", "retrying", "failed"]
-    """`retrying` -- this attempt raised and another is scheduled (the outbox
-    row is pending again with a later `next_attempt_at`). `failed` now means
-    EXHAUSTED: the attempt raised and the retry budget is spent, so the row is
-    a terminal dead letter. Before the outbox, `failed` meant both, because
-    there was only ever one attempt."""
-
-    error: str | None = None
-
-    effect_id: str | None = None
-    """The `effect_outbox` row this record is about. `None` only on entries
-    written before the outbox existed -- never invented, matching how
-    `AuditEntry.invocation_id` treats pre-M7a rows."""
-
-
 class CapabilityAccessRecord(BaseModel):
-    """How many times an action OBTAINED a declared capability provider
-    (spec `governed-effects` AC14b).
+    """How many times an action OBTAINED a declared capability provider.
 
     Recorded on both the ok and the error path, so an action that reached
     outside and then failed a precondition is not audited as though nothing
@@ -94,8 +58,8 @@ class AuditEntry(BaseModel):
     """A single append-only audit log entry."""
 
     # Runtime-bound action/function callers pass their shared clock explicitly;
-    # this default preserves the standalone `AuditEntry` behavior for store and
-    # migration callers that have no runtime seam.
+    # this default preserves the standalone `AuditEntry` behavior for store
+    # callers that have no runtime seam.
     ts: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     # What produced this entry. Actions and functions share one log -- that is
     # the point of an audit log -- but a reader has to be able to tell them
@@ -107,21 +71,12 @@ class AuditEntry(BaseModel):
     # audited was, in fact, an action -- unlike `invocation_id`, backfilling
     # this one asserts something true, so the column is NOT NULL with a
     # constant default.
-    kind: Literal["action", "function", "migration", "erasure"] = "action"
-    # `migration` (M9a): a row rewrite or an accepted ontology drift -- written
-    # by the engine's own migration machinery, with no consumer and no governed
-    # action behind it. It gets its own kind rather than being filed as an
-    # `action` because the period when the data stopped matching the
-    # declarations is exactly the period an auditor most needs to find, and a
-    # migration indistinguishable from ordinary writes hides it. `erasure`
-    # identifies the operator-only content purge, which likewise has no
-    # consumer or governed action behind it.
-    # One id per `execute()` call, stamped on EVERY entry that call writes --
-    # the denied/error/ok entry and, for an action with effects, the later
-    # `effects_dispatched` entry too. Without it the two are matched by field
-    # values and append order, so a dispatcher that re-enters the SAME action
-    # with the SAME params produces two indistinguishable `pending` rows and a
-    # reader cannot tell which intent was the one that failed.
+    kind: Literal["action", "function"] = "action"
+    # One id per `execute()` call, stamped on EVERY entry that call writes.
+    # Without it, entries from one call are matched by field values and append
+    # order, so a caller that re-enters the SAME action with the SAME params
+    # produces two indistinguishable rows and a reader cannot tell which
+    # attempt was the one that failed.
     #
     # `None` means "not attributable to a single call": entries written by a
     # pre-invocation-id engine (the column is nullable so a v2 file keeps
@@ -140,9 +95,7 @@ class AuditEntry(BaseModel):
     # Python use, the single-consumer stdio server (`build_mcp_server`), and
     # -- like `invocation_id` before it -- every entry written before this
     # field existed, since the column is nullable so a pre-M10 file keeps
-    # reading. Also `None` on a redelivered outbox effect's entry, by design
-    # (spec `multi-consumer-mcp` §4.2): the outbox does not restate identity
-    # already on the original entry, joinable by `invocation_id`.
+    # reading.
     principal: str | None = None
     action: str
     target_type: str
@@ -153,7 +106,6 @@ class AuditEntry(BaseModel):
     # AC11), captured via `capture_action_writes` -- empty for
     # denied/error/rolled-back attempts, since nothing was committed.
     writes: list[WriteRecord] = Field(default_factory=list)
-    effects: list[EffectRecord] = Field(default_factory=list)
     capability_accesses: list[CapabilityAccessRecord] = Field(default_factory=list)
 
 

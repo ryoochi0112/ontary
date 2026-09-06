@@ -10,12 +10,11 @@ The ontology SDK: author an ontology and get a governed runtime.
 
 - Store each fact once; derive scores and aggregates with Functions, never store them. A declared snapshot type is the one sanctioned exception.
 - Actions are business verbs that own a full state transition—never CRUD setters or one-property micro-actions.
-- Bind to a canonical staging schema through connectors, never directly to a vendor source.
 - Security is the engine's job: declare `ScopePolicy`, min-N, and `Sensitivity`; do not hand-roll checks. Audit is the engine's `AuditEntry`, never a declared type.
-- Use one object type per real-world entity. History is row history plus `migrate_object_type` and versions/upcasters—never a `V2` or `*History` type.
+- Use one object type per real-world entity. History is row history—never a `V2` or `*History` type.
 
 `make verify` is the offline definition of done (`ruff` + `mypy --strict` + `pytest`).
 
 ## Repository workflow
 
-This repository lives at `github.com/ryoochi0112/ontary` and is public (MIT). The `main` branch is protected; all changes land via PRs. Releases are annotated tags (`vX.Y.Z`); pushing a tag runs `.github/workflows/release.yml`, which publishes to PyPI through trusted publishing. See [docs/releasing.md](docs/releasing.md).
+This repository lives at `github.com/ryoochi0112/ontary` and is public (MIT). The `main` branch is protected; all changes land via PRs. Releases are annotated tags (`vX.Y.Z`); pushing a tag runs `.github/workflows/release.yml`, which publishes to PyPI through trusted publishing.

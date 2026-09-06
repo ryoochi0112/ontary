@@ -18,7 +18,7 @@ import os
 import uuid
 from collections.abc import Callable
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -34,12 +34,10 @@ from ontary import (
     prop,
 )
 from ontary.errors import ValidationFailed
-from ontary.outbox import OutboxRecord
 from ontary.store import DEFAULT_TENANT, AuditEntry, InMemoryStore, Store
 
 SRC = Source(source_system="seed")
 DSN = os.environ.get("ONTARY_TEST_POSTGRES_DSN")
-NOW = datetime(2026, 7, 26, 12, 0, tzinfo=timezone.utc)
 
 
 OntologyFactory = Callable[..., Ontology]
@@ -59,22 +57,6 @@ def _tenancy_ontology(make_ontology: OntologyFactory) -> Ontology:
     ontology.link("relates", W, W, Cardinality.MANY_TO_MANY, owned=True)
     ontology.validate()
     return ontology
-
-
-def _outbox_row(effect_id: str) -> OutboxRecord:
-    return OutboxRecord(
-        effect_id=effect_id,
-        invocation_id=f"inv-{effect_id}",
-        seq=0,
-        api_name="Notice",
-        payload={"effect": effect_id},
-        action="Emit",
-        actor_id="a",
-        role="Op",
-        emitted_at=NOW,
-        next_attempt_at=NOW,
-        updated_at=NOW,
-    )
 
 
 # -- the pair of stores under test -------------------------------------------
@@ -234,7 +216,7 @@ def test_a_page_token_from_another_tenant_is_refused(
         globex.read_page("W", after_key=token)
 
 
-# -- links, audit, outbox -----------------------------------------------------
+# -- links and audit ----------------------------------------------------------
 
 
 def test_links_are_tenant_scoped(tenants: tuple[Any, Any]) -> None:
@@ -268,55 +250,24 @@ def test_the_audit_log_is_tenant_scoped(tenants: tuple[Any, Any]) -> None:
     assert globex.audit_entries() == []
 
 
-def test_the_outbox_is_tenant_scoped(tenants: tuple[Any, Any]) -> None:
-    """Including the CLAIM: a drainer must never deliver another tenant's
-    effect, which would send one tenant's data to the other's dispatcher."""
-    acme, globex = tenants
-    acme.enqueue_effects([_outbox_row("eff-acme")])
-
-    assert [r.effect_id for r in acme.outbox_entries()] == ["eff-acme"]
-    assert globex.outbox_entries() == []
-
-    claimed = globex.claim_due_effects(
-        limit=10, now=NOW, lease=timedelta(seconds=60)
-    )
-    assert claimed == []
-    # And acme can still claim it -- globex's attempt left no lease behind.
-    assert len(acme.claim_due_effects(limit=10, now=NOW, lease=timedelta(seconds=60))) == 1
+# -- the default tenant -------------------------------------------------------
 
 
-def test_resolving_another_tenants_effect_does_nothing(
-    tenants: tuple[Any, Any],
-) -> None:
-    acme, globex = tenants
-    acme.enqueue_effects([_outbox_row("eff-acme")])
-
-    globex.resolve_effect(
-        "eff-acme", state="delivered", next_attempt_at=NOW, error=None, now=NOW
-    )
-
-    row = acme.outbox_entries()[0]
-    assert (row.state, row.attempts) == ("pending", 0)
-
-
-# -- the default tenant and migration ----------------------------------------
-
-
-def test_rows_written_before_tenancy_belong_to_the_default_tenant(
+def test_rows_written_without_a_tenant_belong_to_the_default_tenant(
     tmp_path: Path,
     make_ontology: OntologyFactory,
     make_store: StoreFactory,
 ) -> None:
-    """The v7 -> v8 backfill, from the outside: a store opened without a tenant
-    argument still reads what it wrote before the column existed."""
+    """A store opened without a tenant argument writes and reads under
+    `DEFAULT_TENANT`, and naming that tenant explicitly sees the same rows."""
     ontology = _tenancy_ontology(make_ontology)
     path = str(tmp_path / "upgraded.db")
     before = make_store(ontology.registry, path)
-    before.insert("W", {"id": "legacy", "label": "written pre-v8"}, SRC)
+    before.insert("W", {"id": "legacy", "label": "written without a tenant"}, SRC)
 
     after = make_store(ontology.registry, path)
     row = after.read_current("W", "legacy")
-    assert row is not None and row.payload["label"] == "written pre-v8"
+    assert row is not None and row.payload["label"] == "written without a tenant"
 
     named = make_store(ontology.registry, path, tenant=DEFAULT_TENANT)
     assert named.read_current("W", "legacy") is not None
@@ -488,8 +439,8 @@ def test_a_write_cannot_forge_another_tenants_row(
                 with store._conn.cursor() as cur:
                     cur.execute(
                         "INSERT INTO objects (object_type, id, payload, valid_from, "
-                        "source_system, page_token, type_version, tenant) "
-                        "VALUES ('W', 'forged', '{}', 'now', 's', 'tok', 1, 'globex')"
+                        "source_system, page_token, tenant) "
+                        "VALUES ('W', 'forged', '{}', 'now', 's', 'tok', 'globex')"
                     )
             store._conn.rollback()
         finally:

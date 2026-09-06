@@ -64,8 +64,7 @@ class OntologyDef:
     a typed handler is a `(ctx, params)` callable that never closes over a
     store, so carrying it here adds no per-store state. Empty for
     descriptor-authored ontologies (which keep wiring `_register` per
-    client). Fingerprint-neutral: `fingerprint_ontology` hashes the registry
-    only.
+    client).
     """
 
     def __init__(

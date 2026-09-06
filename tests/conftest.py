@@ -23,7 +23,6 @@ from ontary.errors import OntaryError
 from ontary.meta import (
     ActionTypeDef,
     CapabilityDef,
-    EffectTypeDef,
     FunctionDef,
     LinkTypeDef,
     ObjectTypeDef,
@@ -193,7 +192,6 @@ def make_registry(make_object_type: ObjectTypeFactory) -> RegistryFactory:
         action_types: Iterable[ActionTypeDef] = (),
         functions: Iterable[FunctionDef] = (),
         capabilities: Iterable[CapabilityDef] = (),
-        effect_types: Iterable[EffectTypeDef] = (),
     ) -> OntologyRegistry:
         registry = OntologyRegistry()
         for api_name in api_names:
@@ -208,8 +206,6 @@ def make_registry(make_object_type: ObjectTypeFactory) -> RegistryFactory:
             registry.register_function(function)
         for capability in capabilities:
             registry.register_capability(capability)
-        for effect_type in effect_types:
-            registry.register_effect_type(effect_type)
         return registry
 
     return _make
@@ -225,7 +221,6 @@ def make_store() -> StoreFactory:
         *,
         dsn: str | None = None,
         backend: Literal["sqlite", "postgres"] = "sqlite",
-        accept_ontology_drift: bool = False,
         tenant: str = DEFAULT_TENANT,
         busy_timeout: float = 5.0,
         rls: bool = True,
@@ -237,14 +232,12 @@ def make_store() -> StoreFactory:
             return PostgresStore(
                 registry,
                 store_path,
-                accept_ontology_drift=accept_ontology_drift,
                 tenant=tenant,
                 rls=rls,
             )
         return ObjectStore(
             registry,
             store_path,
-            accept_ontology_drift=accept_ontology_drift,
             tenant=tenant,
             busy_timeout=busy_timeout,
         )

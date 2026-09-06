@@ -59,7 +59,7 @@ def main() -> None:
     print("2. a governed runtime comes up")
     # 0.6.0 moved the runtime entry points one namespace deeper and replaced
     # the legacy exception classes with the kind hierarchy. These are the
-    # import paths docs/storage.md and docs/effects.md teach, so the smoke
+    # import paths docs/storage.md teaches, so the smoke
     # test exercises what a reader is actually told to write.
     from ontary import (
         Consumer,
@@ -115,12 +115,7 @@ def main() -> None:
     else:
         raise SystemExit("FAIL: out-of-scope read was NOT refused")
 
-    print("4. connectors import without the dlt extra")
-    import ontary.connect  # noqa: F401
-
-    check(True, "ontary.connect imports")
-
-    print("5. the MCP entrypoint explains its missing extra")
+    print("4. the MCP entrypoint explains its missing extra")
     result = subprocess.run(
         [sys.executable, "-m", "ontary.mcp_server"],
         capture_output=True,
@@ -137,7 +132,7 @@ def main() -> None:
         "no traceback -- a first-contact message, not a crash",
     )
 
-    print("6. the CLI entrypoint is installed")
+    print("5. the CLI entrypoint is installed")
     ontary_command = Path(sys.executable).with_name("ontary")
     check(
         ontary_command.exists(),
