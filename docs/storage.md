@@ -58,8 +58,6 @@ The PostgreSQL implementation has a few intentional differences from SQLite:
   not query inside payload JSON, so JSONB normalization would buy no runtime
   behavior while making byte-level parity harder: the dominant linear cost is
   Python-side scope resolution, not SQL scanning.
-- Outbox claims use PostgreSQL row locking with `SKIP LOCKED`, preserving the same
-  lease semantics when drainers run in separate processes.
 - Row-level security can provide a database-side tenancy check in addition to the
   engine predicates. It is defense in depth, not a replacement for the store's
   tenant binding.
@@ -81,7 +79,7 @@ acme.insert("Widget", {"id": "w-1"}, source)
 assert globex.read_current("Widget", "w-1") is None
 ```
 
-The boundary covers objects, links, audit entries, and durable effect-outbox rows.
+The boundary covers objects, links, and audit entries.
 Primary keys are unique within a tenant rather than across the whole deployment,
 so two tenants may use the same domain identifier without colliding. The tenant is
 fixed at construction precisely because a per-call argument is easy to omit and a

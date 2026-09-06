@@ -37,8 +37,8 @@ updates):
 ## Quickstart
 
 This short runnable path uses a support-ticket domain. The complete
-`Org → Queue → Ticket → Comment` ontology, connectors, effects, functions, and
-runnable MCP stdio and effects-drain examples are in
+`Org → Queue → Ticket → Comment` ontology, connectors, functions, and a
+runnable MCP stdio example are in
 [`examples/tickets/`](examples/tickets/).
 
 <!-- quickstart-runnable:start -->
@@ -97,7 +97,6 @@ assert client.get(Ticket, ticket_id).escalated is True
 | Storage and tenancy | [Storage, tenancy, and schema](docs/storage.md) |
 | Connectors | [Connectors and canonical staging](docs/connectors.md) |
 | MCP serving | [MCP serving](docs/mcp-serving.md) |
-| Governed effects | [Governed capabilities and effects](docs/effects.md) |
 | Queries and pagination | [Queries, typed reads, and pagination](docs/queries.md) |
 | Authority and architecture | [Authority, declarations, and architecture](docs/authority.md) |
 | Cookbook recipes | [Cookbook](docs/cookbook.md) |

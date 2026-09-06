@@ -314,7 +314,7 @@ Action、ライフサイクルを所有すること。
 ストレージ操作を記述します。
 
 **In ontary:** ビジネス動詞で名付け、実際の結果に沿った小さな `ActionTypeDef` 集合を
-宣言します。一つの Action が、対象、許可ロール、宣言された capability と effect、
+宣言します。一つの Action が、対象、許可ロール、宣言された capability、
 オントロジー所有の書き込みを含む、不変条件を保つ遷移全体を所有すべきです。汎用の create、
 update、set-property Action を公開してはいけません。
 チケット例の [ticket-escalation Action](../examples/tickets/ontology.py) はチケットを

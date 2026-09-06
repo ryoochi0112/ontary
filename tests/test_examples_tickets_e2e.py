@@ -38,9 +38,7 @@ import ontary.mcp_server as mcp_server
 from examples.tickets.connector import TicketsCSVLikeSource, build_tickets_mapping_spec
 from examples.tickets.fixtures import load_fixtures
 from examples.tickets.ontology import (
-    NOTIFY_TICKET_ESCALATION,
     Ticket,
-    TicketEscalationNotification,
     build_ontology,
 )
 from examples.tickets.run_mcp import build_multi_consumer_server
@@ -56,11 +54,9 @@ from ontary import (
     OntaryError,
     Ontology,
     OntologyObject,
-    OutboxRecord,
     Page,
     PermissionDenied,
     PreconditionFailed,
-    RetryPolicy,
     SelfScope,
     Sensitivity,
     Source,
@@ -70,19 +66,14 @@ from ontary import (
     prop,
     target,
 )
-from ontary import (
-    EffectPayload as DeclaredEffectPayload,
-)
 from ontary.client import OntologyClient
 from ontary.connect import oid, run_pipeline
-from ontary.effects import EffectMeta, EffectPayload
 from ontary.meta import OntologyRegistry
 from ontary.security import Consumer
 from ontary.store import Store, WriteRecord
 from ontary.testing import (
     FixedClock,
     SequentialIds,
-    capture_effects,
     consumer,
     make_store,
     raises_code,
@@ -210,16 +201,6 @@ def _build_pre_t1_ontology() -> Ontology:
         identity_revealing=True,
     )
 
-    class TicketEscalationNotification(DeclaredEffectPayload):
-        ticket_id: str
-        reason: str | None = None
-
-    notify = ontology.effect(
-        TicketEscalationNotification,
-        api_name="NotifyTicketEscalation",
-        description="Notifies the owning queue that a ticket was escalated.",
-    )
-
     class EscalateTicketParams(ActionParams):
         ticket_id: str = target(Ticket)
         reason: str | None = None
@@ -231,15 +212,11 @@ def _build_pre_t1_ontology() -> Ontology:
         display_name="Escalate Ticket",
         description="Escalates a Ticket as urgent.",
         api_name="EscalateTicket",
-        effects=[notify],
     )
     def _escalate_ticket(ctx: ActionContext, params: EscalateTicketParams) -> dict[str, str]:
         if ctx.read_current("Ticket", params.ticket_id) is None:
             raise ActionError("no such ticket", code="PRECONDITION_FAILED")
         ctx.update("Ticket", params.ticket_id, {"escalated": True})
-        ctx.emit(
-            TicketEscalationNotification(ticket_id=params.ticket_id, reason=params.reason)
-        )
         return {"ticket_id": params.ticket_id}
 
     @ontology.function(
@@ -280,17 +257,7 @@ def test_ingest_escalate_reingest_survives_via_governed_path() -> None:
     consumer = Consumer(
         actor_id="agent-1", role="Agent", scope_level="queue", scope_id=queue_id, kind="human"
     )
-    dispatched: list[EffectPayload] = []
-
-    def record_effect(payload: EffectPayload, _meta: EffectMeta) -> None:
-        dispatched.append(payload)
-
-    client = OntologyClient(
-        ontology,
-        store,
-        consumer,
-        effects={NOTIFY_TICKET_ESCALATION: record_effect},
-    )
+    client = OntologyClient(ontology, store, consumer)
 
     result = client.execute("EscalateTicket", {"ticket_id": ticket_id})
     assert result == {"ticket_id": ticket_id}
@@ -299,9 +266,6 @@ def test_ingest_escalate_reingest_survives_via_governed_path() -> None:
     assert escalated_ticket is not None
     assert escalated_ticket.payload["escalated"] is True
     assert escalated_ticket.payload["status"] == "open"
-    assert dispatched == [
-        TicketEscalationNotification(ticket_id=ticket_id, reason=None)
-    ]
 
     # The escalation's audit entry carries the real WriteRecord(s) + a real
     # target_id (declared-contracts AC11) -- not a guessed value.
@@ -316,18 +280,6 @@ def test_ingest_escalate_reingest_survives_via_governed_path() -> None:
     assert escalate_entry.target_id == ticket_id
     assert escalate_entry.writes == [
         WriteRecord(op="update", object_type="Ticket", object_id=ticket_id),
-    ]
-    finalized_entry = next(
-        entry
-        for entry in entries
-        if entry.action == "EscalateTicket"
-        and entry.outcome == "effects_dispatched"
-    )
-    assert [effect.api_name for effect in finalized_entry.effects] == [
-        "NotifyTicketEscalation"
-    ]
-    assert [effect.outcome for effect in finalized_entry.effects] == [
-        "dispatched"
     ]
 
     # 3. Re-ingest the SAME ticket from source with status changed to
@@ -387,18 +339,15 @@ def test_tickets_store_isolates_both_tenants_on_one_file(tmp_path: Path) -> None
     assert tenant_b.read_current("Ticket", ticket_a) is None
 
 
-def test_testing_harness_captures_escalation_outbox_payload() -> None:
+def test_testing_harness_drives_the_escalation_through_the_public_helpers() -> None:
+    """`ontary.testing` adoption: `make_store`/`consumer`/`FixedClock`/
+    `SequentialIds`/`raises_code` drive the example's own action, and the
+    refusal keeps its full exception identity (`ActionError` IS a
+    `PreconditionFailed` IS an `OntaryError`, carrying the stable code)."""
     ontology, _ = build_ontology()
     store = make_store(ontology)
     ids = load_fixtures(store)
     instant = datetime(2026, 8, 31, 9, 30, tzinfo=timezone.utc)
-    clock = FixedClock(instant)
-    generated_ids = SequentialIds("tickets-e2e")
-
-    def unavailable(_payload: EffectPayload, _meta: EffectMeta) -> None:
-        raise RuntimeError("notification service unavailable")
-
-    retry_policy = RetryPolicy(max_attempts=2)
 
     operator = consumer(
         actor_id="manager-effects",
@@ -406,57 +355,29 @@ def test_testing_harness_captures_escalation_outbox_payload() -> None:
         scope_level="queue",
         scope_id=ids["queue_a_id"],
     )
-    failing_client = ontology.bind(
+    client = ontology.bind(
         store,
-        clock=clock,
-        id_factory=generated_ids,
-        effects={NOTIFY_TICKET_ESCALATION: unavailable},
+        clock=FixedClock(instant),
+        id_factory=SequentialIds("tickets-e2e"),
     ).for_consumer(operator)
 
     with raises_code("PRECONDITION_FAILED"):
-        failing_client.execute(
+        client.execute(
             "EscalateTicket", {"ticket_id": "missing-ticket", "reason": "missing"}
         )
-    failing_client.execute(
+
+    client.execute(
         "EscalateTicket",
         {"ticket_id": ids["ticket_1_id"], "reason": "SLA exceeded"},
     )
 
-    pending = failing_client.outbox()
-    assert len(pending) == 1
-    assert isinstance(pending[0], OutboxRecord)
-    assert pending[0].state == "pending"
-    assert pending[0].attempts == 1
-    assert pending[0].next_attempt_at == instant + retry_policy.initial_backoff
-
-    captured = capture_effects()
-    draining_client = OntologyClient(
-        ontology,
-        store,
-        operator,
-        effects={NOTIFY_TICKET_ESCALATION: captured},
-        effect_retry=retry_policy,
-    )
-    report = draining_client.drain_effects(now=datetime(2026, 9, 1, tzinfo=timezone.utc))
-
-    assert report.delivered == 1
-    assert report.failed == 0
-    delivered = draining_client.outbox()
-    assert len(delivered) == 1
-    assert isinstance(delivered[0], OutboxRecord)
-    assert delivered[0].state == "delivered"
-    assert delivered[0].attempts == retry_policy.max_attempts
-    assert len(captured.effects) == 1
-    payload, meta = captured.effects[0]
-    assert payload == TicketEscalationNotification(
-        ticket_id=ids["ticket_1_id"], reason="SLA exceeded"
-    )
-    assert meta.actor_id == "manager-effects"
-    assert meta.ts == instant
-    assert meta.effect_id == "tickets-e2e-3"
+    entry = store.audit_entries()[-1]
+    assert (entry.action, entry.outcome) == ("EscalateTicket", "ok")
+    assert entry.ts == instant
+    assert entry.invocation_id == "tickets-e2e-2"
 
     with pytest.raises(ActionError) as caught_precondition:
-        failing_client.execute(
+        client.execute(
             "EscalateTicket", {"ticket_id": "missing-ticket", "reason": "missing"}
         )
     assert isinstance(caught_precondition.value, PreconditionFailed)

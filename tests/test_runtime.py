@@ -7,7 +7,7 @@ runtimes (same or different ontologies) never cross-talk.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any
 
 from conftest import raises_code
@@ -15,7 +15,6 @@ from conftest import raises_code
 from ontary.actions import ActionContext
 from ontary.authoring import ActionParams, Ontology, OntologyObject, prop, target
 from ontary.client import OntologyClient
-from ontary.effects import EffectMeta, EffectPayload
 from ontary.errors import PermissionDenied, ValidationFailed
 from ontary.functions import BoundQuery
 from ontary.meta import Sensitivity
@@ -121,35 +120,6 @@ def _seed_ticket(store: InMemoryStore, ticket_id: str = "tk1") -> None:
     )
 
 
-def _build_effect_ontology() -> tuple[Ontology, Any]:
-    ontology = Ontology(name="runtime-effects", scope_levels=LEVELS, min_n=1)
-
-    @ontology.object(layer="L0", scope="unscoped", owned=True)
-    class Record(OntologyObject):
-        id: str = prop(primary_key=True)
-
-    class Notice(EffectPayload):
-        label: str
-
-    notice = ontology.effect(Notice)
-
-    class EmitParams(ActionParams):
-        label: str
-
-    @ontology.action(
-        EmitParams,
-        target=Record,
-        roles=["Agent"],
-        effects=[notice],
-        api_name="Emit",
-    )
-    def emit(ctx: ActionContext, params: EmitParams) -> dict[str, str]:
-        ctx.emit(Notice(label=params.label))
-        return {"label": params.label}
-
-    return ontology, notice
-
-
 class TestRuntimeSeams:
     def test_injected_clock_and_ids_make_audit_bytes_deterministic(self) -> None:
         fixed = datetime(2099, 1, 1, 12, 0, tzinfo=timezone.utc)
@@ -200,48 +170,6 @@ class TestRuntimeSeams:
         entry = store.audit_entries()[0]
         assert entry.ts == fixed
         assert entry.invocation_id == "id-1"
-
-    def test_drain_uses_runtime_clock_when_omitted_and_explicit_now_wins(self) -> None:
-        fixed = datetime(2099, 1, 1, 12, 0, tzinfo=timezone.utc)
-        clock = _FixedClock(fixed)
-        ontology, notice = _build_effect_ontology()
-        store = InMemoryStore(ontology.registry)
-        failed_labels: set[str] = set()
-        attempts: list[tuple[str, int]] = []
-
-        def dispatch(payload: EffectPayload, meta: EffectMeta) -> None:
-            label = str(payload.model_dump()["label"])
-            attempts.append((label, meta.attempt))
-            if label not in failed_labels:
-                failed_labels.add(label)
-                raise RuntimeError("retry me")
-
-        runtime = ontology.bind(
-            store,
-            clock=clock,
-            id_factory=_SequentialIds(),
-            effects={notice: dispatch},
-        )
-        client = runtime.for_consumer(_human())
-
-        client.execute("Emit", {"label": "omitted"})
-        first_row = store.outbox_entries()[0]
-        assert first_row.emitted_at == fixed
-        assert first_row.next_attempt_at == fixed + timedelta(seconds=1)
-
-        clock.value = fixed + timedelta(seconds=1)
-        assert runtime.drain_effects().delivered == 1
-        assert store.outbox_entries()[0].updated_at == clock.value
-        assert store.audit_entries()[-1].ts == clock.value
-
-        clock.value = fixed
-        client.execute("Emit", {"label": "explicit"})
-        explicit_now = fixed + timedelta(seconds=2)
-        assert runtime.drain_effects(now=explicit_now).delivered == 1
-        assert store.outbox_entries()[1].updated_at == explicit_now
-        assert store.audit_entries()[-1].ts == explicit_now
-        assert attempts == [("omitted", 1), ("omitted", 2), ("explicit", 1), ("explicit", 2)]
-
 
 class TestForConsumerSharing:
     def test_two_clients_share_query_and_executor_by_identity(self) -> None:

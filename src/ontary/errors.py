@@ -76,9 +76,9 @@ class OntaryError(Exception):
         `BaseException.__reduce__` rebuilds via `cls(*self.args)`, which
         stopped working the moment `code` became required -- so a coded
         refusal crossing a process boundary would die on unpickling and the
-        caller would see a broken worker instead of the refusal. The engine's
-        own outbox drainers are documented as running in separate processes
-        (`docs/storage.md`), so this is a real path, not a theoretical one.
+        caller would see a broken worker instead of the refusal. A coded
+        refusal really does cross process boundaries (multi-process serving),
+        so this is a real path, not a theoretical one.
         """
         return (
             _rebuild_error,
@@ -287,14 +287,6 @@ ERROR_CODES: dict[str, ErrorCodeInfo] = {
         kind="precondition",
         description="A declared capability had no provider bound for this call.",
     ),
-    "EFFECT_NOT_DISPATCHABLE": ErrorCodeInfo(
-        kind="precondition",
-        description="A declared effect had no dispatcher bound for this call.",
-    ),
-    "UNDECLARED_EFFECT": ErrorCodeInfo(
-        kind="validation",
-        description="An action emitted an effect it did not declare.",
-    ),
     "UPCAST_FAILED": ErrorCodeInfo(
         kind="conflict",
         description=(
@@ -323,21 +315,6 @@ ERROR_CODES: dict[str, ErrorCodeInfo] = {
             "`accept_ontology_fingerprint`) or accept drift at the call site with "
             "`ObjectStore(..., accept_ontology_drift=True)`, which proceeds and "
             "writes an audit entry."
-        ),
-    ),
-    "EFFECT_NOT_SERIALIZABLE": ErrorCodeInfo(
-        kind="validation",
-        description=(
-            "Raised inside the action transaction when an emitted payload cannot "
-            "be JSON-encoded for the durable outbox (spec "
-            "`durable-effect-outbox`). This deliberate M5 behavior change means "
-            "the action rolls back and nothing is sent: before the outbox, an "
-            "unencodable payload still dispatched while only the audit record "
-            "degraded to `_safe_json_dumps`'s placeholder, but a durable work item "
-            "is what a later attempt sends and must not deliver a placeholder as "
-            "the author's data. Normal payloads use `model_dump(mode=\"json\")` "
-            "for datetime, UUID, Decimal, enums, and nested models; this takes "
-            "an arbitrary Python object on a sufficiently loose field."
         ),
     ),
     "MIN_N_VIOLATION": ErrorCodeInfo(

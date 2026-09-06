@@ -25,7 +25,6 @@ from ontary import (
     ActionParams,
     BoundQuery,
     Consumer,
-    EffectPayload,
     ObjectStore,
     Ontology,
     OntologyObject,
@@ -45,7 +44,6 @@ from ontary.meta import (
     ActionTypeDef,
     CapabilityDef,
     Cardinality,
-    EffectTypeDef,
     FunctionDef,
     LinkTypeDef,
     ObjectTypeDef,
@@ -108,18 +106,18 @@ def _evolution_ontology(
     return ontology
 
 
-_NON_OBJECT_KINDS = ("link", "action", "function", "capability", "effect")
+_NON_OBJECT_KINDS = ("link", "action", "function", "capability")
 """Every kind `fingerprint_ontology` covers except `object`.
 
 The classifier's newly-declared / no-longer-declared / declaration-changed
 branches are all kind-GENERIC (`store/protocol.py:232-245`), so pinning them
-with an object -- or with any single kind -- leaves the other five free to
+with an object -- or with any single kind -- leaves the others free to
 regress silently. Kept as a literal rather than derived from the registry so
 that a NEW fingerprinted kind reds `test_every_fingerprinted_kind_is_pinned`
 instead of quietly widening the parametrization to nothing.
 """
 
-_CHANGEABLE_NON_OBJECT_KINDS = ("link", "action", "function", "effect")
+_CHANGEABLE_NON_OBJECT_KINDS = ("link", "action", "function")
 """The subset whose declaration can change WITHOUT changing its api_name.
 
 `capability` is absent for a structural reason, not an oversight: a
@@ -137,7 +135,6 @@ _KIND_REGISTRY_COLLECTIONS = {
     "action": "action_types",
     "function": "functions",
     "capability": "capabilities",
-    "effect": "effect_types",
 }
 """Each fingerprinted kind and the `OntologyRegistry` collection it lives in.
 
@@ -151,7 +148,6 @@ _KIND_API_NAMES = {
     "action": "Make",
     "function": "Count",
     "capability": "Reader",
-    "effect": "Notify",
 }
 
 
@@ -166,7 +162,7 @@ def _all_kinds_ontology(
     non-object kind left undeclared or perturbed.
 
     Each perturbation moves a NON-documentation field (`identity_revealing`,
-    `executable_by_roles`, `audit`, a payload field), so it changes that
+    `executable_by_roles`, `audit`), so it changes that
     kind's digest and nothing else's -- the whole point being that the
     resulting refusal names the kind under test.
 
@@ -199,15 +195,6 @@ def _all_kinds_ontology(
 
     if omit != "capability":
         ontology.capability(_Reader, name="Reader")
-
-    if omit != "effect":
-
-        class Notify(EffectPayload):
-            channel: str
-            if changed == "effect":
-                urgency: str = "low"
-
-        ontology.effect(Notify, api_name="Notify")
 
     if omit != "action":
 
@@ -242,13 +229,16 @@ def _all_kinds_ontology(
 def test_pre_0_7_all_kinds_ontology_keeps_legacy_fingerprint_digest() -> None:
     """Adding SDK property features must not drift declarations that omit them.
 
-    This digest was captured from the unmodified 0.6-compatible implementation.
-    The fixture includes every fingerprinted descriptor kind while using no 0.7
-    property feature, so later property extensions can add their own moving-
-    digest assertion without weakening this legacy baseline.
+    This digest was captured from the unmodified 0.6-compatible implementation
+    and re-captured when effects were removed, which dropped the `effect:Notify`
+    entry this fixture used to declare. An ontology that never declared an
+    effect keeps its old digest, since the types map only carries declared
+    kinds. The fixture includes every fingerprinted descriptor kind while using
+    no 0.7 property feature, so later property extensions can add their own
+    moving-digest assertion without weakening this legacy baseline.
     """
     assert fingerprint_ontology(_all_kinds_ontology().registry).digest == (
-        "943ac552e0c31da5d688fb2db8b2e7649abbefcda8d223dd22db331ff30bc4be"
+        "90d306b16f203244da96bc1d416e991ce47731d690473cd4e7659af0d3419252"
     )
 
 
@@ -368,7 +358,6 @@ def test_the_digest_excludes_exactly_the_documented_prose_fields() -> None:
             output_description="prose",
         ),
         CapabilityDef(api_name="c", description="prose"),
-        EffectTypeDef(api_name="e", description="prose", payload=[]),
     ]
 
     for sample in samples:
@@ -976,8 +965,8 @@ def test_a_changed_non_object_declaration_is_refused_and_audited(
     """The classifier's `kind != "object"` branch is kind-generic, so pin it
     for every kind that can reach it -- not just for an action.
 
-    Narrowed to one kind, an author who edits a declared link, function or
-    effect against an existing store gets no `ONTOLOGY_DRIFT` refusal and no
+    Narrowed to one kind, an author who edits a declared link or function
+    against an existing store gets no `ONTOLOGY_DRIFT` refusal and no
     `AcceptOntologyDrift` entry: the store opens silently and the branch's own
     claim (`store/protocol.py:221-222`, "every other mismatch must remain
     explicit and auditable") is false with a green suite.
@@ -1003,8 +992,8 @@ def test_a_dropped_non_object_type_is_refused_and_audited(
     tmp_path: Path, kind: str
 ) -> None:
     """The `now is None` branch is kind-generic too: dropping a declared link,
-    action, function, capability or effect must refuse exactly as dropping an
-    object does."""
+    action, function or capability must refuse exactly as dropping an object
+    does."""
     path = _seed_all_kinds(tmp_path)
     dropped = _all_kinds_ontology(omit=kind)
     expected = (
@@ -1028,9 +1017,9 @@ def test_a_dropped_non_object_type_is_refused_and_audited(
 def test_a_newly_declared_non_object_type_is_covered_not_refused(
     tmp_path: Path, kind: str
 ) -> None:
-    """And so is `was is None`: declaring a NEW link, action, function,
-    capability or effect has no stored rows of its own, so it must open the
-    store rather than refuse it."""
+    """And so is `was is None`: declaring a NEW link, action, function or
+    capability has no stored rows of its own, so it must open the store rather
+    than refuse it."""
     path = _seed_all_kinds(tmp_path, _all_kinds_ontology(omit=kind))
     store = ObjectStore(_all_kinds_ontology().registry, path)  # no accept needed
 
@@ -1217,7 +1206,6 @@ def test_only_capability_has_no_changeable_declaration() -> None:
         "action": ActionTypeDef,
         "function": FunctionDef,
         "capability": CapabilityDef,
-        "effect": EffectTypeDef,
     }
     assert set(ir_by_kind) == set(_NON_OBJECT_KINDS)
 

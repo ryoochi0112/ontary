@@ -22,9 +22,8 @@ from __future__ import annotations
 import json
 import threading
 import uuid
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
-from datetime import datetime, timedelta
 from typing import Any, Literal, TypedDict
 
 from ontary.audit import (
@@ -34,10 +33,8 @@ from ontary.audit import (
 from ontary.errors import ConflictError
 from ontary.fingerprint import OntologyFingerprint
 from ontary.meta import Cardinality, OntologyRegistry
-from ontary.outbox import OutboxRecord, OutboxState
 from ontary.store._shared import (
     WriteCapture,
-    check_claim_limit,
     check_link_removal_authority,
     check_link_write_authority,
     check_object_removal_authority,
@@ -133,7 +130,7 @@ class InMemoryStore:
     honored -- object and link rows carry it and reads filter on it -- so the
     stored shape and the read semantics match the other backends; but the
     cross-tenant isolation TESTS necessarily target the two backends where two
-    stores can share a substrate. Audit and outbox rows are not filtered here,
+    stores can share a substrate. Audit rows are not filtered here,
     because within one instance every row has the same tenant and a filter would
     be a no-op dressed up as a guard.
     """
@@ -152,10 +149,6 @@ class InMemoryStore:
         self._objects: list[_ObjectRow] = []
         self._links: list[_LinkRow] = []
         self._audit: list[AuditEntry] = []
-        # Outbox rows are FROZEN models replaced wholesale on every state
-        # change (never mutated in place), for the same reason object rows are:
-        # it keeps `transaction()`'s rollback a shallow list copy.
-        self._outbox: list[OutboxRecord] = []
         # One in-memory instance is its whole storage substrate. A re-entrant
         # lock serializes outer transactions between threads while still letting
         # store methods join the transaction opened by ActionExecutor. Depth is
@@ -199,7 +192,6 @@ class InMemoryStore:
                     list[_ObjectRow],
                     list[_LinkRow],
                     list[AuditEntry],
-                    list[OutboxRecord],
                     int,
                 ]
                 | None
@@ -209,11 +201,6 @@ class InMemoryStore:
                     list(self._objects),
                     list(self._links),
                     list(self._audit),
-                    # Included for the same reason the audit list is: the emitting
-                    # action's outbox rows must vanish with its writes when it rolls
-                    # back (spec `durable-effect-outbox` AC1), or a rolled-back
-                    # action notifies the outside world after all.
-                    list(self._outbox),
                     self._next_row_id,
                 )
             try:
@@ -222,15 +209,13 @@ class InMemoryStore:
             # handler interrupted by KeyboardInterrupt previously left its mutations
             # in place, since this snapshot was only restored for `Exception`. Kept
             # identical to `ObjectStore.transaction` -- the two backends must agree
-            # about what a rolled-back action leaves behind, which is exactly what the
-            # `pending`-record atomicity claim depends on. Always re-raised.
+            # about what a rolled-back action leaves behind. Always re-raised.
             except BaseException:
                 if is_outermost and snapshot is not None:
                     (
                         self._objects,
                         self._links,
                         self._audit,
-                        self._outbox,
                         self._next_row_id,
                     ) = snapshot
                 raise
@@ -677,12 +662,10 @@ class InMemoryStore:
         """Deep copies, so a reader cannot rewrite the append-only log.
 
         Whole-branch review finding (2026-07-26): `list(self._audit)` copied the
-        LIST but handed out the same mutable `AuditEntry`/`EffectRecord`/
-        `WriteRecord` objects it stores. A dispatcher closing over an in-memory
-        store could therefore run
-        `store.audit_entries()[0].effects[0].outcome = "failed"` and rewrite a
-        durable, already-committed `pending` record in place -- an append-only log
-        that was not append-only.
+        LIST but handed out the same mutable `AuditEntry`/`WriteRecord` objects
+        it stores. A caller closing over an in-memory store could therefore
+        rewrite a durable, already-committed entry in place -- an append-only
+        log that was not append-only.
 
         `ObjectStore` never had this hole: it reconstructs models from persisted
         JSON on every read, so its callers always get fresh objects. That made
@@ -713,125 +696,6 @@ class InMemoryStore:
         """
         self._fingerprint = fingerprint
         self._fingerprint_adopted = adopted
-
-    # -- effect outbox ---------------------------------------------------
-
-    def enqueue_effects(self, records: Sequence[OutboxRecord]) -> None:
-        """Append outbox rows inside the caller's transaction (spec AC1).
-
-        Round-trips each payload through JSON to match `ObjectStore`, which
-        has no choice about it: a payload this backend would happily keep as
-        live Python objects but SQLite could not store must fail the SAME way
-        on both, inside the action transaction, rather than being deliverable
-        in tests and unsendable in production.
-        """
-        with self.transaction():
-            for record in records:
-                if any(row.effect_id == record.effect_id for row in self._outbox):
-                    # `effect_id TEXT PRIMARY KEY` on the SQLite side.
-                    raise ValueError(
-                        f"duplicate outbox effect_id: {record.effect_id!r}"
-                    )
-                if any(
-                    row.invocation_id == record.invocation_id and row.seq == record.seq
-                    for row in self._outbox
-                ):
-                    # `idx_effect_outbox_invocation_seq` on the SQLite side.
-                    raise ValueError(
-                        "duplicate outbox (invocation_id, seq): "
-                        f"({record.invocation_id!r}, {record.seq})"
-                    )
-                self._outbox.append(
-                    record.model_copy(
-                        update={"payload": json.loads(json.dumps(record.payload))}
-                    )
-                )
-
-    def _replace_outbox_row(self, effect_id: str, **changes: Any) -> bool:
-        for index, row in enumerate(self._outbox):
-            if row.effect_id == effect_id:
-                self._outbox[index] = row.model_copy(update=changes)
-                return True
-        return False
-
-    def claim_due_effects(
-        self, *, limit: int, now: datetime, lease: timedelta
-    ) -> list[OutboxRecord]:
-        check_claim_limit(limit)
-        lease_until = now + lease
-        claimed: list[OutboxRecord] = []
-        # The due scan happens INSIDE the transaction, matching the SQL
-        # backends' single-statement scan+lease: scanning before taking the
-        # lock let a dispatcher observe -- and then "claim" -- outbox rows of
-        # an in-flight transaction that subsequently rolled back, delivering
-        # an effect of an action that never happened (and let two concurrent
-        # claimers lease the same pending row).
-        with self.transaction():
-            due = sorted(
-                (
-                    row
-                    for row in self._outbox
-                    if row.state == "pending"
-                    and row.next_attempt_at <= now
-                    and (row.lease_until is None or row.lease_until <= now)
-                ),
-                key=lambda row: (row.emitted_at, row.seq),
-            )[:limit]
-            for row in due:
-                if self._replace_outbox_row(
-                    row.effect_id, lease_until=lease_until, updated_at=now
-                ):
-                    claimed.append(
-                        row.model_copy(
-                            update={"lease_until": lease_until, "updated_at": now}
-                        )
-                    )
-        return claimed
-
-    def release_effect_claim(self, effect_id: str, *, now: datetime) -> None:
-        with self.transaction():
-            self._replace_outbox_row(effect_id, lease_until=None, updated_at=now)
-
-    def resolve_effect(
-        self,
-        effect_id: str,
-        *,
-        state: OutboxState,
-        next_attempt_at: datetime,
-        error: str | None,
-        now: datetime,
-    ) -> None:
-        # Lookup inside the transaction for the same reason as the claim
-        # scan: an unlocked read could pair a stale `attempts` with another
-        # thread's concurrent resolve and lose an increment.
-        with self.transaction():
-            current = next(
-                (row for row in self._outbox if row.effect_id == effect_id), None
-            )
-            if current is None:
-                return
-            self._replace_outbox_row(
-                effect_id,
-                state=state,
-                attempts=current.attempts + 1,
-                next_attempt_at=next_attempt_at,
-                lease_until=None,
-                last_error=error,
-                updated_at=now,
-            )
-
-    def outbox_entries(self) -> list[OutboxRecord]:
-        """Copies, in emission order. `OutboxRecord` is frozen, but its
-        `payload` dict is not, so the deep copy is what stops a caller from
-        editing a stored payload through the value it was handed -- the same
-        parity rule `audit_entries` documents."""
-        with self._transaction_lock:
-            return [
-                row.model_copy(deep=True)
-                for row in sorted(
-                    self._outbox, key=lambda row: (row.emitted_at, row.seq)
-                )
-            ]
 
 
 def _static_conformance_check(registry: OntologyRegistry) -> Store:

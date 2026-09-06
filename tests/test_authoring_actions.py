@@ -22,7 +22,6 @@ from examples.tickets.ontology import build_ontology
 from ontary.actions import ActionContext, ActionError, ActionExecutor
 from ontary.authoring import ActionParams, Ontology, OntologyObject, prop, ref, scope_ref, target
 from ontary.client import OntologyClient
-from ontary.effects import EffectPayload
 from ontary.errors import ValidationFailed
 from ontary.ontology import OntologyDef
 from ontary.scope import ScopePolicy
@@ -68,22 +67,6 @@ class TestDerivedMatchesHandWritten:
             ticket_id: str = target(Ticket)
             reason: str | None = None
 
-        # M5: the live example's EscalateTicket now declares an outward effect,
-        # so the hand-authored twin must declare one too or this parity check
-        # would only be asserting that the two DIFFER. A payload class may be
-        # declared once on one Ontology (spec AC2), so this is a distinct local
-        # class carrying the same `api_name` -- the IR stores api_name strings,
-        # which is exactly what the comparison below comes down to.
-        class LocalTicketEscalationNotification(EffectPayload):
-            ticket_id: str
-            reason: str | None = None
-
-        notify = ontology.effect(
-            LocalTicketEscalationNotification,
-            api_name="NotifyTicketEscalation",
-            description="Notifies the owning queue that a ticket was escalated.",
-        )
-
         @ontology.action(
             EscalateTicketParams,
             target=Ticket,
@@ -91,7 +74,6 @@ class TestDerivedMatchesHandWritten:
             display_name="Escalate Ticket",
             description="Escalates a Ticket as urgent.",
             api_name="EscalateTicket",
-            effects=[notify],
         )
         def escalate(ctx: ActionContext, params: EscalateTicketParams) -> dict[str, str]:
             return {"ticket_id": params.ticket_id}

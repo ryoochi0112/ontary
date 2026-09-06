@@ -110,9 +110,8 @@ class OntologyFingerprint(BaseModel):
 
     types: dict[str, str]
     """`"object:Widget"` / `"link:inQueue"` / `"action:Advance"` / ... -> digest.
-    Namespaced by kind because api_names are only unique WITHIN a kind (spec
-    `governed-effects` established that a capability and an effect may share
-    one), so a flat map would silently merge two declarations into one entry."""
+    Namespaced by kind because api_names are only unique WITHIN a kind, so a
+    flat map would silently merge two declarations into one entry."""
 
     versions: dict[str, int] = {}
     """Object api_name -> declared `version` at the time this fingerprint was
@@ -125,8 +124,8 @@ class OntologyFingerprint(BaseModel):
 def fingerprint_ontology(registry: OntologyRegistry) -> OntologyFingerprint:
     """Fingerprint every declared type on `registry`.
 
-    Covers the registry's descriptors: object, link, action, function,
-    capability, and effect types.
+    Covers the registry's descriptors: object, link, action, function, and
+    capability types.
 
     **The `ScopePolicy` is deliberately NOT included**, and this is a real
     narrowing of the spec's AC1 rather than an oversight. A `ScopePolicy` lives
@@ -147,7 +146,6 @@ def fingerprint_ontology(registry: OntologyRegistry) -> OntologyFingerprint:
         ("action", registry.action_types),
         ("function", registry.functions),
         ("capability", registry.capabilities),
-        ("effect", registry.effect_types),
     ):
         for api_name, definition in definitions.items():
             types[f"{kind}:{api_name}"] = _digest(definition)

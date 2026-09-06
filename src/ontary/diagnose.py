@@ -325,7 +325,6 @@ def _registry_action_findings(
     registry = definition.registry
     object_types = registry.object_types
     capabilities = registry.capabilities
-    effect_types = registry.effect_types
     findings: list[Finding] = []
 
     for api_name in sorted(registry.action_types):
@@ -352,19 +351,6 @@ def _registry_action_findings(
                         f"ActionTypeDef {api_name!r}: dangling capability "
                         f"{capability!r}",
                         "Declare the capability before using it on the action, "
-                        "or remove the reference.",
-                    )
-                )
-
-        for effect in sorted(action.effects):
-            if effect not in effect_types:
-                findings.append(
-                    _error(
-                        "ONTOLOGY_INVALID",
-                        f"{base}.effects[{effect!r}]",
-                        f"ActionTypeDef {api_name!r}: dangling effect "
-                        f"{effect!r}",
-                        "Declare the effect type before using it on the action, "
                         "or remove the reference.",
                     )
                 )

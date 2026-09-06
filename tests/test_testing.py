@@ -6,7 +6,6 @@ import ast
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
 
 import pytest
 
@@ -14,7 +13,6 @@ import ontary
 from ontary import (
     ActionContext,
     ActionParams,
-    EffectPayload,
     InMemoryStore,
     Ontology,
     OntologyObject,
@@ -25,40 +23,33 @@ from ontary.ingest import IngestError
 from ontary.testing import (
     FixedClock,
     SequentialIds,
-    capture_effects,
     consumer,
     make_store,
     raises_code,
 )
 
 
-def _build_effect_ontology() -> tuple[Ontology, Any]:
-    ontology = Ontology("testing-effects", scope_levels=["org"], min_n=1)
+def _build_recording_ontology() -> Ontology:
+    ontology = Ontology("testing-actions", scope_levels=["org"], min_n=1)
 
     @ontology.object(layer="L0", scope="unscoped", owned=True)
     class Record(OntologyObject):
         id: str = prop(primary_key=True)
 
-    class Notice(EffectPayload):
-        label: str
-
-    notice = ontology.effect(Notice)
-
-    class EmitParams(ActionParams):
+    class RecordParams(ActionParams):
         pass
 
     @ontology.action(
-        EmitParams,
+        RecordParams,
         target=Record,
         roles=["Operator"],
-        effects=[notice],
-        api_name="Emit",
+        api_name="Record",
     )
-    def emit(ctx: ActionContext, _params: EmitParams) -> dict[str, str]:
-        ctx.emit(Notice(label="captured"))
+    def record(ctx: ActionContext, _params: RecordParams) -> dict[str, str]:
+        ctx.insert("Record", {})
         return {"status": "ok"}
 
-    return ontology, notice
+    return ontology
 
 
 def test_make_store_returns_a_fresh_store_for_the_ontology() -> None:
@@ -146,23 +137,6 @@ def test_raises_code_propagates_an_uncoded_exception_unchanged() -> None:
             raise RuntimeError("not a coded refusal")
 
 
-def test_capture_effects_records_the_effect_without_an_outside_dispatch() -> None:
-    ontology, notice = _build_effect_ontology()
-    store = make_store(ontology)
-    captured = capture_effects()
-    client = ontology.bind(store, effects={notice: captured}).for_consumer(
-        consumer(role="Operator")
-    )
-
-    assert client.execute("Emit", {}) == {"status": "ok"}
-    assert len(captured.effects) == 1
-    assert captured.records is captured.effects
-    payload, meta = captured.effects[0]
-    assert payload.model_dump() == {"label": "captured"}
-    assert meta.action == "Emit"
-    assert meta.attempt == 1
-
-
 def test_fixed_clock_is_aware_and_constant() -> None:
     start = datetime(2099, 1, 1, 12, 0, tzinfo=timezone.utc)
     clock = FixedClock(start)
@@ -186,15 +160,14 @@ def test_fixed_clock_and_sequential_ids_make_audit_bytes_identical() -> None:
     fixed = datetime(2099, 1, 1, 12, 0, tzinfo=timezone.utc)
 
     def run_once() -> list[bytes]:
-        ontology, notice = _build_effect_ontology()
+        ontology = _build_recording_ontology()
         store = make_store(ontology)
         runtime = ontology.bind(
             store,
             clock=FixedClock(fixed),
             id_factory=SequentialIds("run"),
-            effects={notice: capture_effects()},
         )
-        runtime.for_consumer(consumer(role="Operator")).execute("Emit", {})
+        runtime.for_consumer(consumer(role="Operator")).execute("Record", {})
         return [
             entry.model_dump_json().encode("utf-8")
             for entry in store.audit_entries()

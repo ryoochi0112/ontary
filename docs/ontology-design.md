@@ -332,8 +332,8 @@ and audit records describe storage mechanics instead of business intent.
 
 **In ontary:** declare a small `ActionTypeDef` set named with business verbs and
 aligned to real outcomes. One action should own the complete invariant-preserving
-transition, including its target, permitted roles, declared capabilities and effects,
-and ontology-owned writes. Never expose generic create, update, or set-property
+transition, including its target, permitted roles, declared capabilities, and
+ontology-owned writes. Never expose generic create, update, or set-property
 actions. The tickets example's [ticket-escalation action](../examples/tickets/ontology.py)
 escalates a ticket; its name tells a reviewer what happened.
 

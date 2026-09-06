@@ -18,12 +18,11 @@ from pathlib import Path
 from typing import get_args, get_origin, get_type_hints
 
 import pytest
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 
 import ontary
 import ontary.connect
 from ontary.declarations import Declarations
-from ontary.effects import EffectMeta, EffectPayload
 from ontary.errors import ERROR_CODES
 
 README = Path(__file__).resolve().parent.parent / "README.md"
@@ -105,6 +104,9 @@ REMOVED_SINCE_080_ERROR_CODES = frozenset(
         "OBJECT_ERASURE_NOT_FOUND",
         "OBJECT_ALREADY_ERASED",
         "STORE_SCHEMA_INCOMPATIBLE",
+        "EFFECT_NOT_DISPATCHABLE",
+        "UNDECLARED_EFFECT",
+        "EFFECT_NOT_SERIALIZABLE",
     }
 )
 NEW_ENGLISH_DOCS = tuple(
@@ -113,7 +115,6 @@ NEW_ENGLISH_DOCS = tuple(
         "storage.md",
         "connectors.md",
         "mcp-serving.md",
-        "effects.md",
         "queries.md",
         "authority.md",
         "cookbook.md",
@@ -196,21 +197,16 @@ FRONT_DOOR_RUNTIME_NAMES = {
     "ConflictError",
     "CustomResolver",
     "Declarations",
-    "DrainReport",
-    "EffectDispatcher",
-    "EffectMeta",
     "Finding",
     "InMemoryStore",
     "InternalError",
     "OntaryError",
     "ObjectStore",
     "OntologyClient",
-    "OutboxRecord",
     "Page",
     "PermissionDenied",
     "PostgresStore",
     "PreconditionFailed",
-    "RetryPolicy",
     "ScopePolicy",
     "TypedPage",
     "ValidationFailed",
@@ -228,7 +224,7 @@ FRONT_DOOR_RUNTIME_NAMES = {
 # focused assertion fail instead of relying on documentation prose.
 DEMOTED_NAMES_BY_MODULE = {
     "ontary.actions": {"ActionExecutor"},
-    "ontary.audit": {"CapabilityAccessRecord", "EffectRecord"},
+    "ontary.audit": {"CapabilityAccessRecord"},
     "ontary.client": {"OntologyRuntime"},
     "ontary.connect": {
         "LinkSkip",
@@ -267,10 +263,6 @@ DEMOTED_NAMES_BY_MODULE = {
         "upcast_object_type",
     },
     "ontary.ontology": {"OntologyDef"},
-    "ontary.outbox": {
-        "DEFAULT_RETRY_POLICY",
-        "OutboxState",
-    },
     "ontary.query": {"GuardedQuery"},
     "ontary.scope": {
         "Direction",
@@ -294,7 +286,6 @@ DEMOTED_NAMES_BY_MODULE = {
     "ontary.testing": {
         "FixedClock",
         "SequentialIds",
-        "capture_effects",
         "consumer",
         "make_store",
         "raises_code",
@@ -427,7 +418,6 @@ def test_readme_quickstart_executes_verbatim() -> None:
 
 COOKBOOK_RECIPES = (
     "scoped-type",
-    "testing-action",
     "type-evolution",
     "serve-dev",
 )
@@ -461,7 +451,6 @@ def test_cookbook_recipes_execute_verbatim(recipe: str) -> None:
             assert {alias.name for alias in node.names} <= {
                 "FixedClock",
                 "SequentialIds",
-                "capture_effects",
                 "consumer",
                 "make_store",
                 "raises_code",
@@ -562,66 +551,6 @@ def test_changelog_new_error_codes_match_catalog_diff() -> None:
     ) - REMOVED_SINCE_080_ERROR_CODES
 
 
-def test_effect_meta_has_exact_dispatch_safe_field_set() -> None:
-    # Exact, not a subset: the point of this assertion is that WIDENING
-    # `EffectMeta` fails a test rather than passing review, because the field
-    # set is what keeps a dispatcher from being handed a path back into
-    # ontology state. `effect_id` and `attempt` (durable outbox) are delivery
-    # bookkeeping -- a uuid and an int, neither of which reaches the store.
-    assert set(EffectMeta.model_fields) == {
-        "action",
-        "actor_id",
-        "role",
-        "ts",
-        "effect_id",
-        "attempt",
-    }
-
-
-def test_effect_payload_subclass_rejects_attribute_reassignment() -> None:
-    class Notification(EffectPayload):
-        message: str
-
-    payload = Notification(message="before")
-
-    with pytest.raises(ValidationError):
-        payload.message = "after"
-
-
-def test_readme_governed_effects_snippet_executes_verbatim() -> None:
-    effects_text = (_DOCS / "effects.md").read_text()
-    match = re.search(
-        r"<!-- governed-effects-runnable:start -->\n"
-        r"```python\n(.*?)```\n"
-        r"<!-- governed-effects-runnable:end -->",
-        effects_text,
-        re.DOTALL,
-    )
-    assert match is not None
-    namespace: dict[str, object] = {}
-    exec(compile(match.group(1), "docs/effects.md", "exec"), namespace)
-    assert len(namespace["delivered"]) == 1
-
-
-def test_readme_governed_effects_states_the_honest_contract() -> None:
-    section = (_DOCS / "effects.md").read_text()
-    normalized = " ".join(section.split())
-
-    required = [
-        "Capabilities are declared reads or calls to the outside world",
-        "Delivery is at-least-once.",
-        "must therefore be idempotent on `EffectMeta.effect_id`",
-        "pending audit row proves committed intent",
-        "provider accesses",
-        "A direct registry invocation has no client boundary",
-        "Effects are therefore declared and audited, not sandboxed or filtered",
-        "A provider can perform an outward write inline",
-        "Every audit entry written by an action invocation carries the same",
-    ]
-    for statement in required:
-        assert statement in normalized
-
-
 def test_authority_page_names_every_declarations_field() -> None:
     section = (_DOCS / "authority.md").read_text()
 
@@ -630,7 +559,6 @@ def test_authority_page_names_every_declarations_field() -> None:
     expected_headings = {
         "authority": "Authority",
         "capabilities": "Capabilities",
-        "effects": "Effects",
         "writeback": "Write-back",
         "reingest": "Re-ingest",
         "visibility_default": "Visibility default",
@@ -736,7 +664,7 @@ def _public_type_hints(member: object) -> tuple[object, ...]:
         # install (for example FastMCP). Resolved signatures still contribute
         # through their other reachable members. Retry with unresolved names
         # bound to an opaque placeholder so one missing forward reference does
-        # not hide a sibling public type such as RetryPolicy.
+        # not hide a sibling public type such as ScopePolicy.
         function = getattr(member, "__func__", member)
         globalns = dict(getattr(function, "__globals__", {}))
         for _ in range(8):
@@ -791,8 +719,8 @@ def test_ontary_signature_closure() -> None:
         elif inspect.isroutine(member) or isinstance(member, property):
             annotations.extend(_public_type_hints(member))
         else:
-            # Callable/type aliases such as EffectDispatcher expose their
-            # argument types through get_args(), not get_type_hints().
+            # Callable/type aliases expose their argument types through
+            # get_args(), not get_type_hints().
             annotations.append(member)
 
         for annotation in annotations:

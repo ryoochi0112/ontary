@@ -32,7 +32,7 @@ import sys
 import threading
 import uuid
 from collections.abc import Callable
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -42,7 +42,7 @@ from pydantic import BaseModel
 
 from ontary import Ontology, OntologyClient, OntologyObject, prop
 from ontary.actions import ActionContext, ActionExecutor
-from ontary.audit import CapabilityAccessRecord, EffectRecord
+from ontary.audit import CapabilityAccessRecord
 from ontary.errors import AuthorityError, ConflictError, ValidationFailed
 from ontary.meta import (
     ActionTypeDef,
@@ -52,7 +52,6 @@ from ontary.meta import (
     OntologyRegistry,
     PropertyDef,
 )
-from ontary.outbox import OutboxRecord
 from ontary.scope import ScopePolicy
 from ontary.security import Consumer
 from ontary.store import (
@@ -2194,20 +2193,7 @@ def test_audit_entry_defaults_writes_to_empty_list() -> None:
     assert entry.writes == []
 
 
-def test_audit_effects_and_capability_accesses_round_trip(store: Store) -> None:
-    effects = [
-        EffectRecord(
-            api_name="send_notification",
-            payload={"channel": "ops", "nested": {"ids": [1, 2]}},
-            outcome="dispatched",
-        ),
-        EffectRecord(
-            api_name="create_ticket",
-            payload={"priority": "high"},
-            outcome="failed",
-            error="transport unavailable",
-        ),
-    ]
+def test_audit_capability_accesses_round_trip(store: Store) -> None:
     accesses = [
         CapabilityAccessRecord(api_name="llm", count=2),
         CapabilityAccessRecord(api_name="search", count=1),
@@ -2219,41 +2205,13 @@ def test_audit_effects_and_capability_accesses_round_trip(store: Store) -> None:
         target_type="Ticket",
         target_id="ticket-1",
         params={},
-        outcome="effects_dispatched",
-        effects=effects,
+        outcome="ok",
         capability_accesses=accesses,
     )
     store.append_audit(entry)
 
     got = store.audit_entries()[0]
-    assert got.effects == effects
     assert got.capability_accesses == accesses
-
-
-def test_unserializable_effect_payload_uses_per_key_placeholder(
-    store: Store,
-) -> None:
-    entry = AuditEntry(
-        actor="alice",
-        role="TeamOwner",
-        action="WeirdEffect",
-        target_type="Ticket",
-        params={},
-        outcome="effects_dispatched",
-        effects=[
-            EffectRecord(
-                api_name="notify",
-                payload={"ok": "fine", "bad": {"not", "json"}},
-                outcome="failed",
-                error="bad payload",
-            )
-        ],
-    )
-    store.append_audit(entry)  # must not raise
-
-    payload = store.audit_entries()[0].effects[0].payload
-    assert payload["ok"] == "fine"
-    assert "$unserializable" in payload["bad"]
 
 
 def test_append_audit_never_raises_on_unserializable_param(store: Store) -> None:
@@ -2448,19 +2406,19 @@ def test_audit_append_participates_in_the_enclosing_transaction(store: Store) ->
     """An audit entry appended INSIDE a transaction must roll back with it, on
     BOTH backends.
 
-    This is the store-level half of the milestone's atomicity claim: M5 appends
-    the `pending` effect record inside the action transaction precisely so the
-    record of what an action intended to send outside commits with the ontology
-    writes, never separately. `append_audit` opens its own transaction, and
-    `transaction()` is reentrant, so it must JOIN the enclosing one.
+    This is the store-level half of the atomicity claim: the executor appends
+    an action's audit entry inside the action transaction precisely so the
+    record of what the action did commits with the ontology writes, never
+    separately. `append_audit` opens its own transaction, and `transaction()`
+    is reentrant, so it must JOIN the enclosing one.
 
     Whole-branch review finding (2026-07-26): the in-memory half of this was a
     DELETABLE guard. The atomicity fault-injection test constructs only
     `ObjectStore`, and the rollback tests above roll back an object insert but
     never an audit append -- so removing `_audit` from `InMemoryStore`'s
     transaction snapshot left the whole suite green while the two backends
-    silently disagreed about whether a durable pending record can survive a
-    rolled-back action.
+    silently disagreed about whether an audit entry can survive a rolled-back
+    action.
     """
     with pytest.raises(RuntimeError):
         with store.transaction():
@@ -2472,13 +2430,7 @@ def test_audit_append_participates_in_the_enclosing_transaction(store: Store) ->
                     action="Rollback",
                     target_type="Company",
                     outcome="ok",
-                    effects=[
-                        EffectRecord(
-                            api_name="Notify",
-                            payload={"message": "should not survive"},
-                            outcome="pending",
-                        )
-                    ],
+                    params={"message": "should not survive"},
                 )
             )
             raise RuntimeError("boom after the audit append")
@@ -2493,10 +2445,10 @@ def test_transaction_rolls_back_on_base_exception_too(store: Store) -> None:
     Re-review finding (2026-07-26): both `transaction()` implementations caught
     only `Exception`, so a handler interrupted by `KeyboardInterrupt` (or raising
     `SystemExit`) left its writes in place -- readable by a later caller on the
-    same connection, or swept into an outer commit. Pre-existing, but M5's
-    atomicity claim (the pending effect record and the ontology writes are ONE
+    same connection, or swept into an outer commit. Pre-existing, but the
+    atomicity claim (an action's audit entry and its ontology writes are ONE
     fact) rests on it directly: an interrupted action must not leave an orphaned
-    `pending` record either. The exception is still re-raised -- process-control
+    entry either. The exception is still re-raised -- process-control
     exceptions are cleaned up after, never swallowed.
     """
     with pytest.raises(KeyboardInterrupt):
@@ -2509,13 +2461,7 @@ def test_transaction_rolls_back_on_base_exception_too(store: Store) -> None:
                     action="Interrupted",
                     target_type="Company",
                     outcome="ok",
-                    effects=[
-                        EffectRecord(
-                            api_name="Notify",
-                            payload={"message": "orphan"},
-                            outcome="pending",
-                        )
-                    ],
+                    params={"message": "orphan"},
                 )
             )
             raise KeyboardInterrupt
@@ -2530,11 +2476,11 @@ def test_audit_entries_are_not_mutable_through_the_returned_models(
     """`audit_entries()` must not hand out handles onto the stored log.
 
     Whole-branch review finding: `InMemoryStore.audit_entries` copied the LIST
-    but returned the same mutable `AuditEntry`/`EffectRecord` objects it stored,
-    so a dispatcher closing over the store could rewrite a committed `pending`
-    record in place -- an append-only log that was not append-only, and a
-    backend-parity break, since `ObjectStore` reconstructs its models from
-    persisted JSON and never had the hole.
+    but returned the same mutable `AuditEntry`/`WriteRecord` objects it stored,
+    so a caller closing over the store could rewrite a committed entry in place
+    -- an append-only log that was not append-only, and a backend-parity break,
+    since `ObjectStore` reconstructs its models from persisted JSON and never
+    had the hole.
     """
     store.append_audit(
         AuditEntry(
@@ -2543,25 +2489,20 @@ def test_audit_entries_are_not_mutable_through_the_returned_models(
             action="Publish",
             target_type="Company",
             outcome="ok",
-            effects=[
-                EffectRecord(
-                    api_name="Notify",
-                    payload={"message": "original"},
-                    outcome="pending",
-                )
-            ],
+            params={"message": "original"},
+            writes=[WriteRecord(op="create", object_type="Company", object_id="c-1")],
         )
     )
 
     first = store.audit_entries()
     first[0].outcome = "tampered"
-    first[0].effects[0].outcome = "failed"
-    first[0].effects[0].payload["message"] = "rewritten"
+    first[0].params["message"] = "rewritten"
+    first[0].writes[0].object_id = "tampered"
 
     second = store.audit_entries()
     assert second[0].outcome == "ok"
-    assert second[0].effects[0].outcome == "pending"
-    assert second[0].effects[0].payload == {"message": "original"}
+    assert second[0].params == {"message": "original"}
+    assert second[0].writes[0].object_id == "c-1"
 
 
 def test_capture_action_writes_are_a_context_manager_yielding_list(
@@ -2642,192 +2583,6 @@ def test_links_to_asof_unknown_link_type_raises_coded_error(store: Store) -> Non
         store.links_to_asof("noSuchLink", "b", _ASOF)
 
 
-# -- effect outbox (durable-effect-outbox AC12) ------------------------------
-
-
-def _outbox_row(
-    effect_id: str = "eff-1",
-    *,
-    seq: int = 0,
-    next_attempt_at: datetime | None = None,
-    lease_until: datetime | None = None,
-) -> OutboxRecord:
-    return OutboxRecord(
-        effect_id=effect_id,
-        invocation_id="inv-1",
-        seq=seq,
-        api_name="Notice",
-        payload={"label": effect_id},
-        action="Emit",
-        actor_id="operator-1",
-        role="Operator",
-        emitted_at=_OUTBOX_NOW,
-        next_attempt_at=next_attempt_at or _OUTBOX_NOW,
-        lease_until=lease_until,
-        updated_at=_OUTBOX_NOW,
-    )
-
-
-_OUTBOX_NOW = datetime(2026, 7, 26, 12, 0, tzinfo=timezone.utc)
-
-
-def test_enqueued_effects_read_back_intact(store: Store) -> None:
-    store.enqueue_effects([_outbox_row()])
-
-    rows = store.outbox_entries()
-
-    assert len(rows) == 1
-    assert rows[0].model_dump() == _outbox_row().model_dump()
-
-
-def test_enqueue_is_rolled_back_with_the_surrounding_transaction(
-    store: Store,
-) -> None:
-    """The atomicity the whole design rests on, at the seam rather than
-    through an action: an outbox row written inside a transaction that then
-    fails must not survive it."""
-    with pytest.raises(RuntimeError):
-        with store.transaction():
-            store.enqueue_effects([_outbox_row()])
-            raise RuntimeError("caller failed")
-
-    assert store.outbox_entries() == []
-
-
-def test_claim_never_leases_uncommitted_outbox_rows(
-    concurrent_stores: Callable[[], Store],
-) -> None:
-    """A dispatcher's claim must not deliver an effect of a transaction that
-    rolls back.
-
-    Same shape as `test_uncommitted_writes_invisible_to_concurrent_reader`,
-    but through the claim path: the writer enqueues inside a transaction,
-    holds it open for a bounded wait, then rolls back. A claim racing that
-    window must lease nothing -- returning the row would hand the dispatcher
-    an effect of an action that never happened (durable-effect-outbox AC1),
-    and the SQL backends' single-statement scan+lease already cannot.
-    """
-    enqueued = threading.Event()
-    claimed_done = threading.Event()
-    errors: list[BaseException] = []
-
-    def enqueue_then_roll_back() -> None:
-        try:
-            store = concurrent_stores()
-            with pytest.raises(RuntimeError):
-                with store.transaction():
-                    store.enqueue_effects([_outbox_row()])
-                    enqueued.set()
-                    claimed_done.wait(timeout=1)
-                    raise RuntimeError("roll back")
-        except BaseException as exc:  # pragma: no cover - surfaced via assert
-            errors.append(exc)
-
-    writer = threading.Thread(target=enqueue_then_roll_back, daemon=True)
-    writer.start()
-    assert enqueued.wait(timeout=5)
-    claimed = concurrent_stores().claim_due_effects(
-        limit=10, now=_OUTBOX_NOW, lease=timedelta(seconds=30)
-    )
-    claimed_done.set()
-    writer.join(timeout=10)
-
-    assert not writer.is_alive(), "writer deadlocked"
-    assert errors == []
-    assert claimed == []
-    assert concurrent_stores().outbox_entries() == []
-
-
-def test_claim_leases_only_due_unleased_pending_rows(store: Store) -> None:
-    store.enqueue_effects(
-        [
-            _outbox_row("due"),
-            _outbox_row("later", seq=1, next_attempt_at=_OUTBOX_NOW + timedelta(hours=1)),
-            _outbox_row("leased", seq=2, lease_until=_OUTBOX_NOW + timedelta(hours=1)),
-        ]
-    )
-
-    claimed = store.claim_due_effects(
-        limit=10, now=_OUTBOX_NOW, lease=timedelta(seconds=30)
-    )
-
-    assert [row.effect_id for row in claimed] == ["due"]
-    assert claimed[0].lease_until == _OUTBOX_NOW + timedelta(seconds=30)
-    # And the lease is persisted, not just reported.
-    stored = {row.effect_id: row.lease_until for row in store.outbox_entries()}
-    assert stored["due"] == _OUTBOX_NOW + timedelta(seconds=30)
-
-
-def test_claim_respects_its_limit(store: Store) -> None:
-    store.enqueue_effects([_outbox_row("a"), _outbox_row("b", seq=1)])
-
-    claimed = store.claim_due_effects(
-        limit=1, now=_OUTBOX_NOW, lease=timedelta(seconds=30)
-    )
-
-    assert len(claimed) == 1
-
-
-def test_resolve_increments_attempts_and_clears_the_lease(store: Store) -> None:
-    store.enqueue_effects([_outbox_row()])
-    store.claim_due_effects(limit=1, now=_OUTBOX_NOW, lease=timedelta(seconds=30))
-
-    store.resolve_effect(
-        "eff-1",
-        state="pending",
-        next_attempt_at=_OUTBOX_NOW + timedelta(minutes=5),
-        error="transport down",
-        now=_OUTBOX_NOW,
-    )
-
-    row = store.outbox_entries()[0]
-    assert (row.state, row.attempts, row.last_error) == ("pending", 1, "transport down")
-    assert row.lease_until is None
-    assert row.next_attempt_at == _OUTBOX_NOW + timedelta(minutes=5)
-
-
-def test_release_clears_the_lease_without_spending_an_attempt(store: Store) -> None:
-    store.enqueue_effects([_outbox_row()])
-    store.claim_due_effects(limit=1, now=_OUTBOX_NOW, lease=timedelta(seconds=30))
-
-    store.release_effect_claim("eff-1", now=_OUTBOX_NOW)
-
-    row = store.outbox_entries()[0]
-    assert (row.state, row.attempts, row.lease_until) == ("pending", 0, None)
-
-
-def test_delivered_and_failed_rows_are_never_claimed_again(store: Store) -> None:
-    store.enqueue_effects([_outbox_row("done"), _outbox_row("dead", seq=1)])
-    for effect_id, state in (("done", "delivered"), ("dead", "failed")):
-        store.resolve_effect(
-            effect_id,
-            state=state,
-            next_attempt_at=_OUTBOX_NOW,
-            error=None,
-            now=_OUTBOX_NOW,
-        )
-
-    claimed = store.claim_due_effects(
-        limit=10, now=_OUTBOX_NOW + timedelta(days=1), lease=timedelta(seconds=30)
-    )
-
-    assert claimed == []
-    # Kept, not deleted: a dead letter a caller can still read.
-    assert {row.effect_id for row in store.outbox_entries()} == {"done", "dead"}
-
-
-def test_resolving_an_unknown_effect_id_is_a_noop(store: Store) -> None:
-    store.resolve_effect(
-        "never-existed",
-        state="delivered",
-        next_attempt_at=_OUTBOX_NOW,
-        error=None,
-        now=_OUTBOX_NOW,
-    )
-
-    assert store.outbox_entries() == []
-
-
 def test_audit_entries_preserve_the_invocation_id(store: Store) -> None:
     """Backend parity: `InMemoryStore.append_audit` normalized field by field
     and silently dropped `invocation_id` when M7a added it."""
@@ -2874,14 +2629,6 @@ def test_audit_entries_round_trip_every_field(store: Store) -> None:
         params={"a": 1},
         outcome="ok",
         writes=[WriteRecord(op="create", object_type="Widget", object_id="w-1")],
-        effects=[
-            EffectRecord(
-                api_name="notify",
-                payload={"x": 1},
-                outcome="dispatched",
-                effect_id="eff-1",
-            )
-        ],
         capability_accesses=[CapabilityAccessRecord(api_name="llm", count=3)],
     )
     store.append_audit(entry)

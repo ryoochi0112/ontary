@@ -23,8 +23,7 @@ from pydantic import BaseModel, ValidationError
 
 from ontary._runtime import default_clock, default_id_factory
 from ontary._typed_api import resolve_capability
-from ontary.audit import CapabilityAccessRecord, EffectRecord
-from ontary.effects import EffectDispatcher, EffectPayload
+from ontary.audit import CapabilityAccessRecord
 from ontary.errors import (
     ConflictError,
     InternalError,
@@ -34,13 +33,7 @@ from ontary.errors import (
     ValidationFailed,
 )
 from ontary.meta import ActionParameterDef, ActionTypeDef, OntologyRegistry
-from ontary.model import CapabilityHandle, EffectHandle
-from ontary.outbox import (
-    DEFAULT_RETRY_POLICY,
-    OutboxRecord,
-    RetryPolicy,
-)
-from ontary.outbox_drain import _deliver_effect
+from ontary.model import CapabilityHandle
 from ontary.scope import ScopePolicy, resolve_owning_scope
 from ontary.security import Consumer, covers_scope
 from ontary.store import AuditEntry, Source, Store, StoredObject
@@ -64,35 +57,6 @@ def _source(action_name: str) -> Source:
     return Source(source_system=f"action:{action_name}")
 
 
-def _json_payload(api_name: str, payload: EffectPayload) -> dict[str, Any]:
-    """A JSON-safe dict for one emitted payload, or a `ValidationFailed` with
-    code `EFFECT_NOT_SERIALIZABLE`.
-
-    `mode="json"` rather than a plain `model_dump()`: an outbox row is
-    persisted and re-read, so `datetime`, `UUID`, `Decimal`, enum and nested
-    model values must already be in their JSON spelling here -- the same
-    normalization `execute()` applies to typed params. A drain rehydrates the
-    declared payload class from this dict, which turns those values back into
-    the types the dispatcher's signature promises.
-
-    Pydantic emits a warning and falls back to `str()` for a value it cannot
-    encode; `json.dumps` is then run to catch anything that survived that,
-    since a row the store cannot write would otherwise fail deep inside the
-    store with an uncoded error naming neither the effect nor the action.
-    """
-    try:
-        dumped = payload.model_dump(mode="json")
-        json.dumps(dumped)
-    except Exception as exc:
-        raise ValidationFailed(
-            f"effect {api_name!r} emitted a payload that cannot be JSON-encoded "
-            f"for the durable outbox ({type(exc).__name__}: {exc}); the action "
-            "was rolled back and nothing was dispatched",
-            code="EFFECT_NOT_SERIALIZABLE",
-        ) from exc
-    return dumped
-
-
 class ActionContext:
     """Per-call handle a typed action handler receives instead of closing
     over the store (spec §6/AC3).
@@ -114,8 +78,6 @@ class ActionContext:
         "_declared_capabilities",
         "_capability_providers",
         "_capability_accesses",
-        "_declared_effects",
-        "_emitted_effects",
     )
 
     def __init__(
@@ -129,8 +91,6 @@ class ActionContext:
         declared_capabilities: frozenset[str] = frozenset(),
         capability_providers: Mapping[CapabilityHandle[Any], object] | None = None,
         capability_accesses: list[CapabilityAccessRecord] | None = None,
-        declared_effects: frozenset[str] = frozenset(),
-        emitted_effects: list[tuple[str, EffectPayload]] | None = None,
     ) -> None:
         self._store = store
         self._source = source
@@ -142,8 +102,6 @@ class ActionContext:
         self._capability_accesses = (
             capability_accesses if capability_accesses is not None else []
         )
-        self._declared_effects = declared_effects
-        self._emitted_effects = emitted_effects if emitted_effects is not None else []
 
     @property
     def consumer(self) -> Consumer:
@@ -151,7 +109,7 @@ class ActionContext:
 
     def capability(self, handle: CapabilityHandle[P]) -> P:
         """The bound provider for `handle`, typed as the handle's protocol
-        (spec `governed-effects` AC6) -- `ctx.capability(LLM)` narrows to
+        -- `ctx.capability(LLM)` narrows to
         `LLMClient` with no cast at the call site.
 
         Fail-closed in three ways (AC8): a handle from another `Ontology` ->
@@ -194,39 +152,12 @@ class ActionContext:
         )
         return cast("P", provider)
 
-    def emit(self, payload: EffectPayload) -> None:
-        """Record one declared outside-write intent for post-commit dispatch.
-
-        Emission is deliberately data-only: it performs no I/O and invokes no
-        dispatcher. The payload is deep-copied at this boundary because
-        `EffectPayload` freezing is shallow; later mutation of a nested list or
-        dict on the handler's instance must not rewrite committed intent.
-
-        The payload class must be declared on this executor's ontology and the
-        current action must name its effect. Refusal happens here, inside the
-        engine-owned transaction, so any writes the handler made first roll
-        back with a `ValidationFailed` carrying `UNDECLARED_EFFECT`.
-        """
-        payload_cls = type(payload)
-        api_name = payload_cls.__dict__.get("_ontary_api_name")
-        registry = payload_cls.__dict__.get("_ontary_registry")
-        if (
-            registry is not self._registry
-            or not isinstance(api_name, str)
-            or api_name not in self._declared_effects
-        ):
-            raise ValidationFailed(
-                f"action did not declare effect payload {payload_cls.__name__!r}",
-                code="UNDECLARED_EFFECT",
-            )
-        self._emitted_effects.append((api_name, payload.model_copy(deep=True)))
-
     def insert(self, obj_type: str, payload: dict[str, Any]) -> str:
         """Insert a new object, source-stamped with this action's `Source`.
 
         When `payload` omits the type's declared primary key, this fills it
-        from the runtime's `id_factory` -- the same seam invocation and
-        effect ids are minted from -- BEFORE the store is touched, so a
+        from the runtime's `id_factory` -- the same seam invocation ids are
+        minted from -- BEFORE the store is touched, so a
         caller who configured `id_factory` for determinism (tests, fixture
         writers, replay) gets every id an action mints, not just the ones
         that already went through it. `store.insert`'s own `uuid.uuid4()`
@@ -340,17 +271,12 @@ class ActionExecutor:
         registry: OntologyRegistry,
         policy: ScopePolicy,
         *,
-        retry_policy: RetryPolicy = DEFAULT_RETRY_POLICY,
         clock: Callable[[], datetime] | None = None,
         id_factory: Callable[[], str] | None = None,
     ) -> None:
         self._store = store
         self._registry = registry
         self._policy = policy
-        # Keyword-only with a default so every existing construction site
-        # (including the ones in tests) keeps working: the outbox is on by
-        # default, not something a caller has to opt into.
-        self._retry_policy = retry_policy
         self._clock = clock if clock is not None else default_clock
         self._id_factory = id_factory if id_factory is not None else default_id_factory
         self._handlers: dict[
@@ -402,7 +328,7 @@ class ActionExecutor:
         entry goes through here, so the consumer -> actor/role/principal
         stamping cannot drift between sites (and the audit-principal AST
         guard has one site to verify instead of seven). `extra` carries the
-        per-site fields (`ts`, `writes`, `effects`, `capability_accesses`)."""
+        per-site fields (`ts`, `writes`, `capability_accesses`)."""
         if "ts" not in extra:
             extra["ts"] = self._clock()
         return AuditEntry(
@@ -504,44 +430,6 @@ class ActionExecutor:
                 )
         return providers
 
-    def _preflight_effects(
-        self,
-        consumer: Consumer,
-        action_name: str,
-        action_def: ActionTypeDef,
-        params_dict: dict[str, Any],
-        invocation_id: str,
-        effect_dispatchers: Mapping[EffectHandle[Any], EffectDispatcher] | None,
-    ) -> dict[str, EffectDispatcher]:
-        """Every declared effect must have a dispatcher bound BEFORE the
-        transaction opens (same shape as the capability pre-flight)."""
-        dispatchers = dict(effect_dispatchers or {})
-        for effect_name in action_def.effects:
-            if not any(
-                handle.registry is self._registry and handle.api_name == effect_name
-                for handle in dispatchers
-            ):
-                self._store.append_audit(
-                    self._audit_entry(
-                        consumer,
-                        action_name,
-                        action_def.target_type,
-                        params_dict,
-                        invocation_id=invocation_id,
-                        outcome="error",
-                    )
-                )
-                raise PreconditionFailed(
-                    f"no dispatcher bound for declared effect "
-                    f"{effect_name!r} on action {action_name!r}",
-                    code="EFFECT_NOT_DISPATCHABLE",
-                )
-        return {
-            handle.api_name: dispatcher
-            for handle, dispatcher in dispatchers.items()
-            if handle.registry is self._registry
-        }
-
     def execute(
         self,
         consumer: Consumer,
@@ -549,7 +437,6 @@ class ActionExecutor:
         params: dict[str, Any] | BaseModel,
         *,
         capability_providers: Mapping[CapabilityHandle[Any], object] | None = None,
-        effect_dispatchers: Mapping[EffectHandle[Any], EffectDispatcher] | None = None,
     ) -> dict[str, Any]:
         """Run the platform pipeline for `action_name`.
 
@@ -559,27 +446,6 @@ class ActionExecutor:
         an already-constructed instance of the handler's registered params
         class (typed execute; used directly, `model_dump()` feeds the same
         declared-shape validation and audit trail).
-
-        Emitted effects are written to the durable `effect_outbox` INSIDE the
-        action transaction (and recorded as `pending` in the audit log, as
-        before), then dispatched synchronously in emission order after commit.
-
-        Delivery is **at-least-once** (spec `durable-effect-outbox`): this
-        inline pass is attempt 1 of the `RetryPolicy`, and an attempt that
-        raises leaves a durable row for `OntologyClient.drain_effects()` to
-        retry. One dispatcher's `Exception` is still isolated from the rest and
-        never changes the handler result. A process-control exception
-        (`KeyboardInterrupt`/`SystemExit`) is still NOT isolated -- it
-        propagates and stops later dispatches, because refusing a Ctrl-C to
-        keep a delivery promise is the wrong trade (M5 AC12) -- but the effects
-        it skipped are now leased pending rows that a later drain delivers,
-        rather than losses.
-
-        The `effects_dispatched` follow-up audit append is best-effort, as is
-        marking a row delivered: either can fail, or the process can die
-        between the outside call and the mark. That window is what makes the
-        guarantee at-least-once rather than exactly-once, and it is why a
-        dispatcher must be idempotent on `EffectMeta.effect_id`.
         """
         if self._store.in_transaction:
             # AC9/§5: refuse FIRST, before any audit write -- an audit row
@@ -593,9 +459,8 @@ class ActionExecutor:
                 code="CALLER_TRANSACTION_REFUSED",
             )
 
-        # One id for this call, stamped on every audit entry it writes -- the
-        # denied/error/ok entry AND the later `effects_dispatched` entry -- so
-        # a reader can correlate them by value instead of by field-matching and
+        # One id for this call, stamped on every audit entry it writes, so a
+        # reader can correlate them by value instead of by field-matching and
         # append order. Minted after the caller-transaction refusal above,
         # which is deliberately not audited and so has nothing to correlate.
         invocation_id = self._id_factory()
@@ -641,20 +506,11 @@ class ActionExecutor:
             invocation_id,
             capability_providers,
         )
-        dispatchers_by_name = self._preflight_effects(
-            consumer,
-            action_name,
-            action_def,
-            params_dict,
-            invocation_id,
-            effect_dispatchers,
-        )
 
         capability_accesses: list[CapabilityAccessRecord] = []
-        emitted_effects: list[tuple[str, EffectPayload]] = []
         target_id = self._resolve_target_id(action_def, params_dict)
         try:
-            result, outbox_records = self._run_transaction(
+            result = self._run_transaction(
                 consumer,
                 action_name,
                 action_def,
@@ -665,7 +521,6 @@ class ActionExecutor:
                 params_obj,
                 providers,
                 capability_accesses,
-                emitted_effects,
                 invocation_id,
             )
         except Exception as exc:
@@ -694,17 +549,6 @@ class ActionExecutor:
             )
             raise
 
-        self._dispatch_inline(
-            consumer,
-            action_name,
-            action_def,
-            params_dict,
-            target_id,
-            emitted_effects,
-            outbox_records,
-            dispatchers_by_name,
-            invocation_id,
-        )
         return result
 
     def _run_transaction(
@@ -719,12 +563,10 @@ class ActionExecutor:
         params_obj: BaseModel | None,
         providers: Mapping[CapabilityHandle[Any], object],
         capability_accesses: list[CapabilityAccessRecord],
-        emitted_effects: list[tuple[str, EffectPayload]],
         invocation_id: str,
-    ) -> tuple[dict[str, Any], list[OutboxRecord]]:
-        """The engine-owned transaction: handler call under write capture,
-        outbox-record construction, `enqueue_effects`, and the pending
-        ("ok") audit entry -- all inside ONE store transaction (spec
+    ) -> dict[str, Any]:
+        """The engine-owned transaction: handler call under write capture
+        and the "ok" audit entry -- all inside ONE store transaction (spec
         AC2/§7). Every handler call runs inside a store transaction here,
         so a handler that raises partway through its own writes rolls back
         ALL of them even if the handler body never called
@@ -750,46 +592,12 @@ class ActionExecutor:
                         declared_capabilities=frozenset(action_def.capabilities),
                         capability_providers=providers,
                         capability_accesses=capability_accesses,
-                        declared_effects=frozenset(action_def.effects),
-                        emitted_effects=emitted_effects,
                     )
                     result = fn(ctx, params_obj)
                 else:
                     result = fn(consumer, params_dict)
                 result = self._validate_result_json_safe(action_name, result)
             emitted_at = self._clock()
-            outbox_records = [
-                OutboxRecord(
-                    effect_id=self._id_factory(),
-                    invocation_id=invocation_id,
-                    seq=seq,
-                    api_name=api_name,
-                    payload=_json_payload(api_name, snapshot),
-                    action=action_name,
-                    actor_id=consumer.actor_id,
-                    role=consumer.role,
-                    emitted_at=emitted_at,
-                    state="pending",
-                    attempts=0,
-                    # Due immediately: the inline attempt happens as soon as
-                    # this transaction commits.
-                    next_attempt_at=emitted_at,
-                    # Born LEASED by this invocation (spec AC5), so a
-                    # drainer running concurrently in another process
-                    # cannot claim the row out from under the inline
-                    # attempt and double-send it. The lease expires on its
-                    # own if this process dies before attempting.
-                    lease_until=emitted_at + self._retry_policy.lease,
-                    updated_at=emitted_at,
-                )
-                for seq, (api_name, snapshot) in enumerate(emitted_effects)
-            ]
-            # Inside the transaction, so the work items commit with the
-            # writes or vanish with them (spec AC1). This CAN raise --
-            # unlike `append_audit`, which never does -- and that is the
-            # point: an effect that cannot be persisted must roll the
-            # action back rather than be quietly dropped.
-            self._store.enqueue_effects(outbox_records)
             pending_entry = self._audit_entry(
                 consumer,
                 action_name,
@@ -798,80 +606,15 @@ class ActionExecutor:
                 invocation_id=invocation_id,
                 outcome="ok",
                 target_id=target_id,
-                # The SAME instant the outbox rows carry, rather than a
-                # second `now()` a few microseconds later: `EffectMeta.ts`
-                # comes off the row, and an audit entry that disagreed with
-                # it about when the effect was emitted would be one more
-                # thing for a reader to reconcile.
+                # Read once, after the handler returned and the write capture
+                # closed, so the entry's `ts` is the instant the action's work
+                # finished rather than a second clock read further down.
                 ts=emitted_at,
                 writes=list(writes),
-                effects=[
-                    EffectRecord(
-                        api_name=record.api_name,
-                        payload=record.payload,
-                        outcome="pending",
-                        effect_id=record.effect_id,
-                    )
-                    for record in outbox_records
-                ],
                 capability_accesses=capability_accesses,
             )
             self._store.append_audit(pending_entry)
-        return result, outbox_records
-
-    def _dispatch_inline(
-        self,
-        consumer: Consumer,
-        action_name: str,
-        action_def: ActionTypeDef,
-        params_dict: dict[str, Any],
-        target_id: str | None,
-        emitted_effects: list[tuple[str, EffectPayload]],
-        outbox_records: list[OutboxRecord],
-        dispatchers_by_name: Mapping[str, EffectDispatcher],
-        invocation_id: str,
-    ) -> None:
-        """Post-commit inline delivery (attempt 1 of the `RetryPolicy`) +
-        the best-effort `effects_dispatched` follow-up entry. The dispatcher
-        gets the handler's own typed snapshot, not the JSON round-trip
-        stored in the row: an inline delivery must not silently differ from
-        what the handler emitted (a DRAIN has no choice and rehydrates from
-        the row)."""
-        if not emitted_effects:
-            return
-        finalized_effects: list[EffectRecord] = []
-        for (api_name, snapshot), record in zip(
-            emitted_effects, outbox_records, strict=True
-        ):
-            _, finalized = _deliver_effect(
-                self._store,
-                record,
-                dispatchers_by_name[api_name],
-                snapshot,
-                self._retry_policy,
-                attempt=1,
-                now=self._clock(),
-            )
-            finalized_effects.append(finalized)
-
-        try:
-            self._store.append_audit(
-                self._audit_entry(
-                    consumer,
-                    action_name,
-                    action_def.target_type,
-                    params_dict,
-                    invocation_id=invocation_id,
-                    outcome="effects_dispatched",
-                    target_id=target_id,
-                    effects=finalized_effects,
-                )
-            )
-        except Exception:
-            # Dispatch has already happened and must not be retried or
-            # reported as an action failure. The durable pending row is
-            # intentionally the only surviving evidence in this case.
-            pass
+        return result
 
     def _deny(
         self,

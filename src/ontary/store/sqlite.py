@@ -18,9 +18,8 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import datetime, timedelta
 from typing import Any
 
 from ontary.audit import (
@@ -30,11 +29,9 @@ from ontary.audit import (
 from ontary.errors import ConflictError
 from ontary.fingerprint import OntologyFingerprint
 from ontary.meta import Cardinality, OntologyRegistry
-from ontary.outbox import OutboxRecord, OutboxState
 from ontary.store import _sql
 from ontary.store._shared import (
     WriteCapture,
-    check_claim_limit,
     check_link_removal_authority,
     check_link_write_authority,
     check_object_removal_authority,
@@ -108,7 +105,7 @@ class ObjectStore(SqliteSchemaMigrator):
 
         `tenant` scopes EVERY read and write this store performs (M8b). Two
         stores on the same file with different tenants cannot see each other's
-        objects, links, audit entries, or outbox rows. It is a constructor
+        objects, links, or audit entries. It is a constructor
         argument rather than a per-call one on purpose: a tenant passed per call
         is a tenant somebody eventually forgets to pass, and the failure mode of
         that mistake is a cross-tenant read.
@@ -146,8 +143,8 @@ class ObjectStore(SqliteSchemaMigrator):
         raising `SystemExit`/`GeneratorExit` mid-transaction, previously left the
         transaction un-rolled-back, so writes made before the interrupt could be
         read by a later caller on this connection or swept into an outer commit.
-        Pre-existing, but M5's atomicity claim -- the pending effect record and
-        the ontology writes are ONE fact -- rests directly on this, so it is fixed
+        Pre-existing, but the atomicity claim -- an action's audit entry and its
+        ontology writes are ONE fact -- rests directly on this, so it is fixed
         here rather than left as a footnote. The exception is always re-raised:
         process-control exceptions are cleaned up after, never swallowed.
         """
@@ -177,10 +174,9 @@ class ObjectStore(SqliteSchemaMigrator):
                 # `_txn_depth` returned to 0. The caller's error handler then
                 # called `append_audit`, which opens a fresh transaction, and its
                 # commit committed the abandoned work too. Reproduced: an action
-                # whose commit failed had its object write and its `pending`
-                # effect record become DURABLE, with audit rows ["ok", "error"],
-                # while the caller received the commit error and no dispatcher
-                # ever ran. Same silent transactional-integrity class as the
+                # whose commit failed had its object write become DURABLE, with
+                # audit rows ["ok", "error"], while the caller received the
+                # commit error. Same silent transactional-integrity class as the
                 # BaseException rollback gap, one branch over.
                 try:
                     self._conn.commit()
@@ -649,7 +645,6 @@ class ObjectStore(SqliteSchemaMigrator):
                     fields.params,
                     fields.outcome,
                     fields.writes,
-                    fields.effects,
                     fields.capability_accesses,
                     fields.invocation_id,
                     fields.kind,
@@ -658,168 +653,6 @@ class ObjectStore(SqliteSchemaMigrator):
                 ),
                 dialect="sqlite",
             )
-
-    # -- effect outbox ---------------------------------------------------
-
-    @staticmethod
-    def _row_to_outbox(row: sqlite3.Row) -> OutboxRecord:
-        lease_until = row["lease_until"]
-        return OutboxRecord(
-            effect_id=row["effect_id"],
-            invocation_id=row["invocation_id"],
-            seq=row["seq"],
-            api_name=row["api_name"],
-            payload=json.loads(row["payload"]),
-            action=row["action"],
-            actor_id=row["actor_id"],
-            role=row["role"],
-            emitted_at=datetime.fromisoformat(row["emitted_at"]),
-            state=row["state"],
-            attempts=row["attempts"],
-            next_attempt_at=datetime.fromisoformat(row["next_attempt_at"]),
-            lease_until=(
-                datetime.fromisoformat(lease_until) if lease_until is not None else None
-            ),
-            last_error=row["last_error"],
-            updated_at=datetime.fromisoformat(row["updated_at"]),
-        )
-
-    def enqueue_effects(self, records: Sequence[OutboxRecord]) -> None:
-        """Insert outbox rows inside the caller's transaction (spec AC1).
-
-        Deliberately NOT `_safe_json_dumps` like `append_audit`: an audit entry
-        must persist even when a param cannot be encoded, because a
-        half-described record of something that happened beats no record. An
-        outbox row is the opposite -- it is the instruction for something that
-        has NOT happened yet, and a payload placeholder would be dispatched
-        outward as though it were the author's data. A payload that cannot be
-        JSON-encoded raises here, inside the action transaction, so the whole
-        action rolls back and nothing is sent."""
-        with self.transaction() as conn:
-            for record in records:
-                _sql.execute(
-                    conn,
-                    _sql.render(
-                        _sql.EFFECT_OUTBOX_INSERT_TEMPLATE,
-                        "sqlite",
-                        placeholder_count=len(_sql.EFFECT_OUTBOX_COLUMNS),
-                    ),
-                    (
-                        record.effect_id,
-                        record.invocation_id,
-                        record.seq,
-                        record.api_name,
-                        json.dumps(record.payload),
-                        record.action,
-                        record.actor_id,
-                        record.role,
-                        record.emitted_at.isoformat(),
-                        record.state,
-                        record.attempts,
-                        record.next_attempt_at.isoformat(),
-                        (
-                            record.lease_until.isoformat()
-                            if record.lease_until is not None
-                            else None
-                        ),
-                        record.last_error,
-                        record.updated_at.isoformat(),
-                        self._tenant,
-                    ),
-                    dialect="sqlite",
-                )
-
-    def claim_due_effects(
-        self, *, limit: int, now: datetime, lease: timedelta
-    ) -> list[OutboxRecord]:
-        """Select-then-lease in ONE transaction (spec AC5).
-
-        The `UPDATE` re-states the whole eligibility predicate rather than
-        trusting the ids the `SELECT` just produced: on this engine's
-        connections nothing else can interleave inside the transaction, but
-        repeating the predicate means the claim is still correct if a future
-        backend runs it at a weaker isolation level, and it costs one indexed
-        comparison. ISO-8601 UTC strings compare lexicographically in the same
-        order as the instants they denote, which is what makes
-        `next_attempt_at <= ?` a valid SQL comparison against TEXT.
-        """
-        check_claim_limit(limit)
-        now_iso = now.isoformat()
-        lease_until = (now + lease).isoformat()
-        with self.transaction() as conn:
-            rows = _sql.execute(
-                conn,
-                _sql.render(_sql.EFFECT_OUTBOX_CLAIM_SELECT_TEMPLATE, "sqlite"),
-                (now_iso, now_iso, self._tenant, limit),
-                dialect="sqlite",
-            ).rows
-            claimed: list[OutboxRecord] = []
-            for row in rows:
-                updated = _sql.execute(
-                    conn,
-                    _sql.render(_sql.EFFECT_OUTBOX_CLAIM_UPDATE_TEMPLATE, "sqlite"),
-                    (
-                        lease_until,
-                        now_iso,
-                        row["effect_id"],
-                        now_iso,
-                        now_iso,
-                        self._tenant,
-                    ),
-                    dialect="sqlite",
-                )
-                if updated.rowcount == 1:
-                    claimed.append(
-                        self._row_to_outbox(row).model_copy(
-                            update={
-                                "lease_until": datetime.fromisoformat(lease_until),
-                                "updated_at": now,
-                            }
-                        )
-                    )
-        return claimed
-
-    def release_effect_claim(self, effect_id: str, *, now: datetime) -> None:
-        with self.transaction() as conn:
-            _sql.execute(
-                conn,
-                _sql.render(_sql.EFFECT_OUTBOX_RELEASE_TEMPLATE, "sqlite"),
-                (now.isoformat(), effect_id, self._tenant),
-                dialect="sqlite",
-            )
-
-    def resolve_effect(
-        self,
-        effect_id: str,
-        *,
-        state: OutboxState,
-        next_attempt_at: datetime,
-        error: str | None,
-        now: datetime,
-    ) -> None:
-        with self.transaction() as conn:
-            _sql.execute(
-                conn,
-                _sql.render(_sql.EFFECT_OUTBOX_RESOLVE_TEMPLATE, "sqlite"),
-                (
-                    state,
-                    next_attempt_at.isoformat(),
-                    error,
-                    now.isoformat(),
-                    effect_id,
-                    self._tenant,
-                ),
-                dialect="sqlite",
-            )
-
-    def outbox_entries(self) -> list[OutboxRecord]:
-        rows = _sql.execute(
-            self._conn,
-            _sql.render(_sql.EFFECT_OUTBOX_SELECT_TEMPLATE, "sqlite"),
-            (self._tenant,),
-            dialect="sqlite",
-        ).rows
-        return [self._row_to_outbox(row) for row in rows]
 
     # -- ontology fingerprint --------------------------------------------
 

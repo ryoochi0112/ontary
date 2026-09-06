@@ -69,9 +69,8 @@ from typing import TYPE_CHECKING, Annotated, Any, cast
 
 from pydantic import Field, SkipValidation
 
-from ontary.authoring import CapabilityHandle, EffectHandle, Ontology
+from ontary.authoring import CapabilityHandle, Ontology
 from ontary.client import OntologyClient, OntologyRuntime
-from ontary.effects import EffectDispatcher
 from ontary.errors import OntaryError, PermissionDenied, ValidationFailed
 from ontary.meta import ActionTypeDef, FunctionDef, LinkTypeDef, ObjectTypeDef
 from ontary.ontology import OntologyDef, resolve_definition
@@ -623,7 +622,6 @@ def _action_type_payload(defn: ActionTypeDef) -> dict[str, Any]:
         "executable_by_roles": list(defn.executable_by_roles),
         "description": defn.description,
         "capabilities": list(defn.capabilities),
-        "effects": list(defn.effects),
         "parameters": [
             {
                 "name": p.name,
@@ -932,7 +930,6 @@ def build_mcp_server(
     *,
     name: str | None = None,
     capabilities: Mapping[CapabilityHandle[Any], object] | None = None,
-    effects: Mapping[EffectHandle[Any], EffectDispatcher] | None = None,
 ) -> FastMCP:
     """Build a `FastMCP` server bound to exactly one `(ontology, store,
     consumer)` triple -- one server process, one Consumer identity (spec
@@ -960,7 +957,6 @@ def build_mcp_server(
         store,
         consumer,
         capabilities=capabilities,
-        effects=effects,
     )
 
     definition = resolve_definition(ontology)
@@ -976,7 +972,6 @@ def build_multi_consumer_mcp_server(
     resolve_consumer: ConsumerResolver,
     name: str | None = None,
     capabilities: Mapping[CapabilityHandle[Any], object] | None = None,
-    effects: Mapping[EffectHandle[Any], EffectDispatcher] | None = None,
     token_verifier: TokenVerifier | None = None,
     auth: AuthSettings | None = None,
 ) -> FastMCP:
@@ -1070,7 +1065,6 @@ def build_multi_consumer_mcp_server(
         ontology,
         store,
         capabilities=capabilities,
-        effects=effects,
     )
     get_access_token = _load_get_access_token()
 

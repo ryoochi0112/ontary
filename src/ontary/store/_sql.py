@@ -43,33 +43,12 @@ AUDIT_LOG_COLUMNS: tuple[str, ...] = (
     "params",
     "outcome",
     "writes",
-    "effects",
     "capability_accesses",
     "invocation_id",
     "kind",
     "tenant",
     "principal",
 )
-
-EFFECT_OUTBOX_COLUMNS: tuple[str, ...] = (
-    "effect_id",
-    "invocation_id",
-    "seq",
-    "api_name",
-    "payload",
-    "action",
-    "actor_id",
-    "role",
-    "emitted_at",
-    "state",
-    "attempts",
-    "next_attempt_at",
-    "lease_until",
-    "last_error",
-    "updated_at",
-    "tenant",
-)
-EFFECT_OUTBOX_ROW_COLUMNS: tuple[str, ...] = EFFECT_OUTBOX_COLUMNS[:-1]
 
 ONTOLOGY_FINGERPRINT_COLUMNS: tuple[str, ...] = (
     "id",
@@ -87,8 +66,6 @@ ONTOLOGY_FINGERPRINT_READ_COLUMNS: tuple[str, ...] = (
 
 _AUDIT_LOG_COLUMN_LIST = ", ".join(AUDIT_LOG_COLUMNS)
 _OBJECT_COLUMN_LIST = ", ".join(OBJECT_COLUMNS)
-_EFFECT_OUTBOX_COLUMN_LIST = ", ".join(EFFECT_OUTBOX_COLUMNS)
-_EFFECT_OUTBOX_ROW_COLUMN_LIST = ", ".join(EFFECT_OUTBOX_ROW_COLUMNS)
 _ONTOLOGY_FINGERPRINT_COLUMN_LIST = ", ".join(ONTOLOGY_FINGERPRINT_COLUMNS)
 _ONTOLOGY_FINGERPRINT_READ_COLUMN_LIST = ", ".join(ONTOLOGY_FINGERPRINT_READ_COLUMNS)
 LINKS_FROM_COLUMNS: tuple[str, ...] = ("to_id",)
@@ -169,9 +146,9 @@ _TENANT_COLUMN_PREFIX: DialectText = {
 _AUDIT_PRINCIPAL_PREFIX: DialectText = {
     "sqlite": (
         "    -- The principal that authenticated the call this entry audits (M10,\n"
-        "    -- spec `multi-consumer-mcp` AC8/AC10). NULL for every pre-M10 row and\n"
-        '    -- for a redelivered outbox effect (§4.2) -- both mean "we do not know\n'
-        '    -- who authenticated", never "nobody did", so no default is correct here.\n'
+        '    -- spec `multi-consumer-mcp` AC8/AC10). NULL for every pre-M10 row --\n'
+        '    -- which means "we do not know who authenticated", never "nobody did",\n'
+        "    -- so no default is correct here.\n"
     ),
     "postgres": "",
 }
@@ -215,40 +192,6 @@ _PAGE_TOKEN_INDEX_PREFIX: DialectText = {
         "-- own constraint enforcement for free (a `page_token` collision\n"
         "-- -- practically impossible for uuid4 -- raises on INSERT\n"
         "-- rather than silently letting two rows share a cursor).\n"
-    ),
-    "postgres": "",
-}
-_OUTBOX_PREFIX: DialectText = {
-    "sqlite": (
-        "\n"
-        "-- The durable effect outbox (spec `durable-effect-outbox` AC1/AC2).\n"
-        "-- Deliberately NOT more `audit_log` columns: delivery state\n"
-        "-- CHANGES (attempts, next_attempt_at, lease_until), and the audit\n"
-        "-- log is append-only. Rows are written inside the emitting\n"
-        "-- action's own transaction, so they commit with the ontology\n"
-        "-- writes or not at all, and are mutated only by this store's\n"
-        "-- claim/release/resolve methods.\n"
-    ),
-    "postgres": "\n",
-}
-_OUTBOX_SEQUENCE_INDEX_PREFIX: DialectText = {
-    "sqlite": (
-        "\n"
-        "-- Emission order is unique per invocation: two rows sharing an\n"
-        "-- (invocation_id, seq) would mean one emission was recorded\n"
-        "-- twice, so SQLite refuses the second rather than leaving a\n"
-        "-- duplicate delivery for the recipient to discover.\n"
-    ),
-    "postgres": "",
-}
-_OUTBOX_DUE_INDEX_PREFIX: DialectText = {
-    "sqlite": (
-        "\n"
-        "-- `claim_due_effects` filters `state = 'pending' AND\n"
-        "-- next_attempt_at <= ?` on every drain. Without this index that is\n"
-        "-- a full scan of a table whose delivered/failed rows are kept\n"
-        "-- forever (a dead letter a caller can still read is worth more\n"
-        "-- than a small table).\n"
     ),
     "postgres": "",
 }
@@ -384,7 +327,6 @@ TABLE_SPECS: tuple[TableSpec, ...] = (
             ColumnSpec("params", "TEXT", "NOT NULL"),
             ColumnSpec("outcome", "TEXT", "NOT NULL"),
             ColumnSpec("writes", "TEXT", "NOT NULL DEFAULT '[]'"),
-            ColumnSpec("effects", "TEXT", "NOT NULL DEFAULT '[]'"),
             ColumnSpec("capability_accesses", "TEXT", "NOT NULL DEFAULT '[]'"),
             ColumnSpec("invocation_id", "TEXT", "NULL"),
             ColumnSpec("kind", "TEXT", "NOT NULL DEFAULT 'action'"),
@@ -405,58 +347,12 @@ TABLE_SPECS: tuple[TableSpec, ...] = (
             "params",
             "outcome",
             "writes",
-            "effects",
             "capability_accesses",
             "invocation_id",
             "kind",
             "tenant",
             "principal",
         ),
-    ),
-    TableSpec(
-        name="effect_outbox",
-        columns=(
-            ColumnSpec("effect_id", "TEXT", "PRIMARY KEY"),
-            ColumnSpec("invocation_id", "TEXT", "NOT NULL"),
-            ColumnSpec("seq", "INTEGER", "NOT NULL"),
-            ColumnSpec("api_name", "TEXT", "NOT NULL"),
-            ColumnSpec("payload", "TEXT", "NOT NULL"),
-            ColumnSpec("action", "TEXT", "NOT NULL"),
-            ColumnSpec("actor_id", "TEXT", "NOT NULL"),
-            ColumnSpec("role", "TEXT", "NOT NULL"),
-            ColumnSpec("emitted_at", "TEXT", "NOT NULL"),
-            ColumnSpec("state", "TEXT", "NOT NULL"),
-            ColumnSpec("attempts", "INTEGER", "NOT NULL DEFAULT 0"),
-            ColumnSpec("next_attempt_at", "TEXT", "NOT NULL"),
-            ColumnSpec("lease_until", "TEXT", "NULL"),
-            ColumnSpec("last_error", "TEXT", "NULL"),
-            ColumnSpec("updated_at", "TEXT", "NOT NULL"),
-            ColumnSpec("tenant", "TEXT", "NOT NULL DEFAULT 'default'"),
-        ),
-        indexes=(
-            IndexSpec(
-                "idx_effect_outbox_invocation_seq",
-                "effect_outbox",
-                ("invocation_id", "seq"),
-                unique=True,
-                prefix=_OUTBOX_SEQUENCE_INDEX_PREFIX,
-                on_newline=True,
-                sqlite_order=9,
-                postgres_order=11,
-            ),
-            IndexSpec(
-                "idx_effect_outbox_due",
-                "effect_outbox",
-                ("tenant", "state", "next_attempt_at"),
-                prefix=_OUTBOX_DUE_INDEX_PREFIX,
-                on_newline=True,
-                sqlite_order=10,
-                postgres_order=12,
-            ),
-        ),
-        prefix=_OUTBOX_PREFIX,
-        sqlite_order=8,
-        postgres_order=4,
     ),
     TableSpec(
         name="ontology_fingerprint",
@@ -622,68 +518,6 @@ AUDIT_LOG_SELECT_TEMPLATE = f"""
 SELECT {_AUDIT_LOG_COLUMN_LIST}
 FROM audit_log
 WHERE tenant = {{p}} ORDER BY seq ASC
-"""
-
-EFFECT_OUTBOX_INSERT_TEMPLATE = f"""
-INSERT INTO effect_outbox
-    ({_EFFECT_OUTBOX_COLUMN_LIST})
-VALUES ({{placeholders}})
-"""
-
-EFFECT_OUTBOX_SELECT_TEMPLATE = f"""
-SELECT {_EFFECT_OUTBOX_ROW_COLUMN_LIST} FROM effect_outbox
-WHERE tenant = {{p}} ORDER BY emitted_at ASC, seq ASC
-"""
-
-EFFECT_OUTBOX_CLAIM_SELECT_TEMPLATE = f"""
-SELECT {_EFFECT_OUTBOX_ROW_COLUMN_LIST} FROM effect_outbox
-WHERE state = 'pending'
-  AND next_attempt_at <= {{p}}
-  AND (lease_until IS NULL OR lease_until <= {{p}})
-  AND tenant = {{p}}
-ORDER BY emitted_at ASC, seq ASC
-LIMIT {{p}}
-"""
-
-EFFECT_OUTBOX_CLAIM_UPDATE_TEMPLATE = """
-UPDATE effect_outbox
-SET lease_until = {p}, updated_at = {p}
-WHERE effect_id = {p}
-  AND state = 'pending'
-  AND next_attempt_at <= {p}
-  AND (lease_until IS NULL OR lease_until <= {p})
-  AND tenant = {p}
-"""
-
-EFFECT_OUTBOX_POSTGRES_CLAIM_TEMPLATE = f"""
-UPDATE effect_outbox SET lease_until = {{p}}, updated_at = {{p}}
-WHERE effect_id IN (
-    SELECT effect_id FROM effect_outbox
-    WHERE state = 'pending'
-      AND next_attempt_at <= {{p}}
-      AND (lease_until IS NULL OR lease_until <= {{p}})
-      AND tenant = {{p}}
-    ORDER BY emitted_at ASC, seq ASC
-    LIMIT {{p}}
-    FOR UPDATE SKIP LOCKED
-)
-RETURNING {_EFFECT_OUTBOX_ROW_COLUMN_LIST}
-"""
-
-EFFECT_OUTBOX_RELEASE_TEMPLATE = """
-UPDATE effect_outbox SET lease_until = NULL, updated_at = {p}
-WHERE effect_id = {p} AND tenant = {p}
-"""
-
-EFFECT_OUTBOX_RESOLVE_TEMPLATE = """
-UPDATE effect_outbox
-SET state = {p},
-    attempts = attempts + 1,
-    next_attempt_at = {p},
-    lease_until = NULL,
-    last_error = {p},
-    updated_at = {p}
-WHERE effect_id = {p} AND tenant = {p}
 """
 
 ONTOLOGY_FINGERPRINT_SELECT_TEMPLATE = f"""

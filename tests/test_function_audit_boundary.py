@@ -113,9 +113,8 @@ def test_capability_using_function_is_audited_by_default(client: OntologyClient)
     assert entry.actor == "a1"
     assert entry.params == {"tz": "UTC"}
     assert [(a.api_name, a.count) for a in entry.capability_accesses] == [("Clock", 1)]
-    # Functions cannot write or emit; those columns are empty by construction.
+    # Functions cannot write; that column is empty by construction.
     assert entry.writes == []
-    assert entry.effects == []
     assert entry.invocation_id is not None
 
 
@@ -364,7 +363,6 @@ def test_releasing_a_hidden_aggregate_is_audited_without_any_declared_capability
     assert entry.params == {"shelf_id": "shelf-1"}
     assert entry.invocation_id is not None
     assert entry.writes == []
-    assert entry.effects == []
 
 
 def test_grouped_hidden_aggregate_is_refused_without_a_disclosure_audit(

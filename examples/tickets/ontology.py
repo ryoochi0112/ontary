@@ -36,8 +36,6 @@ from ontary import (
     BoundQuery,
     Cardinality,
     DirectProperty,
-    EffectHandle,
-    EffectPayload,
     LinkHandle,
     ObjectStore,
     Ontology,
@@ -144,18 +142,6 @@ escalationAssignedTo: LinkHandle[Escalation, Agent] = _ontology.link(
 )
 
 
-class TicketEscalationNotification(EffectPayload):
-    ticket_id: str
-    reason: str | None = None
-
-
-NOTIFY_TICKET_ESCALATION: EffectHandle[TicketEscalationNotification] = _ontology.effect(
-    TicketEscalationNotification,
-    api_name="NotifyTicketEscalation",
-    description="Notifies the owning queue that a ticket was escalated.",
-)
-
-
 class EscalateTicketParams(ActionParams):
     ticket_id: str = target(Ticket)
     reason: str | None = None
@@ -168,7 +154,6 @@ class EscalateTicketParams(ActionParams):
     display_name="Escalate Ticket",
     description="Escalates a Ticket as urgent.",
     api_name="EscalateTicket",
-    effects=[NOTIFY_TICKET_ESCALATION],
 )
 def _escalate_ticket(ctx: ActionContext, params: EscalateTicketParams) -> dict[str, str]:
     """Same precondition + write as the pre-M4b `fixtures._escalate_ticket_handler`
@@ -180,12 +165,6 @@ def _escalate_ticket(ctx: ActionContext, params: EscalateTicketParams) -> dict[s
             code="PRECONDITION_FAILED",
         )
     ctx.update("Ticket", params.ticket_id, {"escalated": True})
-    ctx.emit(
-        TicketEscalationNotification(
-            ticket_id=params.ticket_id,
-            reason=params.reason,
-        )
-    )
     return {"ticket_id": params.ticket_id}
 
 
@@ -304,7 +283,5 @@ __all__ = [
     "OpenEscalationParams",
     "ResolveTicketParams",
     "ArchiveTicketParams",
-    "TicketEscalationNotification",
-    "NOTIFY_TICKET_ESCALATION",
     "build_ontology",
 ]

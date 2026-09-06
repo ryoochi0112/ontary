@@ -14,8 +14,6 @@ from typing import Literal
 
 from ontary import (
     Consumer,
-    EffectMeta,
-    EffectPayload,
     InMemoryStore,
     Ontology,
 )
@@ -23,27 +21,10 @@ from ontary import (
 __all__ = [
     "FixedClock",
     "SequentialIds",
-    "capture_effects",
     "consumer",
     "make_store",
     "raises_code",
 ]
-
-
-class _CapturedEffects:
-    """Callable dispatcher returned by :func:`capture_effects`."""
-
-    def __init__(self) -> None:
-        self.effects: list[tuple[EffectPayload, EffectMeta]] = []
-
-    @property
-    def records(self) -> list[tuple[EffectPayload, EffectMeta]]:
-        """Alias for :attr:`effects` for callers that prefer that name."""
-        return self.effects
-
-    def __call__(self, payload: EffectPayload, meta: EffectMeta) -> None:
-        """Record the dispatch request without performing outside I/O."""
-        self.effects.append((payload, meta))
 
 
 def make_store(ontology: Ontology) -> InMemoryStore:
@@ -94,15 +75,6 @@ def raises_code(code: str) -> Iterator[None]:
             ) from exc
     else:
         raise AssertionError(f"expected ontary error code {code!r}, but no error raised")
-
-
-def capture_effects() -> _CapturedEffects:
-    """Return an effect dispatcher whose calls are kept in ``.effects``.
-
-    Each item is ``(payload, meta)``.  The list belongs to this returned
-    dispatcher, so separate test runs do not share mutable state.
-    """
-    return _CapturedEffects()
 
 
 class FixedClock:

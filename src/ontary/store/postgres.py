@@ -34,20 +34,14 @@ What genuinely differs from SQLite, and why each choice was made:
   above the seam -- so JSONB would buy nothing today and cost byte-for-byte
   parity with the other two backends. Revisit when a query actually needs it,
   with its own parity review.
-- **`FOR UPDATE SKIP LOCKED` for outbox claims.** The lease semantics are
-  identical to the other backends (that is the contract), but Postgres can also
-  make two concurrent drainers cheap and correct at the row level instead of
-  relying on the lease alone. This is the one place where the same declared
-  behavior gets a genuinely better implementation.
 """
 
 from __future__ import annotations
 
 import json
 import uuid
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import datetime, timedelta
 from typing import Any
 
 from ontary.audit import (
@@ -57,11 +51,9 @@ from ontary.audit import (
 from ontary.errors import ConflictError
 from ontary.fingerprint import OntologyFingerprint
 from ontary.meta import Cardinality, OntologyRegistry
-from ontary.outbox import OutboxRecord, OutboxState
 from ontary.store import _sql
 from ontary.store._shared import (
     WriteCapture,
-    check_claim_limit,
     check_link_removal_authority,
     check_link_write_authority,
     check_object_removal_authority,
@@ -150,8 +142,6 @@ ALTER TABLE links ENABLE ROW LEVEL SECURITY;
 ALTER TABLE links FORCE ROW LEVEL SECURITY;
 ALTER TABLE audit_log ENABLE ROW LEVEL SECURITY;
 ALTER TABLE audit_log FORCE ROW LEVEL SECURITY;
-ALTER TABLE effect_outbox ENABLE ROW LEVEL SECURITY;
-ALTER TABLE effect_outbox FORCE ROW LEVEL SECURITY;
 
 CREATE POLICY tenant_isolation ON objects USING
     (tenant = current_setting('ontary.tenant', true))
@@ -160,9 +150,6 @@ CREATE POLICY tenant_isolation ON links USING
     (tenant = current_setting('ontary.tenant', true))
     WITH CHECK (tenant = current_setting('ontary.tenant', true));
 CREATE POLICY tenant_isolation ON audit_log USING
-    (tenant = current_setting('ontary.tenant', true))
-    WITH CHECK (tenant = current_setting('ontary.tenant', true));
-CREATE POLICY tenant_isolation ON effect_outbox USING
     (tenant = current_setting('ontary.tenant', true))
     WITH CHECK (tenant = current_setting('ontary.tenant', true));
 """
@@ -746,7 +733,6 @@ class PostgresStore:
                     fields.params,
                     fields.outcome,
                     fields.writes,
-                    fields.effects,
                     fields.capability_accesses,
                     fields.invocation_id,
                     fields.kind,
@@ -766,140 +752,6 @@ class PostgresStore:
         return [
             decode_audit_entry(dict(zip(_sql.AUDIT_LOG_COLUMNS, row, strict=True))) for row in rows
         ]
-
-    # -- effect outbox ---------------------------------------------------
-
-    @staticmethod
-    def _row_to_outbox(row: tuple[Any, ...]) -> OutboxRecord:
-        return OutboxRecord(
-            effect_id=row[0],
-            invocation_id=row[1],
-            seq=row[2],
-            api_name=row[3],
-            payload=json.loads(row[4]),
-            action=row[5],
-            actor_id=row[6],
-            role=row[7],
-            emitted_at=datetime.fromisoformat(row[8]),
-            state=row[9],
-            attempts=row[10],
-            next_attempt_at=datetime.fromisoformat(row[11]),
-            lease_until=(datetime.fromisoformat(row[12]) if row[12] is not None else None),
-            last_error=row[13],
-            updated_at=datetime.fromisoformat(row[14]),
-        )
-
-    def enqueue_effects(self, records: Sequence[OutboxRecord]) -> None:
-        with self.transaction() as conn:
-            for record in records:
-                _sql.execute(
-                    conn,
-                    _sql.render(
-                        _sql.EFFECT_OUTBOX_INSERT_TEMPLATE,
-                        "postgres",
-                        placeholder_count=len(_sql.EFFECT_OUTBOX_COLUMNS),
-                    ),
-                    (
-                        record.effect_id,
-                        record.invocation_id,
-                        record.seq,
-                        record.api_name,
-                        json.dumps(record.payload),
-                        record.action,
-                        record.actor_id,
-                        record.role,
-                        record.emitted_at.isoformat(),
-                        record.state,
-                        record.attempts,
-                        record.next_attempt_at.isoformat(),
-                        (
-                            record.lease_until.isoformat()
-                            if record.lease_until is not None
-                            else None
-                        ),
-                        record.last_error,
-                        record.updated_at.isoformat(),
-                        self._tenant,
-                    ),
-                    dialect="postgres",
-                )
-
-    def claim_due_effects(
-        self, *, limit: int, now: datetime, lease: timedelta
-    ) -> list[OutboxRecord]:
-        """Lease due rows, using `FOR UPDATE SKIP LOCKED`.
-
-        The declared semantics are the other backends' (state, due time, and
-        lease decide eligibility). Postgres adds real row-level exclusion on top,
-        so two drainers in two processes never even contend for the same row --
-        the difference between a lease that is the ONLY protection and a lease
-        that is the recovery mechanism for a crashed holder.
-        """
-        check_claim_limit(limit)
-        now_iso = now.isoformat()
-        lease_until = (now + lease).isoformat()
-        with self.transaction() as conn:
-            rows = _sql.execute(
-                conn,
-                _sql.render(_sql.EFFECT_OUTBOX_POSTGRES_CLAIM_TEMPLATE, "postgres"),
-                (
-                    lease_until,
-                    now_iso,
-                    now_iso,
-                    now_iso,
-                    self._tenant,
-                    limit,
-                ),
-                dialect="postgres",
-            ).rows
-        claimed = [self._row_to_outbox(row) for row in rows]
-        # `RETURNING` hands back the post-update row, so ordering is not
-        # guaranteed by the UPDATE itself -- restore emission order here, which is
-        # the contract the other backends satisfy via their ORDER BY.
-        claimed.sort(key=lambda record: (record.emitted_at, record.seq))
-        return claimed
-
-    def release_effect_claim(self, effect_id: str, *, now: datetime) -> None:
-        with self.transaction() as conn:
-            _sql.execute(
-                conn,
-                _sql.render(_sql.EFFECT_OUTBOX_RELEASE_TEMPLATE, "postgres"),
-                (now.isoformat(), effect_id, self._tenant),
-                dialect="postgres",
-            )
-
-    def resolve_effect(
-        self,
-        effect_id: str,
-        *,
-        state: OutboxState,
-        next_attempt_at: datetime,
-        error: str | None,
-        now: datetime,
-    ) -> None:
-        with self.transaction() as conn:
-            _sql.execute(
-                conn,
-                _sql.render(_sql.EFFECT_OUTBOX_RESOLVE_TEMPLATE, "postgres"),
-                (
-                    state,
-                    next_attempt_at.isoformat(),
-                    error,
-                    now.isoformat(),
-                    effect_id,
-                    self._tenant,
-                ),
-                dialect="postgres",
-            )
-
-    def outbox_entries(self) -> list[OutboxRecord]:
-        rows = _sql.execute(
-            self._conn,
-            _sql.render(_sql.EFFECT_OUTBOX_SELECT_TEMPLATE, "postgres"),
-            (self._tenant,),
-            dialect="postgres",
-        ).rows
-        return [self._row_to_outbox(row) for row in rows]
 
     # -- ontology fingerprint --------------------------------------------
 

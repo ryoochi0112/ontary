@@ -23,7 +23,6 @@ from typing import Any, NamedTuple, Protocol
 from ontary.audit import (
     AuditEntry,
     CapabilityAccessRecord,
-    EffectRecord,
     WriteRecord,
     _safe_json_dumps,
 )
@@ -65,7 +64,6 @@ class AuditRowFields(NamedTuple):
     params: str
     outcome: str
     writes: str
-    effects: str
     capability_accesses: str
     invocation_id: str | None
     kind: str
@@ -75,9 +73,7 @@ class AuditRowFields(NamedTuple):
 def encode_audit_entry(entry: AuditEntry) -> AuditRowFields:
     """`AuditEntry` -> persisted string forms, exactly as every backend
     already wrote them: `_safe_json_dumps` so an unencodable value degrades
-    to a placeholder rather than raising (declared-contracts §3 AC12), and
-    each effect's `payload` pre-encoded through the same safe path (the
-    existing double-encode, preserved verbatim)."""
+    to a placeholder rather than raising (declared-contracts §3 AC12)."""
     return AuditRowFields(
         ts=entry.ts.isoformat(),
         actor=entry.actor,
@@ -88,15 +84,6 @@ def encode_audit_entry(entry: AuditEntry) -> AuditRowFields:
         params=_safe_json_dumps(entry.params),
         outcome=entry.outcome,
         writes=_safe_json_dumps([w.model_dump() for w in entry.writes]),
-        effects=_safe_json_dumps(
-            [
-                {
-                    **effect.model_dump(),
-                    "payload": json.loads(_safe_json_dumps(effect.payload)),
-                }
-                for effect in entry.effects
-            ]
-        ),
         capability_accesses=_safe_json_dumps(
             [access.model_dump() for access in entry.capability_accesses]
         ),
@@ -120,7 +107,6 @@ def decode_audit_entry(row: AuditRowLike) -> AuditEntry:
         params=json.loads(row["params"]),
         outcome=row["outcome"],
         writes=[WriteRecord(**w) for w in json.loads(row["writes"])],
-        effects=[EffectRecord(**effect) for effect in json.loads(row["effects"])],
         capability_accesses=[
             CapabilityAccessRecord(**access)
             for access in json.loads(row["capability_accesses"])
@@ -308,15 +294,6 @@ def check_read_page_batch(batch: int) -> None:
     if batch < 1:
         raise ValidationFailed(
             f"read_page batch must be >= 1, got {batch!r}",
-            code="INVALID_BATCH",
-        )
-
-
-def check_claim_limit(limit: int) -> None:
-    """`claim_due_effects`' limit refusal, worded once for all backends."""
-    if limit < 1:
-        raise ValidationFailed(
-            f"claim_due_effects: limit must be >= 1, got {limit}",
             code="INVALID_BATCH",
         )
 

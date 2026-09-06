@@ -62,7 +62,6 @@ from ontary._typed_api import _TypedReadMixin, list_objects
 from ontary.actions import ActionError, ActionExecutor, TypedHandler
 from ontary.audit import AuditEntry, CapabilityAccessRecord
 from ontary.declarations import Declarations, declarations
-from ontary.effects import EffectDispatcher
 from ontary.errors import ValidationFailed
 from ontary.functions import BoundQuery
 from ontary.ingest import IngestError, IngestReport, bulk_link, bulk_upsert
@@ -70,19 +69,11 @@ from ontary.meta import OntologyRegistry
 from ontary.model import (
     ActionParams,
     CapabilityHandle,
-    EffectHandle,
     LinkHandle,
     OntologyObject,
     _class_stamp,
 )
 from ontary.ontology import OntologyDef, resolve_definition
-from ontary.outbox import (
-    DEFAULT_RETRY_POLICY,
-    DrainReport,
-    OutboxRecord,
-    RetryPolicy,
-)
-from ontary.outbox_drain import drain_effect_outbox
 from ontary.query import (
     _UNSET_LIMIT,
     DEFAULT_READ_LIMIT,
@@ -111,29 +102,21 @@ def _checked_provider_map(
     registry: OntologyRegistry,
     what: str,
 ) -> dict[Any, Any]:
-    """Copy a provider/dispatcher map, refusing any key from another `Ontology`.
+    """Copy a provider map, refusing any key from another `Ontology`.
 
     Whole-branch review finding (2026-07-26): binding a FOREIGN handle used to be
     accepted silently. The map was copied unchecked, the pre-flight then skipped
     keys whose `registry` was not this one, and the author was told
-    `CAPABILITY_NOT_PROVIDED` / `EFFECT_NOT_DISPATCHABLE` -- "you bound no
-    provider" -- for a capability they had visibly just bound. Two ontologies
-    declaring the same api_name (which spec AC1 explicitly permits) made this easy
-    to hit and near-impossible to diagnose from the message.
+    `CAPABILITY_NOT_PROVIDED` -- "you bound no provider" -- for a capability they
+    had visibly just bound. Two ontologies declaring the same api_name (which
+    spec AC1 explicitly permits) made this easy to hit and near-impossible to
+    diagnose from the message.
 
     AC8 already says a handle from another registry is `UNKNOWN_NAME`; that was
     enforced at ACCESS time (`ctx.capability(foreign)`) but not at BIND time, so
     the check now runs where the mistake is actually made. Fail-closed and early:
     a mis-bound provider is a wiring bug, and the copy is also what keeps a later
     mutation of the caller's dict from mattering (AC5).
-
-    Also refuses a handle of the WRONG KIND (re-review finding, 2026-07-26). A
-    `CapabilityDef` and an `EffectTypeDef` live in separate registry namespaces, so
-    `capability(X, name="Foo")` and `effect(Y, api_name="Foo")` can BOTH be
-    declared -- verified. Both pre-flights then match on `(api_name, registry)`
-    only, so a `CapabilityHandle` bound in `effects=` would satisfy an effect
-    declaration and be invoked as its dispatcher, and vice versa. That is
-    fail-OPEN: the wrong object gets called, rather than anything being refused.
     """
     if provided is None:
         return {}
@@ -141,7 +124,7 @@ def _checked_provider_map(
     # dict subclass overriding __bool__), and `not provided` would skip validation
     # entirely and hand back {} -- reinstating the very misleading
     # "no provider bound" diagnosis this function exists to prevent.
-    expected = CapabilityHandle if what == "capability" else EffectHandle
+    expected = CapabilityHandle
     checked: dict[Any, Any] = {}
     for handle, value in provided.items():
         if not isinstance(handle, expected):
@@ -156,7 +139,7 @@ def _checked_provider_map(
             raise ValidationFailed(
                 f"{what} {getattr(handle, 'api_name', handle)!r} was declared on "
                 f"a different Ontology -- it cannot be bound as a {what} "
-                "provider/dispatcher on this one",
+                "provider on this one",
                 code="UNKNOWN_NAME",
             )
         checked[handle] = value
@@ -194,8 +177,6 @@ class OntologyRuntime:
         clock: Callable[[], datetime] | None = None,
         id_factory: Callable[[], str] | None = None,
         capabilities: Mapping[CapabilityHandle[Any], object] | None = None,
-        effects: Mapping[EffectHandle[Any], EffectDispatcher] | None = None,
-        effect_retry: RetryPolicy = DEFAULT_RETRY_POLICY,
     ) -> None:
         definition = resolve_definition(ontology)
         if handlers is None:
@@ -207,54 +188,22 @@ class OntologyRuntime:
         self._capability_providers = _checked_provider_map(
             capabilities, definition.registry, "capability"
         )
-        self._effect_dispatchers = _checked_provider_map(
-            effects, definition.registry, "effect"
-        )
-        self._effect_retry = effect_retry
         self.query = GuardedQuery(store, definition.registry, definition.policy)
         self.actions = ActionExecutor(
             store,
             definition.registry,
             definition.policy,
-            retry_policy=effect_retry,
             clock=self._clock,
             id_factory=self._id_factory,
         )
         for api_name, (fn, params_cls) in (handlers or {}).items():
             self.actions._register(api_name, fn, params_cls)
 
-    def drain_effects(
-        self, *, limit: int = 100, now: datetime | None = None
-    ) -> DrainReport:
-        """Retry effects this runtime's dispatchers can deliver (spec AC4).
-
-        Consumer-free on purpose: an outbox row carries the actor and role of
-        the `execute()` that emitted it, so redelivering it is not an act by
-        whoever happens to run the drain. `OntologyClient.drain_effects`
-        delegates here for exactly that reason.
-
-        Call it from a worker loop, a cron job, or the tail of a request --
-        the SDK starts no thread of its own and has no schedule (spec §4).
-        `now` is injectable so a test can advance past a backoff without
-        sleeping.
-        """
-        return drain_effect_outbox(
-            self._store,
-            {
-                handle.api_name: (handle.payload_cls, dispatcher)
-                for handle, dispatcher in self._effect_dispatchers.items()
-            },
-            self._effect_retry,
-            limit=limit,
-            now=now if now is not None else self._clock(),
-        )
-
     def for_consumer(
         self,
         consumer: Consumer,
         *,
         capabilities: Mapping[CapabilityHandle[Any], object] | None = None,
-        effects: Mapping[EffectHandle[Any], EffectDispatcher] | None = None,
     ) -> "OntologyClient":
         """Cheap per-consumer view: a new `OntologyClient` sharing this
         runtime's `query`/`actions` BY IDENTITY (spec AC6) -- only
@@ -268,15 +217,10 @@ class OntologyRuntime:
         capability_providers.update(
             _checked_provider_map(capabilities, registry, "capability")
         )
-        effect_dispatchers = dict(self._effect_dispatchers)
-        effect_dispatchers.update(
-            _checked_provider_map(effects, registry, "effect")
-        )
         return OntologyClient._from_runtime(
             self,
             consumer,
             capabilities=capability_providers,
-            effects=effect_dispatchers,
         )
 
 
@@ -305,16 +249,12 @@ class OntologyClient(_TypedReadMixin):
         consumer: Consumer,
         *,
         capabilities: Mapping[CapabilityHandle[Any], object] | None = None,
-        effects: Mapping[EffectHandle[Any], EffectDispatcher] | None = None,
-        effect_retry: RetryPolicy = DEFAULT_RETRY_POLICY,
     ) -> None:
         self._init_from_runtime(
             OntologyRuntime(
                 ontology,
                 store,
                 capabilities=capabilities,
-                effects=effects,
-                effect_retry=effect_retry,
             ),
             consumer,
         )
@@ -326,7 +266,6 @@ class OntologyClient(_TypedReadMixin):
         consumer: Consumer,
         *,
         capabilities: Mapping[CapabilityHandle[Any], object] | None = None,
-        effects: Mapping[EffectHandle[Any], EffectDispatcher] | None = None,
     ) -> "OntologyClient":
         """Private alternate constructor: a client VIEW sharing an
         existing runtime's `query`/`actions` by identity -- used by
@@ -336,7 +275,6 @@ class OntologyClient(_TypedReadMixin):
             runtime,
             consumer,
             capabilities=capabilities,
-            effects=effects,
         )
         return self
 
@@ -346,7 +284,6 @@ class OntologyClient(_TypedReadMixin):
         consumer: Consumer,
         *,
         capabilities: Mapping[CapabilityHandle[Any], object] | None = None,
-        effects: Mapping[EffectHandle[Any], EffectDispatcher] | None = None,
     ) -> None:
         self._ontology = runtime._definition
         self._registry = runtime._definition.registry
@@ -365,17 +302,8 @@ class OntologyClient(_TypedReadMixin):
             registry,
             "capability",
         )
-        self._effect_dispatchers = _checked_provider_map(
-            runtime._effect_dispatchers if effects is None else effects,
-            registry,
-            "effect",
-        )
         self._query = runtime.query
         self.actions = runtime.actions
-        # Kept so `drain_effects` can rebuild the same runtime-level drain with
-        # THIS view's dispatcher overrides (`for_consumer(effects=...)`) rather
-        # than the runtime's originals.
-        self._effect_retry = runtime._effect_retry
 
     # -- reads --------------------------------------------------------
 
@@ -570,7 +498,6 @@ class OntologyClient(_TypedReadMixin):
                 name,
                 action,
                 capability_providers=self._capability_providers,
-                effect_dispatchers=self._effect_dispatchers,
             )
         if action is None and isinstance(params, ActionParams):
             name = self._api_name_for_action_params(params)
@@ -579,7 +506,6 @@ class OntologyClient(_TypedReadMixin):
                 name,
                 params,
                 capability_providers=self._capability_providers,
-                effect_dispatchers=self._effect_dispatchers,
             )
         if not isinstance(action, str) or not isinstance(params, dict):
             raise ValidationFailed(
@@ -591,43 +517,7 @@ class OntologyClient(_TypedReadMixin):
             action,
             params,
             capability_providers=self._capability_providers,
-            effect_dispatchers=self._effect_dispatchers,
         )
-
-    def drain_effects(
-        self, *, limit: int = 100, now: datetime | None = None
-    ) -> DrainReport:
-        """Retry due effects using THIS client's bound dispatchers (spec AC4).
-
-        Identical to `OntologyRuntime.drain_effects` except that a client built
-        by `for_consumer(effects=...)` drains with its own dispatcher overrides.
-        The drain itself is not scoped to `self._consumer`: a row is delivered
-        on behalf of the actor who emitted it, whose identity the row carries
-        and hands to the dispatcher as `EffectMeta.actor_id`. Draining is
-        machinery, not an act by the consumer who happens to trigger it -- so
-        it is deliberately NOT a governed, scope-checked surface, and a caller
-        who should not be able to trigger outward sends should not be given a
-        client with dispatchers bound.
-        """
-        return drain_effect_outbox(
-            self._store,
-            {
-                handle.api_name: (handle.payload_cls, dispatcher)
-                for handle, dispatcher in self._effect_dispatchers.items()
-            },
-            self._effect_retry,
-            limit=limit,
-            now=now if now is not None else self._clock(),
-        )
-
-    def outbox(self) -> builtins.list[OutboxRecord]:
-        """Every outbox row, oldest emission first -- pending, delivered, and
-        failed alike (spec AC2).
-
-        An administrative read, like `audit_entries`: unscoped, unredacted, and
-        not a consumer-facing surface. It answers "was it delivered, and if
-        not, why" without making the caller reach for the store."""
-        return self._store.outbox_entries()
 
     def ingest(
         self,
@@ -677,9 +567,9 @@ class OntologyClient(_TypedReadMixin):
         This is the function **audit boundary**. A function that
         `FunctionDef.audited` says to record appends one entry per call --
         `kind="function"`, the same `invocation_id` discipline actions use, and
-        the capability accesses the handler made. Functions never write and
-        cannot emit effects, so `writes`/`effects` are always empty on those
-        entries; the interesting column is `capability_accesses`, which is what
+        the capability accesses the handler made. Functions never write, so
+        `writes` is always empty on those entries; the interesting column is
+        `capability_accesses`, which is what
         answers "what did the AI reach for?".
 
         Auditing is conditional by default -- see `FunctionDef.audited` -- so an
@@ -783,8 +673,8 @@ class OntologyClient(_TypedReadMixin):
                 outcome=outcome,
                 ts=self._clock(),
                 # The reason this boundary exists: what the handler reached
-                # for. Functions never write and cannot emit, so `writes` and
-                # `effects` stay empty by construction.
+                # for. Functions never write, so `writes` stays empty by
+                # construction.
                 capability_accesses=accesses,
             )
         )

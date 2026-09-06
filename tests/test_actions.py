@@ -4772,11 +4772,10 @@ def test_action_context_exposes_no_store_handle(
     convention) through `ActionContext` -- only the declared write/read
     surface exists.
 
-    `capability` and `emit` are on this list as of M5 (spec `governed-effects`
-    AC6/AC9). Neither weakens the guard. `capability` hands back an
-    author-supplied provider object, never the store and never the guarded
-    query layer; `emit` only appends a frozen payload snapshot to a per-call
-    list and performs no I/O at all. What this test still forbids is the ENGINE
+    `capability` is on this list as of M5 (spec `governed-effects` AC6). It
+    does not weaken the guard: it hands back an author-supplied provider
+    object, never the store and never the guarded query layer. What this test
+    still forbids is the ENGINE
     exposing a store handle -- an author who binds a provider that happens to
     hold a store is trusted code at the same tier as the handler itself (spec
     §8 R1), a documented limitation no attribute-set assertion can police.
@@ -4802,7 +4801,6 @@ def test_action_context_exposes_no_store_handle(
         "capability",
         "consumer",
         "create_link",
-        "emit",
         "insert",
         "links_from",
         "links_to",

@@ -46,19 +46,15 @@ signature incompatibly), **all of the following are breaking**, and this is the 
 worth reading:
 
 1. **A declared answer changes.** The strings on `Declarations` — `authority`,
-   `capabilities`, `effects`, `writeback`, `reingest`, `visibility_default`,
+   `capabilities`, `writeback`, `reingest`, `visibility_default`,
    `transaction_ownership`, `ontology_evolution`, `idempotency`, `audit_scope`,
    `tenancy`, `identity`, `min_n` — are the runtime's contract with an auditor.
-   Changing what one *says* means the behavior it describes changed.
-   The M7c outbox is the worked example: `effects` went from "at-most-once, no retry" to
-   at-least-once, which silently turned every non-idempotent dispatcher into a latent
-   duplicate-send bug. That was a minor bump with the obligation stated in the changelog,
-   the README, and the declared string itself.
+   Changing what one *says* means the behavior it describes changed, and the change
+   belongs in the changelog with the obligation it puts on a caller stated there.
 2. **An error code's meaning changes, or a code disappears.** `ERROR_CODES` is public
    API: integrations branch on `code`, and the MCP surface puts it on the wire. Adding a
    code is additive; repurposing one is not.
-3. **An `EffectMeta`, `AuditEntry`, `EffectRecord`, or `OutboxRecord` field is removed or
-   re-meant.** Dispatchers and audit readers destructure these.
+3. **An `AuditEntry` field is removed or re-meant.** Audit readers destructure it.
 4. **A refusal becomes permissive, or a permissive path starts refusing.** A change that
    makes the engine *allow* something it used to deny is breaking in the direction that
    matters most for governance, even though no caller's code stops compiling.
@@ -520,7 +516,7 @@ and a row-visibility predicate is applied on top of the scope check for every ty
 
 When an action handler calls `ctx.insert(obj_type, payload)` and `payload` omits the
 type's declared primary key, the runtime now fills it from the executor's configured
-`id_factory` — the same seam invocation and effect ids are already minted from — before
+`id_factory` — the same seam invocation ids are already minted from — before
 `store.insert` is ever called.
 
 A direct `store.insert(obj_type, payload, source)` call — bypassing an `ActionContext`

@@ -8,9 +8,7 @@ they go through the protocol, never through SQL.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from contextlib import AbstractContextManager
-from datetime import datetime, timedelta
 from typing import Any, Protocol, runtime_checkable
 
 from ontary.audit import AuditEntry, WriteRecord
@@ -20,7 +18,6 @@ from ontary.fingerprint import (
     fingerprint_ontology,
 )
 from ontary.meta import OntologyRegistry
-from ontary.outbox import OutboxRecord, OutboxState
 from ontary.store.values import DEFAULT_BATCH, PagedRow, Source, StoredObject
 
 
@@ -218,51 +215,6 @@ class Store(Protocol):
 
     def audit_entries(self) -> list[AuditEntry]:
         """Every persisted audit entry, in append order."""
-        ...
-
-    def enqueue_effects(self, records: Sequence[OutboxRecord]) -> None:
-        """Persist emitted effects as durable work items (spec
-        `durable-effect-outbox` AC1). Called INSIDE the emitting action's
-        transaction, so the rows commit with the ontology writes or not at
-        all. Unlike `append_audit`, this one MAY raise: a failure here must
-        roll the action back rather than silently drop the delivery."""
-        ...
-
-    def claim_due_effects(
-        self, *, limit: int, now: datetime, lease: timedelta
-    ) -> list[OutboxRecord]:
-        """Atomically lease up to `limit` deliverable rows and return them
-        (spec AC5): `state = 'pending'`, `next_attempt_at <= now`, and no live
-        lease. Each returned record carries the NEW `lease_until`. Ordered by
-        `(emitted_at, seq)`, so a batch follows emission order."""
-        ...
-
-    def release_effect_claim(self, effect_id: str, *, now: datetime) -> None:
-        """Drop the lease without recording an attempt -- the claimer could
-        not dispatch (spec AC10: no dispatcher bound). `attempts` and
-        `next_attempt_at` are untouched, so the row is immediately claimable
-        by a client that CAN send it."""
-        ...
-
-    def resolve_effect(
-        self,
-        effect_id: str,
-        *,
-        state: OutboxState,
-        next_attempt_at: datetime,
-        error: str | None,
-        now: datetime,
-    ) -> None:
-        """Record the outcome of one attempt: increment `attempts`, set
-        `state`/`next_attempt_at`/`last_error`, and clear the lease. The
-        caller (which owns the `RetryPolicy`) decides whether a failure is
-        `pending` again or terminally `failed`; the store just writes it."""
-        ...
-
-    def outbox_entries(self) -> list[OutboxRecord]:
-        """Every outbox row, oldest emission first -- including `delivered`
-        and `failed` ones, which are kept as the delivery record rather than
-        deleted."""
         ...
 
     def read_ontology_fingerprint(self) -> OntologyFingerprint | None:

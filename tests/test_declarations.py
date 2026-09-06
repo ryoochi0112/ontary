@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Callable
-from datetime import datetime, timedelta, timezone
 from typing import Any, Protocol
 
 import pytest
@@ -26,14 +25,9 @@ from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
 from mcp.server.auth.provider import AccessToken
 
 from ontary.actions import ActionContext, ActionError
-from ontary.audit import AuditEntry
 from ontary.authoring import ActionParams, Ontology, OntologyObject, prop, target
 from ontary.client import OntologyClient
 from ontary.declarations import Declarations, declarations
-from ontary.effects import (
-    EffectMeta,
-    EffectPayload,
-)
 from ontary.errors import (
     AuthorityError,
     ConflictError,
@@ -266,135 +260,6 @@ def test_capabilities_declared_matches_per_call_injection_and_fail_closed() -> N
         first.call_function("undeclaredRead", {})
 
 
-# -- effects -----------------------------------------------------------------
-
-
-def test_effects_declared_matches_commit_order_failure_and_best_effort(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class Notice(EffectPayload):
-        sequence: int
-
-    ontology = Ontology(name="effect-declaration", scope_levels=["org"], min_n=MIN_N)
-
-    @ontology.object(
-        layer="L0",
-        owned={"committed": False},
-        scope=[SelfScope(level="org")],
-    )
-    class Item(OntologyObject):
-        id: str = prop(primary_key=True)
-        committed: bool = False
-
-    notice = ontology.effect(Notice)
-
-    class PublishParams(ActionParams):
-        item_id: str = target(Item)
-
-    @ontology.action(
-        PublishParams,
-        target=Item,
-        roles=["Admin"],
-        effects=[notice],
-        api_name="Publish",
-    )
-    def publish(ctx: ActionContext, params: PublishParams) -> dict[str, str]:
-        ctx.update("Item", params.item_id, {"committed": True})
-        ctx.emit(Notice(sequence=1))
-        ctx.emit(Notice(sequence=2))
-        return {"item_id": params.item_id}
-
-    ontology.validate()
-    store = ObjectStore(ontology.registry)
-    store.insert("Item", {"id": "item-1", "committed": False}, SRC)
-    calls: list[int] = []
-    outside_is_back: list[bool] = []
-
-    def dispatch(payload: EffectPayload, _meta: EffectMeta) -> None:
-        assert isinstance(payload, Notice)
-        item = store.read_current("Item", "item-1")
-        assert item is not None and item.payload["committed"] is True
-        pending = [
-            entry
-            for entry in store.audit_entries()
-            if entry.action == "Publish" and entry.outcome == "ok"
-        ]
-        assert pending and [effect.outcome for effect in pending[-1].effects] == [
-            "pending",
-            "pending",
-        ]
-        calls.append(payload.sequence)
-        if payload.sequence == 1 and not outside_is_back:
-            raise RuntimeError("outside unavailable")
-
-    client = OntologyClient(
-        ontology,
-        store,
-        _admin(scope_id="item-1"),
-        effects={notice: dispatch},
-    )
-    decls = client.declarations
-    assert decls.effects == (
-        "declared per action; emitted as data inside the transaction; the "
-        "durable outbox row and the pending audit record commit with the "
-        "writes; dispatched after commit in emission order; at-least-once "
-        "with bounded retries -- a dispatcher must be idempotent on "
-        "EffectMeta.effect_id, since a crash between the outside call and "
-        "the delivered mark redelivers; retries run only when the embedder "
-        "calls drain_effects (no background thread); an Exception from a "
-        "dispatcher is never raised to the caller and never rolled back, "
-        "and is audited on a best-effort basis, while a KeyboardInterrupt "
-        "or SystemExit does propagate and stops later dispatches, leaving "
-        "those effects pending for a later drain; an exhausted row is "
-        "failed and never retried again"
-    )
-
-    assert client.execute("Publish", {"item_id": "item-1"}) == {"item_id": "item-1"}
-    assert calls == [1, 2]
-    finalized = [
-        entry
-        for entry in store.audit_entries()
-        if entry.action == "Publish" and entry.outcome == "effects_dispatched"
-    ]
-    assert [effect.outcome for effect in finalized[-1].effects] == [
-        "retrying",
-        "dispatched",
-    ]
-    assert finalized[-1].effects[0].error == "outside unavailable"
-
-    # "at-least-once with bounded retries ... only when the embedder calls
-    # drain_effects": the failed effect is a durable row that nothing retries
-    # on its own, and one drain past its backoff delivers it.
-    assert [(row.state, row.attempts) for row in store.outbox_entries()] == [
-        ("pending", 1),
-        ("delivered", 1),
-    ]
-    outside_is_back.append(True)
-    report = client.drain_effects(now=datetime.now(timezone.utc) + timedelta(minutes=1))
-    assert (report.claimed, report.delivered, report.failed) == (1, 1, 0)
-    assert calls == [1, 2, 1]  # the SAME effect, delivered on its second attempt
-    assert [(row.state, row.attempts) for row in store.outbox_entries()] == [
-        ("delivered", 2),
-        ("delivered", 1),
-    ]
-
-    original_append = store.append_audit
-
-    def fail_finalization(entry: AuditEntry) -> None:
-        if entry.outcome == "effects_dispatched":
-            raise RuntimeError("audit unavailable")
-        original_append(entry)
-
-    calls.clear()
-    before = len(store.audit_entries())
-    monkeypatch.setattr(store, "append_audit", fail_finalization)
-    assert client.execute("Publish", {"item_id": "item-1"}) == {"item_id": "item-1"}
-    assert calls == [1, 2]
-    remaining = store.audit_entries()[before:]
-    assert len(remaining) == 1
-    assert [effect.outcome for effect in remaining[0].effects] == ["pending", "pending"]
-
-
 # -- transaction_ownership ----------------------------------------------------
 
 
@@ -533,11 +398,10 @@ def test_writeback_declared_matches_owned_writes_and_source_refusal(
     client, store, ontology = _build(make_registry, make_policy)
     decls = declarations(ontology)
     assert decls.writeback == (
-        "ontology writes are all ontology-owned; the runtime's own outward "
-        "write path is declared effects, dispatched after commit — but a "
-        "capability provider is unsandboxed author code that can also write "
-        "outward inline, so this is a declared convention, not an enforced "
-        "boundary"
+        "ontology writes are all ontology-owned; the runtime has no outward "
+        "write path of its own — but a capability provider is unsandboxed "
+        "author code that can write outward inline, so this is a declared "
+        "convention, not an enforced boundary"
     )
 
     client.execute("BumpCounter", {"widget_id": "w-1"})
@@ -553,11 +417,11 @@ def test_writeback_declaration_admits_the_unenforced_capability_path() -> None:
     """The `writeback` string's "declared convention, not an enforced boundary"
     clause must be TRUE, i.e. the loophole it admits must actually exist.
 
-    Whole-branch review finding (2026-07-26): the previous string claimed
-    "outward writes only via declared effects". That is false. A capability
-    provider is arbitrary author code returned UNWRAPPED, so a provider can write
-    outward inline -- from a Function, which AC4 otherwise bars from any outward
-    write, and from an Action before it raises and rolls its ontology writes back.
+    Whole-branch review finding (2026-07-26): an earlier string claimed the
+    runtime enforced the boundary. That is false. A capability provider is
+    arbitrary author code returned UNWRAPPED, so a provider can write outward
+    inline -- from a Function, which AC4 otherwise bars from any outward write,
+    and from an Action before it raises and rolls its ontology writes back.
     The runtime cannot observe it.
 
     This test demonstrates the loophole deliberately, so the honest wording is
@@ -594,8 +458,7 @@ def test_writeback_declaration_admits_the_unenforced_capability_path() -> None:
     )
 
     assert client.call_function("leak", {}) == "done"
-    # A Function performed an outward write. No effect was declared, none was
-    # emitted, nothing was dispatched.
+    # A Function performed an outward write. The runtime never saw it.
     assert sent == ["sent from a Function"]
 
     # Functions ARE audited now (M7), so the log is no longer empty -- but the
@@ -612,7 +475,6 @@ def test_writeback_declaration_admits_the_unenforced_capability_path() -> None:
         ("Mailer", 1)
     ]
     assert entries[0].writes == []
-    assert entries[0].effects == []
 
 
 # -- audit_scope -----------------------------------------------------------
@@ -701,12 +563,6 @@ def test_identity_declared_matches_transport_proof_resolver_trust_and_dual_audit
        runtime does not inspect or constrain what the resolver returns.
     4. Both the principal and the resolved actor are audited, which is what
        makes that resolver's choice VISIBLE in the log rather than hidden.
-       The redelivery exception the declared string also names -- a
-       redelivered outbox row restates the actor but carries no principal
-       (spec §4.2) -- is NOT demonstrated here; this test never drains the
-       outbox. That behavior is pinned separately by
-       `tests/test_audit_principal.py::
-       test_redelivered_outbox_effect_audits_no_principal_but_joins_to_the_entry_that_does`.
     """
     ontology = Ontology(name="identity-declaration", scope_levels=["org"], min_n=1)
 
@@ -744,9 +600,7 @@ def test_identity_declared_matches_transport_proof_resolver_trust_and_dual_audit
         "footing as a capability provider; both that principal and the "
         "actor it resolved to are audited, so a resolver mapping every "
         "principal onto one privileged actor is visible in the log rather "
-        "than hidden by it; a redelivered effect's audit row restates the "
-        "actor but not the principal, joined back by invocation_id -- so "
-        "principal is None on those rows; not every audited row has one"
+        "than hidden by it; not every audited row has one"
     )
 
     # (2) Falsify the OLD claim, prove the NEW one: a single-consumer server

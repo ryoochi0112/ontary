@@ -566,12 +566,10 @@ def test_function_cannot_write_by_construction() -> None:
     `BoundQuery` exposes no store/write methods at all -- this is enforced
     structurally, not by a runtime check.
 
-    `capability` joined the surface in M5 (spec `governed-effects` AC6) and is
-    a READ of the outside world, not a write: a Function may reach an LLM or an
-    HTTP GET, but it still cannot declare or emit an effect (AC4 refuses
-    `@ontology.function(effects=...)` outright) and its `BoundQuery` carries no
-    effect dispatchers at all (AC5b). So "a Function cannot write" holds for
-    the ontology AND for the outside world.
+    `capability` joined the surface in M5 and is a READ of the outside world,
+    not a write: a Function may reach an LLM or an HTTP GET, but the SDK gives
+    it no outward-write path (AC4). So "a Function cannot write" holds for the
+    ontology AND for the outside world.
     """
     public_methods = {
         name for name in dir(BoundQuery) if not name.startswith("_")

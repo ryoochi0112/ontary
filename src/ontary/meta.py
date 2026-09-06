@@ -28,8 +28,6 @@ __all__ = [
     "LinkTypeDef",
     "ActionParameterDef",
     "CapabilityDef",
-    "EffectFieldDef",
-    "EffectTypeDef",
     "ActionTypeDef",
     "FunctionDef",
     "OntologyRegistry",
@@ -267,32 +265,6 @@ class CapabilityDef(BaseModel):
     description: str
 
 
-class EffectFieldDef(BaseModel):
-    """One JSON-serializable field in an effect payload's declared shape.
-
-    Keeping only the derived type name and requiredness prevents the IR from
-    retaining a Python model class, while still giving remote consumers enough
-    information to understand the data a dispatcher can receive.
-    """
-
-    name: str
-    type_name: str
-    required: bool
-
-
-class EffectTypeDef(BaseModel):
-    """Declares an outside-world write as data rather than executable code.
-
-    The payload is structural IR, not the `EffectPayload` subclass itself, so
-    registry metadata remains serializable and cannot acquire a dependency on
-    the author-facing effects module.
-    """
-
-    api_name: str
-    description: str
-    payload: list[EffectFieldDef]
-
-
 class ActionTypeDef(BaseModel):
     api_name: str
     display_name: str
@@ -301,7 +273,6 @@ class ActionTypeDef(BaseModel):
     description: str
     parameters: list[ActionParameterDef] = []
     capabilities: list[str] = []
-    effects: list[str] = []
 
 
 class FunctionDef(BaseModel):
@@ -357,7 +328,6 @@ class OntologyRegistry:
         self._action_types: dict[str, ActionTypeDef] = {}
         self._functions: dict[str, FunctionDef] = {}
         self._capabilities: dict[str, CapabilityDef] = {}
-        self._effect_types: dict[str, EffectTypeDef] = {}
         # (object api_name, from_version) -> upcaster. Keyed by the version the
         # function reads FROM, because that is what a stored row carries: given
         # `type_version = 1`, the engine needs "the function that turns a v1
@@ -404,14 +374,6 @@ class OntologyRegistry:
             )
         self._capabilities[capability.api_name] = capability
 
-    def register_effect_type(self, effect_type: EffectTypeDef) -> None:
-        if effect_type.api_name in self._effect_types:
-            raise ValidationFailed(
-                f"duplicate EffectTypeDef api_name: {effect_type.api_name!r}",
-                code="ONTOLOGY_INVALID",
-            )
-        self._effect_types[effect_type.api_name] = effect_type
-
     @property
     def object_types(self) -> dict[str, ObjectTypeDef]:
         return dict(self._object_types)
@@ -431,10 +393,6 @@ class OntologyRegistry:
     @property
     def capabilities(self) -> dict[str, CapabilityDef]:
         return dict(self._capabilities)
-
-    @property
-    def effect_types(self) -> dict[str, EffectTypeDef]:
-        return dict(self._effect_types)
 
     def register_upcaster(
         self, api_name: str, from_version: int, fn: "Upcaster"
@@ -515,15 +473,6 @@ class OntologyRegistry:
                 code="UNKNOWN_NAME",
             ) from exc
 
-    def get_effect_type(self, api_name: str) -> EffectTypeDef:
-        try:
-            return self._effect_types[api_name]
-        except KeyError as exc:
-            raise ValidationFailed(
-                f"unregistered effect type: {api_name!r}",
-                code="UNKNOWN_NAME",
-            ) from exc
-
     def validate(self) -> None:
         """Raise a validation-kind error on dangling references.
 
@@ -533,7 +482,7 @@ class OntologyRegistry:
         - upcaster chains are complete and never point past the declared version
         - owned property defaults exist, are not the pk, and match the type
         - LinkTypeDef.from_type / to_type reference registered object types
-        - ActionTypeDef target/capability/effect/parameter references resolve
+        - ActionTypeDef target/capability/parameter references resolve
         - FunctionDef capabilities reference registered capability declarations
         """
         errors: list[str] = []
@@ -647,13 +596,6 @@ class OntologyRegistry:
                     errors.append(
                         f"ActionTypeDef {action.api_name!r}: dangling capability "
                         f"{capability!r}"
-                    )
-
-            for effect in action.effects:
-                if effect not in self._effect_types:
-                    errors.append(
-                        f"ActionTypeDef {action.api_name!r}: dangling effect "
-                        f"{effect!r}"
                     )
 
             for param in action.parameters:

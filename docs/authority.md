@@ -25,7 +25,7 @@ ingest:   canonical staging → declarative mapping → ontology writes
 ```
 
 An `Ontology` owns the registry, scope policy, object and link declarations,
-actions, Functions, capabilities, and effects for one domain. Binding it to a store
+actions, Functions, and capabilities for one domain. Binding it to a store
 creates shared runtime machinery. `runtime.for_consumer(consumer)` creates a cheap
 view over that machinery; it does not mutate global state or re-register handlers.
 
@@ -65,19 +65,16 @@ retirement cascade encounters an undeclared source-backed link after other links
 have been closed, the action transaction rolls back the object retirement and
 every earlier link closure.
 
-### Capabilities and effects
+### Capabilities
 
 Capabilities are declared per action or Function, bound per client, resolved per
 invocation, and fail closed when undeclared or unprovided. The provider is trusted
-author code and is not sandboxed. Effects are declared per action, emitted as data
-inside the transaction, and delivered after commit through a durable outbox with
-at-least-once semantics. A dispatcher must be idempotent on `EffectMeta.effect_id`.
-See [governed effects](effects.md) for the delivery contract.
+author code and is not sandboxed.
 
 ### Tenancy
 
-There is one tenant per store instance. Objects, links, audit entries, and outbox
-rows are all scoped to it; primary keys are unique per tenant. PostgreSQL can add
+There is one tenant per store instance. Objects, links, and audit entries are all
+scoped to it; primary keys are unique per tenant. PostgreSQL can add
 row-level security unless `rls=False`, but a database superuser can bypass RLS by
 PostgreSQL design. See [storage and tenancy](storage.md).
 
@@ -93,10 +90,10 @@ procedure and the consequences of changing a declared answer.
 ### Write-back and failure semantics
 
 Ontology-owned writes happen through governed actions. Source-backed state cannot be
-mutated by an action; outward writes belong on declared effects. A capability
-provider may still perform an outward write inline because it is trusted in-process
-code, so the convention is documented and audited by the runtime's own machinery,
-not enforced as a sandbox.
+mutated by an action, and the runtime has no outward write path of its own. A
+capability provider may still perform an outward write inline because it is trusted
+in-process code, so the convention is documented rather than enforced as a
+sandbox.
 
 ### Re-ingest
 
@@ -145,8 +142,7 @@ On a multi-consumer MCP server, the transport proves the principal and a resolve
 maps it to a `Consumer`; the SDK verifies no token and issues none. On a
 single-consumer server or direct Python use, the operator asserts the `Consumer` at
 construction and nothing proves it. The proven principal and resolved actor are
-both audited, except that a redelivered effect has no new transport principal and
-joins back through its invocation id. See [MCP serving](mcp-serving.md).
+both audited. See [MCP serving](mcp-serving.md).
 
 ### min-N
 

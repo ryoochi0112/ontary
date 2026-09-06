@@ -31,7 +31,6 @@ from ontary.actions import (
 from ontary.authoring import (
     ActionParams,
     CapabilityHandle,
-    EffectHandle,
     LinkHandle,
     Ontology,
     OntologyObject,
@@ -54,7 +53,6 @@ from ontary.connect import (
 )
 from ontary.declarations import Declarations, declarations
 from ontary.diagnose import Finding
-from ontary.effects import EffectDispatcher, EffectMeta, EffectPayload
 from ontary.errors import (
     AuthorityError,
     ConflictError,
@@ -76,7 +74,6 @@ from ontary.meta import (
     Cardinality,
     Sensitivity,
 )
-from ontary.outbox import DrainReport, OutboxRecord, RetryPolicy
 from ontary.query import Page, TypedPage
 from ontary.scope import (
     CustomResolver,
@@ -136,11 +133,6 @@ __all__ = [
     "CustomResolver",
     "Declarations",
     "DirectProperty",
-    "DrainReport",
-    "EffectDispatcher",
-    "EffectHandle",
-    "EffectMeta",
-    "EffectPayload",
     "Finding",
     "InMemoryStore",
     "InternalError",
@@ -153,13 +145,11 @@ __all__ = [
     "Ontology",
     "OntologyClient",
     "OntologyObject",
-    "OutboxRecord",
     "Page",
     "PermissionDenied",
     "PostgresStore",
     "PreconditionFailed",
     "RawTables",
-    "RetryPolicy",
     "RowVisibilityStore",
     "ScopePolicy",
     "SelfScope",

@@ -19,7 +19,7 @@ read, serve — start with the [README](../README.md).
 - [Reading](#reading)
 - [Actions](#actions)
 - [Functions](#functions)
-- [Governed side effects](#governed-side-effects)
+- [Capabilities](#capabilities)
 - [Security](#security)
 - [Stores](#stores)
 - [Bulk ingest](#bulk-ingest)
@@ -41,16 +41,15 @@ namespace.
 
 `ActionContext`, `ActionParams`, `BaseConnector`, `BoundQuery`, `CanonicalBatch`,
 `CanonicalRecord`, `CapabilityHandle`, `Cardinality`, `Consumer`, `DirectProperty`,
-`CustomResolver`, `EffectDispatcher`, `EffectHandle`, `EffectMeta`, `EffectPayload`,
-`LinkBinding`, `LinkHandle`, `MappingSpec`, `ObjectBinding`, `Ontology`,
+`CustomResolver`, `LinkBinding`, `LinkHandle`, `MappingSpec`, `ObjectBinding`, `Ontology`,
 `OntologyObject`, `RawTables`, `RowVisibilityStore`, `SelfScope`, `Sensitivity`,
 `Source`, `Store`, `ViaLink`, `oid`, `prop`, `ref`, `run_pipeline`, `scope_ref`,
 `target`.
 
 ### Runtime entries
 
-`Declarations`, `DrainReport`, `Finding`, `InMemoryStore`, `ObjectStore`,
-`OntologyClient`, `OutboxRecord`, `Page`, `PostgresStore`, `RetryPolicy`, `ScopePolicy`, `TypedPage`,
+`Declarations`, `Finding`, `InMemoryStore`, `ObjectStore`,
+`OntologyClient`, `Page`, `PostgresStore`, `ScopePolicy`, `TypedPage`,
 `__version__`, `build_mcp_server`, and `declarations`.
 
 ### Error classes
@@ -84,7 +83,7 @@ preflight validation and lives in `ontary.connect`.
 
 ### `ontary.audit`
 
-`CapabilityAccessRecord`, `EffectRecord`.
+`CapabilityAccessRecord`.
 
 ### `ontary.client`
 
@@ -130,10 +129,6 @@ preflight validation and lives in `ontary.connect`.
 
 `OntologyDef`.
 
-### `ontary.outbox`
-
-`DEFAULT_RETRY_POLICY`, `OutboxState`.
-
 ### `ontary.query`
 
 `GuardedQuery`.
@@ -156,13 +151,12 @@ preflight validation and lives in `ontary.connect`.
 ### `ontary.testing`
 
 Public SDK-user test helpers are `make_store`, `consumer`, `raises_code`,
-`capture_effects`, `FixedClock`, and `SequentialIds`. `make_store(ontology)`
+`FixedClock`, and `SequentialIds`. `make_store(ontology)`
 creates a fresh `InMemoryStore`; `consumer(...)` builds a valid `Consumer`; and
 `raises_code(code)` asserts a raised error by its machine-readable code — any
 `OntaryError`, including `ontary.ingest.IngestError`, as well as structurally
 compatible author-defined coded exceptions that expose a stable string `.code`.
-`capture_effects()` returns a callable dispatcher whose `.effects` list records
-`(payload, meta)` pairs without outside delivery. `FixedClock(start)` returns
+`FixedClock(start)` returns
 the same timezone-aware datetime on every call and rejects a naive start.
 `SequentialIds(prefix)` returns deterministic IDs `prefix-1`, `prefix-2`, and
 so on.
@@ -195,7 +189,6 @@ Declaration methods, all decorators except `link`:
 | `@ontology.action(params_cls, ...)` | Register a typed action handler |
 | `@ontology.function(...)` | Register a derived-value function |
 | `ontology.capability(proto, ...)` | Declare a capability; returns a `CapabilityHandle` |
-| `ontology.effect(payload_cls, ...)` | Declare an effect; returns an `EffectHandle` |
 | `ontology.validate()` | Validate and **freeze** registration |
 | `ontology.bind(store, ...)` | Build an `OntologyRuntime` |
 
@@ -326,26 +319,25 @@ undeclared object type, link type, or level.
 ## Runtime and clients
 
 ```python
-runtime = ontology.bind(store, capabilities={...}, effects={...})   # once
+runtime = ontology.bind(store, capabilities={...})                  # once
 client  = runtime.for_consumer(consumer)                            # cheap, per request
 ```
 
-### `Ontology.bind(store, *, clock=None, id_factory=None, capabilities=None, effects=None)`
+### `Ontology.bind(store, *, clock=None, id_factory=None, capabilities=None)`
 
 `clock` is a callable returning a timezone-aware `datetime`; it defaults to
 `datetime.now(timezone.utc)`. `id_factory` is a callable returning `str`; it
 defaults to UUID-shaped IDs. Both seams are stored on the shared runtime and
-are inherited by every `for_consumer()` view. Explicit `drain_effects(now=...)`
-still takes precedence over the runtime clock.
+are inherited by every `for_consumer()` view.
 
-### `OntologyRuntime(ontology, store, handlers=None, *, clock=None, id_factory=None, capabilities=None, effects=None)`
+### `OntologyRuntime(ontology, store, handlers=None, *, clock=None, id_factory=None, capabilities=None)`
 
 Shared, consumer-free machinery for one `(ontology, store)` pair — query layer,
 action executor, bound handlers — wired exactly once.
 
-- **`.for_consumer(consumer, *, capabilities=None, effects=None) -> OntologyClient`** —
+- **`.for_consumer(consumer, *, capabilities=None) -> OntologyClient`** —
   a cheap view. Serving many consumers from one process never re-wires anything.
-### `OntologyClient(ontology, store, consumer, *, capabilities=None, effects=None)`
+### `OntologyClient(ontology, store, consumer, *, capabilities=None)`
 
 Bound to exactly one `(ontology, store, consumer)`. Constructing it directly works
 and builds a single-use runtime internally.
@@ -551,7 +543,7 @@ callers use `OntologyClient` instead.
 ## Actions
 
 An action is a typed params class plus a handler decorated with
-`@ontology.action(params_cls, target=..., roles=[...], capabilities=(), effects=())`.
+`@ontology.action(params_cls, target=..., roles=[...], capabilities=())`.
 
 Every `execute` runs the same pipeline:
 
@@ -577,7 +569,6 @@ the action's own `Source`.
 | `.links_from(link_api_name, from_id) -> list[str]` | Traverse |
 | `.links_to(link_api_name, to_id) -> list[str]` | Traverse |
 | `.capability(handle) -> P` | Fetch a declared capability |
-| `.emit(payload)` | Emit a declared effect |
 | `.consumer` | The calling `Consumer` |
 
 `read_current` and `read_all` are trusted handler reads: raw, unredacted, and
@@ -616,26 +607,23 @@ could be rolled back underneath the audit log.
 
 `ts`, `actor`, `role`, `action`, `target_type`, `target_id`, `params`, `outcome`,
 `invocation_id`, plus integrity records: `writes: list[WriteRecord]`,
-`effects: list[EffectRecord]`, `capability_accesses: list[CapabilityAccessRecord]`.
+`capability_accesses: list[CapabilityAccessRecord]`.
 
 **`kind: Literal["action", "function"]`** — what produced the entry. Actions and
 functions share one log; `kind` is how a reader tells them apart, since nothing stops
 an ontology declaring an action and a function with the same `api_name`. On a
 `function` entry, `action` holds the function's api_name, `target_type` is `""` (a
-function has no target object type), and `writes`/`effects` are always empty.
+function has no target object type), and `writes` is always empty.
 
 **`invocation_id: str | None`** — one id per `execute()` (or audited
-`call_function()`) call, stamped on *every* entry that call writes: the
-`denied`/`error`/`ok` entry and, for an action with effects, the later
-`effects_dispatched` entry. Correlate a `pending` effect with its
-outcome by this value rather than by matching fields and append order — two calls to
+`call_function()`) call, stamped on *every* entry that call writes. Correlate
+entries by this value rather than by matching fields and append order — two calls to
 the same action with the same params are otherwise indistinguishable. `None` means
 the entry predates the field (a store file written by an older engine); it is never
 invented for such rows.
 
 - `WriteRecord` — `op` (`create`/`update`/`link`), `object_type`, `link_type`,
   `object_id`, `from_id`, `to_id`
-- `EffectRecord` — `api_name`, `payload`, `outcome` (`pending`/`dispatched`/`failed`), `error`
 - `CapabilityAccessRecord` — `api_name`, `count`
 
 ---
@@ -663,7 +651,7 @@ registration, or no bound handler.
 
 For an audited call, `OntologyClient.call_function` appends one `kind="function"` audit entry —
 carrying the invocation id, the params, the outcome, and the handler's
-`capability_accesses`. `writes` and `effects` are empty by construction.
+`capability_accesses`. `writes` is empty by construction.
 
 Whether a function is audited is **conditional**, via `FunctionDef.audited`:
 
@@ -706,12 +694,11 @@ store.
 
 ---
 
-## Governed side effects
+## Capabilities
 
 Anything a handler wants from the outside world must be **declared**, then provided
-at bind time. Undeclared use is refused, and every use is audited.
-
-### Capabilities — things a handler reads or calls
+at bind time. Undeclared use is refused, and every use is audited. A capability is
+a thing a handler reads or calls.
 
 ```python
 Clock = ontology.capability(ClockProto, name="clock")
@@ -724,47 +711,8 @@ def handler(ctx, params):
 Requesting an undeclared capability raises `UNDECLARED_CAPABILITY`; a declared one
 with no provider bound raises `CAPABILITY_NOT_PROVIDED`.
 
-### Effects — things a handler wants to happen
-
-```python
-Notify = ontology.effect(NotifyPayload, api_name="Notify")
-
-@ontology.action(P, target=T, roles=["Agent"], effects=[Notify])
-def handler(ctx, params):
-    ctx.emit(NotifyPayload(...))
-```
-
-Effects are **data, not calls**: the handler emits a payload, and dispatch happens
-outside the transaction. `EffectMeta` (`action`, `actor_id`, `role`, `ts`, `effect_id`,
-`attempt`) accompanies each. Emitting an undeclared effect raises `UNDECLARED_EFFECT`; a
-declared one with no dispatcher raises `EFFECT_NOT_DISPATCHABLE`; a payload that cannot
-be JSON-encoded for the outbox raises `EFFECT_NOT_SERIALIZABLE` *inside* the transaction,
-so the action rolls back and nothing is sent.
-
-Providers are bound at `ontology.bind(store, capabilities={...}, effects={...})` or
-per client via `for_consumer(...)`.
-
-### Durable delivery
-
-An emitted effect is written to the `effect_outbox` table inside the action transaction,
-so the work item commits with the ontology writes. Delivery is **at-least-once**.
-
-| Surface | Signature | Notes |
-| --- | --- | --- |
-| `RetryPolicy` | `RetryPolicy(max_attempts=3, initial_backoff=1s, multiplier=2.0, max_backoff=5m, lease=60s)` | Bound per runtime/client via `effect_retry=`. `max_attempts=1` reproduces the old at-most-once behavior. Backoff is deterministic — no jitter. |
-| `OntologyClient.drain_effects` | `drain_effects(*, limit=100, now=None) -> DrainReport` | Claims due rows (leased, so two drainers do not double-send), attempts each with this client's dispatchers, returns `DrainReport(claimed, delivered, retrying, failed, skipped)`. Also on `OntologyRuntime`. |
-| `OntologyClient.outbox` | `outbox() -> list[OutboxRecord]` | Administrative read of every row — `pending`, `delivered`, and terminally `failed` alike. |
-
-The post-commit pass inside `execute()` is attempt 1 of the policy. Nothing retries on a
-schedule of its own: **the SDK starts no threads**, so a deployment that wants recovery
-must call `drain_effects()` from a worker, a cron job, or a request tail. A row whose
-effect this client has no dispatcher for is released, not failed, and counted in
-`skipped`.
-
-Because a row is marked `delivered` *after* the outside call returns, a crash in between
-redelivers. **A dispatcher must be idempotent on `EffectMeta.effect_id`** — one stable id
-per emission, unchanged across attempts. When `max_attempts` is spent the row becomes
-`failed`: a terminal dead letter, kept for reading, never retried again.
+Providers are bound at `ontology.bind(store, capabilities={...})` or per client via
+`for_consumer(...)`.
 
 ---
 
@@ -1047,7 +995,7 @@ bound entity the batch never emits) is counted in the report instead.
 from ontary.mcp_server import build_mcp_server
 
 server = build_mcp_server(ontology, store, consumer, *, name=None,
-                          capabilities=None, effects=None)  # -> FastMCP
+                          capabilities=None)  # -> FastMCP
 ```
 
 One server process, one `Consumer` identity. Declared handlers arrive **pre-bound** —
@@ -1111,7 +1059,7 @@ from ontary.mcp_server import build_multi_consumer_mcp_server, ConsumerResolver
 
 server = build_multi_consumer_mcp_server(
     ontology, store, *, resolve_consumer, name=None,
-    capabilities=None, effects=None,
+    capabilities=None,
     token_verifier=None, auth=None,
 )  # -> FastMCP
 ```
@@ -1176,7 +1124,7 @@ data-driven ontologies; most authors should use `Ontology`.
 | `ObjectTypeDef` | `api_name`, `display_name`, `description`, `layer`, `properties`, `primary_key`, `owned` |
 | `PropertyDef` | `name`, `type`, `required`, `sensitivity`, `scope_level` |
 | `LinkTypeDef` | `api_name`, `from_type`, `to_type`, `cardinality`, `description`, `identity_revealing`, `owned` |
-| `ActionTypeDef` | `api_name`, `display_name`, `target_type`, `executable_by_roles`, `description`, `parameters`, `capabilities`, `effects` |
+| `ActionTypeDef` | `api_name`, `display_name`, `target_type`, `executable_by_roles`, `description`, `parameters`, `capabilities` |
 | `ActionParameterDef` | `name`, `type`, `required`, `refers_to`, `scope_semantics` |
 | `FunctionDef` | `api_name`, `description`, `input_description`, `output_description`, `capabilities` |
 | `Sensitivity` | `ai_usable`, `human_visible` |
@@ -1195,11 +1143,10 @@ SDK**, so two ontologies coexist in one process with no cross-talk.
 **`Declarations`** / `declarations(...)` expose the declared contract as data — what
 `get_declarations` serves over MCP: `authority` (model-declared, runtime-checked),
 `capabilities` (declared per action/function; fail-closed when unprovided or
-undeclared; the provider itself is unsandboxed author code), `effects` (declared per
-action; at-least-once via the durable outbox, dispatched after commit), `writeback`
-(ontology writes are all ontology-owned; the runtime's own outward path is declared
-effects — a declared convention, not an enforced boundary, since a capability provider
-can also write outward inline), `reingest` (upsert-merge; owned properties survive; no
+undeclared; the provider itself is unsandboxed author code), `writeback`
+(ontology writes are all ontology-owned; the runtime has no outward write path of its
+own — a declared convention, not an enforced boundary, since a capability provider can
+write outward inline), `reingest` (upsert-merge; owned properties survive; no
 deletion), `visibility_default` (deny-by-default — unresolved scope hides),
 `transaction_ownership` (runtime-owned — refuses caller-opened transactions),
 `ontology_evolution` (fingerprinted; drift is refused unless a declared type version
@@ -1216,9 +1163,7 @@ construction and nothing proves it; the verified principal (multi-consumer only)
 mapped to a `Consumer` by a caller-supplied resolver, which is trusted author code the
 runtime does not sandbox; both the transport-proved `principal` and the resolved
 `actor` are audited, so a resolver that maps every principal onto one privileged actor
-is visible in the log; a redelivered effect's audit row restates the actor but not the
-principal, joined back by `invocation_id` — so `principal` is `None` on those rows, not
-every audited row has one. `min_n` is the one per-ontology answer, read off the
+is visible in the log; not every audited row has one. `min_n` is the one per-ontology answer, read off the
 ontology's own `ScopePolicy.min_n`.
 
 ---
@@ -1273,7 +1218,6 @@ table below is generated from it.
 | Code | Meaning |
 | --- | --- |
 | `CAPABILITY_NOT_PROVIDED` | A declared capability had no provider bound for this call. |
-| `EFFECT_NOT_DISPATCHABLE` | A declared effect had no dispatcher bound for this call. |
 | `FUNCTION_ERROR` | Registering/calling a Function failed: undeclared api_name, duplicate registration, or no handler bound. |
 | `PRECONDITION_FAILED` | An action's precondition failed; the message names it. The conventional code for `ActionError` (kind precondition); an author may attach their own stable code instead (AC7), e.g. `raise ActionError("...", code="GAP_NOT_ACKNOWLEDGED")`. It is also used with overridden codes for unregistered/unhandled actions (`UNKNOWN_ACTION`) and parameter-validation failures (`INVALID_PARAMS`) -- see the `code=` overrides at those raise sites. |
 
@@ -1290,7 +1234,6 @@ table below is generated from it.
 | `PAGE_NOT_ITERABLE` | A `Page`/`TypedPage` was iterated, indexed or measured directly instead of through `.items`. Both are pydantic models, so the inherited `BaseModel.__iter__` would otherwise yield `(field_name, value)` pairs -- `for row in page` hands back `('items', [...])` and `('next_cursor', ...)`, and the failure surfaces later as `AttributeError: 'tuple' object has no attribute 'payload'` at whatever touched the row. This refuses at the iteration itself and names `.items` and `limit=None`. |
 | `INVALID_LIMIT` | `GuardedQuery.get_objects`'s (or `OntologyClient.list`'s) `limit` was < 1 -- a silently empty page would hide that the call was malformed rather than legitimately paginated. |
 | `STALE_CURSOR` | An ordered walk's cursor resolved to a row that is no longer current; restart the ordered walk from the first page. |
-| `EFFECT_NOT_SERIALIZABLE` | Raised inside the action transaction when an emitted payload cannot be JSON-encoded for the durable outbox (spec `durable-effect-outbox`). This deliberate M5 behavior change means the action rolls back and nothing is sent: before the outbox, an unencodable payload still dispatched while only the audit record degraded to `_safe_json_dumps`'s placeholder, but a durable work item is what a later attempt sends and must not deliver a placeholder as the author's data. Normal payloads use `model_dump(mode="json")` for datetime, UUID, Decimal, enums, and nested models; this takes an arbitrary Python object on a sufficiently loose field. |
 | `INVALID_PARAMS` | A call's parameters failed declared-shape validation: an action's params, or a read parameter whose SHAPE is wrong -- an `order_by` that is neither a field name nor a (field, direction) pair, or a `where=` that is not a mapping of field name to condition. A parameter naming something that does not exist is `UNKNOWN_FIELD` instead; this code is about the shape, not the name. |
 | `INVALID_RECORD` | A bulk_upsert record failed declared-shape validation (missing primary key, missing required property, unknown property, or a value that does not match its declared type). The validation kind carries the SAME `INVALID_RECORD` code that `bulk_upsert` already reports: from a caller's point of view, a record not matching the declaration is one failure regardless of which write path noticed. This closes the M9 hole where only ingest checked: `Store.insert`/`update` and therefore `ActionContext.insert`/`update` could commit a row missing a required property or carrying a wrong-typed value, report success, and leave the typed reader unable to hydrate it. The same code wraps a Pydantic `ValidationError` while hydrating a stored `OntologyObject` payload (for example, a non-ISO datetime string), never surfacing a bare traceback; a stored row failing declared-shape validation on read-back is the same failure class ingest carries on write. |
 | `LINK_NOT_FOUND` | A link closure found no matching live link. |
@@ -1301,7 +1244,6 @@ table below is generated from it.
 | `ONTOLOGY_INVALID` | `OntologyRegistry.validate()` rejected a declaration because its cross-references were invalid. |
 | `SCOPE_POLICY_ERROR` | A ScopePolicy declaration is unusable: a rule references an undeclared object type, link type, or scope level; a type declares an empty contributor rule list; or a type is listed in unscoped_types while also declaring scope rules. |
 | `UNDECLARED_CAPABILITY` | A handler requested a capability its action or function did not declare. |
-| `UNDECLARED_EFFECT` | An action emitted an effect it did not declare. |
 | `UNKNOWN_ACTION` | An action name is unregistered on the OntologyRegistry, or has no handler bound to it. |
 | `UNKNOWN_FIELD` | A typed `get`/`list` call named a key that is not one of the target class's declared properties (spec typed-authoring AC7). The existence-only check runs client-side before the guarded read layer; a hidden-but-declared key still reaches the visibility kind unchanged, and the string-form surface keeps its silent-non-match behavior (AC8). The error lives here since C3 of the staged refactor (previously `ontary.functions`, which re-exports it). |
 | `UNKNOWN_LINK_TYPE` | An operation referenced an unregistered link type. |
@@ -1317,7 +1259,7 @@ table below is generated from it.
 | `MIN_N_VIOLATION` | An aggregate would be computed over fewer than min_n distinct contributors. |
 | `VISIBILITY_DENIED` | A single-object read/write targeted an object outside the consumer's scope. |
 
-*53 codes across 7 kinds.*
+*50 codes across 7 kinds.*
 
 ---
 

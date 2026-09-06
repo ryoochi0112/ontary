@@ -25,7 +25,6 @@ from __future__ import annotations
 
 from ontary.audit import AuditEntry as AuditEntry
 from ontary.audit import CapabilityAccessRecord as CapabilityAccessRecord
-from ontary.audit import EffectRecord as EffectRecord
 from ontary.audit import WriteRecord as WriteRecord
 from ontary.store.inmemory import InMemoryStore as InMemoryStore
 from ontary.store.postgres import PostgresStore as PostgresStore

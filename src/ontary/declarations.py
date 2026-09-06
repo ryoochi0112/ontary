@@ -27,71 +27,33 @@ from ontary.ontology import OntologyDef
 
 
 class Declarations(BaseModel):
-    """This runtime's answers to authority, capabilities, effects,
-    write-back, re-ingest, visibility, transaction-ownership, idempotency,
-    audit-scope, and min-N (spec AC10/AC15). Frozen: a `Declarations` value
+    """This runtime's answers to authority, capabilities, write-back,
+    re-ingest, visibility, transaction-ownership, idempotency, audit-scope,
+    and min-N (spec AC10/AC15). Frozen: a `Declarations` value
     is a read-only snapshot, not something a consumer can mutate and expect
     to change runtime behavior."""
 
     model_config = ConfigDict(frozen=True)
 
     authority: str = "model-declared-runtime-checked"
-    # Wording note 2 (whole-branch review, 2026-07-26): `writeback` and
-    # `capabilities` were tightened AGAIN. The capability/effect split is by
-    # DIRECTION, but it is enforced only for the runtime's own machinery: a
-    # provider is arbitrary author code returned unwrapped (`actions.py`,
-    # `functions.py`), so a "capability" called `Mailer` can perform an outward
-    # WRITE inline -- including from a Function, which AC4 otherwise forbids from
-    # writing outward at all, and including before an Action then raises and rolls
-    # its ontology writes back. The runtime cannot see that, let alone stop it.
-    # The previous `writeback` string ("outward writes only via declared effects")
-    # therefore asserted a boundary that does not exist. §11 already admitted
-    # effects are "declared and audited, not sandboxed or filtered"; this makes
-    # the same admission where a consumer actually reads it.
-    #
-    # Wording note (2026-07-26): both strings below were tightened after the
-    # implementing agent pointed out that the first drafts overclaimed.
+    # Wording note (2026-07-26): the string below was tightened after the
+    # implementing agent pointed out that the first draft overclaimed.
     # "injected per call" read as though every call took a provider argument,
-    # when providers are bound per client and RESOLVED per invocation; and
-    # "a dispatch failure is audited" stood in flat contradiction to
-    # "finalization is best-effort" one clause later -- it is audited only when
-    # the follow-up append itself succeeds. A `Declarations` value exists so a
-    # consumer need not read this source to know what the runtime does, so an
-    # imprecision here is a defect, not a stylistic quibble.
+    # when providers are bound per client and RESOLVED per invocation. A
+    # `Declarations` value exists so a consumer need not read this source to
+    # know what the runtime does, so an imprecision here is a defect, not a
+    # stylistic quibble.
     capabilities: str = (
         "declared per action/function; provider bound per client, resolved "
         "per invocation, never process-global; fail-closed when unprovided "
         "or undeclared; the provider itself is trusted author code the "
         "runtime does not sandbox"
     )
-    # Rewritten 2026-07-26 (`durable-effect-outbox` AC8). The old string ended
-    # "at-most-once, no retry ... a pending effect may or may not have been
-    # delivered", which was the honest answer while delivery state lived in an
-    # append-only audit row nothing ever read again. It is now a durable outbox
-    # row a drain retries, so the guarantee flipped to AT-LEAST-ONCE -- and the
-    # redelivery window is named here rather than left for a reader to infer,
-    # because a dispatcher that is not idempotent is now the caller's bug and
-    # they can only know that if this says so.
-    effects: str = (
-        "declared per action; emitted as data inside the transaction; the "
-        "durable outbox row and the pending audit record commit with the "
-        "writes; dispatched after commit in emission order; at-least-once "
-        "with bounded retries -- a dispatcher must be idempotent on "
-        "EffectMeta.effect_id, since a crash between the outside call and "
-        "the delivered mark redelivers; retries run only when the embedder "
-        "calls drain_effects (no background thread); an Exception from a "
-        "dispatcher is never raised to the caller and never rolled back, "
-        "and is audited on a best-effort basis, while a KeyboardInterrupt "
-        "or SystemExit does propagate and stops later dispatches, leaving "
-        "those effects pending for a later drain; an exhausted row is "
-        "failed and never retried again"
-    )
     writeback: str = (
-        "ontology writes are all ontology-owned; the runtime's own outward "
-        "write path is declared effects, dispatched after commit — but a "
-        "capability provider is unsandboxed author code that can also write "
-        "outward inline, so this is a declared convention, not an enforced "
-        "boundary"
+        "ontology writes are all ontology-owned; the runtime has no outward "
+        "write path of its own — but a capability provider is unsandboxed "
+        "author code that can write outward inline, so this is a declared "
+        "convention, not an enforced boundary"
     )
     reingest: str = (
         "upsert-merge; sources supply only source-backed state; owned "
@@ -134,7 +96,7 @@ class Declarations(BaseModel):
 
     tenancy: str = (
         "one tenant per store instance, bound at construction; every object, "
-        "link, audit and outbox read and write is scoped to it; primary keys are "
+        "link and audit read and write is scoped to it; primary keys are "
         "unique per tenant, not globally; on Postgres, row-level security "
         "policies enforce the same boundary in the database (unless rls=False), "
         "and a superuser bypasses them by Postgres design"
@@ -156,11 +118,7 @@ class Declarations(BaseModel):
     # here about a resolver; (4) the principal and the actor it resolved to
     # are BOTH audited, which is what makes a resolver that maps every
     # principal onto one privileged actor visible in the log instead of a
-    # silent single point of failure; (5) the one disclosed exception to
-    # (4): `actions.py`'s `drain_effect_outbox` redelivery entry restates
-    # the actor but deliberately carries no principal of its own (spec
-    # §4.2) -- named here rather than left to be discovered as a silent gap
-    # in (4)'s "both ... are audited".
+    # silent single point of failure.
     #
     # Deliberately NOT claimed: anything about a resolver's own error
     # messages. A resolver's deliberate `OntaryError` is re-raised to the
@@ -180,9 +138,7 @@ class Declarations(BaseModel):
         "footing as a capability provider; both that principal and the "
         "actor it resolved to are audited, so a resolver mapping every "
         "principal onto one privileged actor is visible in the log rather "
-        "than hidden by it; a redelivered effect's audit row restates the "
-        "actor but not the principal, joined back by invocation_id -- so "
-        "principal is None on those rows; not every audited row has one"
+        "than hidden by it; not every audited row has one"
     )
     min_n: int
 

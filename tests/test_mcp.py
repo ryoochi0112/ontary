@@ -41,7 +41,6 @@ from mcp.server.fastmcp import FastMCP
 from ontary.actions import ActionContext, ActionError
 from ontary.authoring import ActionParams, Ontology, OntologyObject, prop, scope_ref, target
 from ontary.client import OntologyClient
-from ontary.effects import EffectMeta, EffectPayload
 from ontary.errors import (
     AuthorityError,
     ConflictError,
@@ -275,12 +274,8 @@ def test_build_mcp_server_accepts_and_threads_provider_maps() -> None:
         def read(self) -> str:
             return "mcp"
 
-    class Notify(EffectPayload):
-        message: str
-
     ontology, _Book = _base_library_ontology()
     capability = ontology.capability(Reader)
-    effect = ontology.effect(Notify)
     provider = ReaderProvider()
 
     class MetadataParams(ActionParams):
@@ -291,30 +286,20 @@ def test_build_mcp_server_accepts_and_threads_provider_maps() -> None:
         target=_Book,
         roles=["Librarian"],
         capabilities=[capability],
-        effects=[effect],
         api_name="metadataOnly",
     )
     def metadata_only(
         _ctx: ActionContext, params: MetadataParams
     ) -> dict[str, str]:
-        # Deliberately does not access/emit either declaration: metadata
-        # describes allowed dependencies, not observed runtime use.
+        # Deliberately does not access the declaration: metadata describes
+        # allowed dependencies, not observed runtime use.
         return {"book_id": params.book_id}
-
-    def dispatch(_payload: EffectPayload, _meta: EffectMeta) -> None:
-        pass
 
     @ontology.function(api_name="providerBindings", capabilities=[capability])
     def provider_bindings(
         query: BoundQuery, _params: dict[str, Any]
     ) -> dict[str, bool]:
-        return {
-            "capability": query._capability_providers[capability] is provider,
-            # Effect dispatchers reach the ACTION path only; a Function's
-            # BoundQuery must not carry them (AC4 -- a Function cannot declare
-            # effects, so it must not be handed the means to send any).
-            "no_effect_dispatchers": not hasattr(query, "_effect_dispatchers"),
-        }
+        return {"capability": query._capability_providers[capability] is provider}
 
     ontology.validate()
     server = build_mcp_server(
@@ -322,20 +307,18 @@ def test_build_mcp_server_accepts_and_threads_provider_maps() -> None:
         ObjectStore(ontology.registry),
         _librarian(),
         capabilities={capability: provider},
-        effects={effect: dispatch},
     )
 
     assert _call(
         server,
         "call_function",
         {"api_name": "providerBindings", "params": {}},
-    ) == {"result": {"capability": True, "no_effect_dispatchers": True}}
+    ) == {"result": {"capability": True}}
     action_payload = _call(server, "list_action_types", {})["action_types"]
     metadata_action = next(
         action for action in action_payload if action["api_name"] == "metadataOnly"
     )
     assert metadata_action["capabilities"] == ["Reader"]
-    assert metadata_action["effects"] == ["Notify"]
     function_payload = _call(server, "list_functions", {})["functions"]
     provider_function = next(
         fn for fn in function_payload if fn["api_name"] == "providerBindings"
@@ -996,19 +979,15 @@ def test_call_function_internal_error_is_generic_and_hides_internals() -> None:
     assert "secret" not in json.dumps(payload)
 
 
-# -- governed capability/effect error codes (spec AC16) ----------------------
+# -- governed capability error codes (spec AC16) -----------------------------
 
 
 def _build_governed_error_server() -> FastMCP:
     class Reader(Protocol):
         def read(self) -> str: ...
 
-    class Notice(EffectPayload):
-        message: str
-
     ontology, Book = _base_library_ontology()
     reader = ontology.capability(Reader)
-    notice = ontology.effect(Notice)
 
     @ontology.function(api_name="undeclaredCapability")
     def undeclared_capability(query: BoundQuery, _params: dict[str, Any]) -> str:
@@ -1017,36 +996,6 @@ def _build_governed_error_server() -> FastMCP:
     @ontology.function(api_name="missingCapability", capabilities=[reader])
     def missing_capability(query: BoundQuery, _params: dict[str, Any]) -> str:
         return query.capability(reader).read()
-
-    class MissingEffectParams(ActionParams):
-        book_id: str = target(Book)
-
-    @ontology.action(
-        MissingEffectParams,
-        target=Book,
-        roles=["Librarian"],
-        effects=[notice],
-        api_name="missingEffect",
-    )
-    def missing_effect(
-        _ctx: ActionContext, params: MissingEffectParams
-    ) -> dict[str, str]:
-        return {"book_id": params.book_id}
-
-    class UndeclaredEffectParams(ActionParams):
-        book_id: str = target(Book)
-
-    @ontology.action(
-        UndeclaredEffectParams,
-        target=Book,
-        roles=["Librarian"],
-        api_name="undeclaredEffect",
-    )
-    def undeclared_effect(
-        ctx: ActionContext, params: UndeclaredEffectParams
-    ) -> dict[str, str]:
-        ctx.emit(Notice(message="not declared on this action"))
-        return {"book_id": params.book_id}
 
     ontology.validate()
     store = ObjectStore(ontology.registry)
@@ -1077,28 +1026,6 @@ def test_mcp_preserves_capability_not_provided_code_and_kind() -> None:
     assert payload["error"]["type"] == "PreconditionFailed"
     assert payload["error"]["code"] == "CAPABILITY_NOT_PROVIDED"
     assert payload["error"]["kind"] == "precondition"
-
-
-def test_mcp_preserves_effect_not_dispatchable_code_and_kind() -> None:
-    payload = _call(
-        _build_governed_error_server(),
-        "execute_action",
-        {"api_name": "missingEffect", "params": {"book_id": "book-1"}},
-    )
-    assert payload["error"]["type"] == "PreconditionFailed"
-    assert payload["error"]["code"] == "EFFECT_NOT_DISPATCHABLE"
-    assert payload["error"]["kind"] == "precondition"
-
-
-def test_mcp_preserves_undeclared_effect_code_and_kind() -> None:
-    payload = _call(
-        _build_governed_error_server(),
-        "execute_action",
-        {"api_name": "undeclaredEffect", "params": {"book_id": "book-1"}},
-    )
-    assert payload["error"]["type"] == "ValidationFailed"
-    assert payload["error"]["code"] == "UNDECLARED_EFFECT"
-    assert payload["error"]["kind"] == "validation"
 
 
 # -- unknown names ------------------------------------------------------------

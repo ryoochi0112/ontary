@@ -32,18 +32,16 @@ from typing import Any
 import pytest
 from mcp.server.fastmcp import FastMCP
 
-from examples.tickets import run_effects, run_mcp
+from examples.tickets import run_mcp
 from examples.tickets.connector import TicketsCSVLikeSource, build_tickets_mapping_spec
 from examples.tickets.fixtures import load_fixtures
-from examples.tickets.ontology import NOTIFY_TICKET_ESCALATION, build_ontology
+from examples.tickets.ontology import build_ontology
 from ontary import ActionContext, ActionParams, BoundQuery, Ontology, OntologyObject, prop, target
 from ontary.actions import ActionError
 from ontary.client import OntologyClient
 from ontary.connect import oid, run_pipeline
-from ontary.effects import EffectMeta, EffectPayload
 from ontary.errors import VisibilityError
 from ontary.mcp_server import build_mcp_server
-from ontary.outbox import DrainReport
 from ontary.security import Consumer
 from ontary.store import ObjectStore
 
@@ -96,13 +94,6 @@ def _ai_agent(scope_id: str) -> Consumer:
     )
 
 
-_RECORDED_TICKET_EFFECTS: list[EffectPayload] = []
-
-
-def _record_ticket_effect(payload: EffectPayload, _meta: EffectMeta) -> None:
-    _RECORDED_TICKET_EFFECTS.append(payload)
-
-
 def _seeded() -> tuple[OntologyClient, dict[str, str], ObjectStore]:
     """Build the tickets ontology + fixtures and return an `OntologyClient`
     bound to an Agent scoped to the seeded `queue_a` -- `EscalateTicket`/
@@ -113,7 +104,6 @@ def _seeded() -> tuple[OntologyClient, dict[str, str], ObjectStore]:
         ontology,
         store,
         _agent(ids["queue_a_id"]),
-        effects={NOTIFY_TICKET_ESCALATION: _record_ticket_effect},
     )
     return client, ids, store
 
@@ -271,7 +261,6 @@ def test_mcp_query_objects() -> None:
         ontology,
         store,
         _agent(ids["queue_a_id"]),
-        effects={NOTIFY_TICKET_ESCALATION: _record_ticket_effect},
     )
     payload = _call(server, "query_objects", {"obj_type": "Ticket"})
     assert {r["payload"]["id"] for r in payload["result"]} == {
@@ -287,7 +276,6 @@ def test_mcp_execute_action_success_and_denial() -> None:
         ontology,
         store,
         _agent(ids["queue_a_id"]),
-        effects={NOTIFY_TICKET_ESCALATION: _record_ticket_effect},
     )
     payload = _call(
         server,
@@ -301,7 +289,6 @@ def test_mcp_execute_action_success_and_denial() -> None:
         ontology,
         store,
         _agent(ids["queue_b_id"]),
-        effects={NOTIFY_TICKET_ESCALATION: _record_ticket_effect},
     )
     denial_payload = _call(
         server_denied,
@@ -464,18 +451,3 @@ def test_run_mcp_example_builds_server_and_returns_query_envelope() -> None:
         "Refund request",
     }
     assert payload["next_cursor"] is not None
-
-
-def test_run_effects_example_dispatches_effect_and_reports_drain(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """The effects entrypoint performs the action and reports the drain."""
-    report = run_effects.run()
-    # The printing dispatcher succeeds during the action's inline attempt, so
-    # the subsequent drain has a complete, zero-row accounting report.
-    assert report == DrainReport(claimed=0)
-    output = capsys.readouterr().out
-    assert "NotifyTicketEscalation" in output
-    assert "payload={'ticket_id':" in output
-    assert "'reason': 'priority'" in output
-    assert "claimed=0 delivered=0 retrying=0 failed=0 skipped=0" in output

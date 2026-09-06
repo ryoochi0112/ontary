@@ -19,7 +19,7 @@
 - [読み取り](#読み取り)
 - [Action](#action)
 - [Function](#function)
-- [統制された副作用](#統制された副作用)
+- [Capability](#capability)
 - [セキュリティ](#セキュリティ)
 - [ストア](#ストア)
 - [バルク取り込み](#バルク取り込み)
@@ -40,16 +40,15 @@
 
 `ActionContext`、`ActionParams`、`BaseConnector`、`BoundQuery`、`CanonicalBatch`、
 `CanonicalRecord`、`CapabilityHandle`、`Cardinality`、`Consumer`、`CustomResolver`、
-`DirectProperty`、`EffectDispatcher`、`EffectHandle`、`EffectMeta`、
-`EffectPayload`、`LinkBinding`、`LinkHandle`、`MappingSpec`、`ObjectBinding`、
+`DirectProperty`、`LinkBinding`、`LinkHandle`、`MappingSpec`、`ObjectBinding`、
 `Ontology`、`OntologyObject`、`RawTables`、`RowVisibilityStore`、`SelfScope`、
 `Sensitivity`、`Source`、`Store`、`ViaLink`、`oid`、`prop`、`ref`、`run_pipeline`、
 `scope_ref`、`target`。
 
 ### Runtime entries / ランタイム項目
 
-`Declarations`、`DrainReport`、`Finding`、`InMemoryStore`、`ObjectStore`、`OntologyClient`、
-`OutboxRecord`、`Page`、`PostgresStore`、`RetryPolicy`、`ScopePolicy`、`TypedPage`、
+`Declarations`、`Finding`、`InMemoryStore`、`ObjectStore`、`OntologyClient`、
+`Page`、`PostgresStore`、`ScopePolicy`、`TypedPage`、
 `__version__`、`build_mcp_server`、`declarations`。
 
 ### Error classes / 例外クラス
@@ -82,7 +81,7 @@ Python 3.12+。コアパッケージの依存は `pydantic` のみ。エクス�
 
 ### `ontary.audit`
 
-`CapabilityAccessRecord`、`EffectRecord`。
+`CapabilityAccessRecord`。
 
 ### `ontary.client`
 
@@ -128,10 +127,6 @@ Python 3.12+。コアパッケージの依存は `pydantic` のみ。エクス�
 
 `OntologyDef`。
 
-### `ontary.outbox`
-
-`DEFAULT_RETRY_POLICY`、`OutboxState`。
-
 ### `ontary.query`
 
 `GuardedQuery`。
@@ -154,13 +149,12 @@ Python 3.12+。コアパッケージの依存は `pydantic` のみ。エクス�
 ### `ontary.testing`
 
 SDK 利用者向けのテストヘルパーは `make_store`、`consumer`、`raises_code`、
-`capture_effects`、`FixedClock`、`SequentialIds` です。`make_store(ontology)` は空の
+`FixedClock`、`SequentialIds` です。`make_store(ontology)` は空の
 `InMemoryStore` を新しく作り、`consumer(...)` は有効な `Consumer` を組み立て、
 `raises_code(code)` はメッセージではなく機械可読なコードでエラーを検証します
 （`ontary.ingest.IngestError` を含む任意の `OntaryError` に加え、安定した文字列
 `.code` を公開する構造的に互換な作者定義のコード付き例外にも一致します）。
-`capture_effects()` は外部へ配信せず、呼び出された `(payload, meta)` を `.effects` リストへ
-記録する callable dispatcher を返します。`FixedClock(start)` はタイムゾーン付きの同じ
+`FixedClock(start)` はタイムゾーン付きの同じ
 日時を毎回返し、naive な start は拒否します。`SequentialIds(prefix)` は
 `prefix-1`、`prefix-2`、…という決定的な ID を返します。
 
@@ -192,7 +186,6 @@ SDK 利用者向けのテストヘルパーは `make_store`、`consumer`、`rais
 | `@ontology.action(params_cls, ...)` | 型付き Action ハンドラを登録 |
 | `@ontology.function(...)` | 導出値 Function を登録 |
 | `ontology.capability(proto, ...)` | Capability を宣言し `CapabilityHandle` を返す |
-| `ontology.effect(payload_cls, ...)` | Effect を宣言し `EffectHandle` を返す |
 | `ontology.validate()` | 検証して登録を**凍結** |
 | `ontology.bind(store, ...)` | `OntologyRuntime` を構築 |
 
@@ -321,26 +314,25 @@ covers_scope(policy, consumer, resolved) -> bool
 ## ランタイムとクライアント
 
 ```python
-runtime = ontology.bind(store, capabilities={...}, effects={...})   # 1 回だけ
+runtime = ontology.bind(store, capabilities={...})                  # 1 回だけ
 client  = runtime.for_consumer(consumer)                            # リクエストごとに安価に
 ```
 
-### `Ontology.bind(store, *, clock=None, id_factory=None, capabilities=None, effects=None)`
+### `Ontology.bind(store, *, clock=None, id_factory=None, capabilities=None)`
 
 `clock` はタイムゾーン付き `datetime` を返す callable で、デフォルトは
 `datetime.now(timezone.utc)` です。`id_factory` は `str` を返す callable で、デフォルトは
 UUID 形式の ID です。どちらも共有ランタイムに保存され、すべての
-`for_consumer()` ビューに引き継がれます。`drain_effects(now=...)` を明示した場合は、
-ランタイムの clock よりそちらが優先されます。
+`for_consumer()` ビューに引き継がれます。
 
-### `OntologyRuntime(ontology, store, handlers=None, *, clock=None, id_factory=None, capabilities=None, effects=None)`
+### `OntologyRuntime(ontology, store, handlers=None, *, clock=None, id_factory=None, capabilities=None)`
 
 1 つの `(ontology, store)` ペアに対する、コンシューマー非依存の共有機構 — クエリ層、
 Action 実行器、バインド済みハンドラ — をちょうど 1 回だけ配線します。
 
-- **`.for_consumer(consumer, *, capabilities=None, effects=None) -> OntologyClient`** —
+- **`.for_consumer(consumer, *, capabilities=None) -> OntologyClient`** —
   安価なビュー。1 プロセスで多数のコンシューマーを捌いても、再配線は起きません。
-### `OntologyClient(ontology, store, consumer, *, capabilities=None, effects=None)`
+### `OntologyClient(ontology, store, consumer, *, capabilities=None)`
 
 ちょうど 1 つの `(ontology, store, consumer)` に束縛されます。直接構築しても動作し、
 その場合は内部で使い捨てのランタイムを構築します。
@@ -538,7 +530,7 @@ surface だけでなく、**すべての** surface が対象です。型が宣�
 ## Action
 
 Action は、型付きパラメータクラスと、
-`@ontology.action(params_cls, target=..., roles=[...], capabilities=(), effects=())`
+`@ontology.action(params_cls, target=..., roles=[...], capabilities=())`
 でデコレートしたハンドラの組です。
 
 `execute` はすべて同じパイプラインを通ります。
@@ -565,7 +557,6 @@ Action は、型付きパラメータクラスと、
 | `.links_from(link_api_name, from_id) -> list[str]` | リンク走査 |
 | `.links_to(link_api_name, to_id) -> list[str]` | リンク走査 |
 | `.capability(handle) -> P` | 宣言済み Capability の取得 |
-| `.emit(payload)` | 宣言済み Effect の発行 |
 | `.consumer` | 呼び出し元の `Consumer` |
 
 `read_current` と `read_all` は、信頼されたハンドラ向けの生の読み取りであり、
@@ -604,25 +595,23 @@ Action が監査ログの下でロールバックされうるためです。
 
 `ts`、`actor`、`role`、`action`、`target_type`、`target_id`、`params`、`outcome`、
 `invocation_id`、および完全性レコード: `writes: list[WriteRecord]`、
-`effects: list[EffectRecord]`、`capability_accesses: list[CapabilityAccessRecord]`。
+`capability_accesses: list[CapabilityAccessRecord]`。
 
 **`kind: Literal["action", "function"]`** — このエントリを生成したもの。Action と
 Function は 1 つのログを共有するため、読み手が両者を区別する手段が `kind` です（同じ
 `api_name` の Action と Function を宣言することを妨げるものは何もありません）。
 `function` エントリでは `action` に Function の api_name が入り、`target_type` は `""`
-（Function に対象オブジェクト型はありません）、`writes`/`effects` は常に空です。
+（Function に対象オブジェクト型はありません）、`writes` は常に空です。
 
 **`invocation_id: str | None`** — `execute()`（および監査対象の `call_function()`）
-呼び出しごとに 1 つの id で、その呼び出しが書き込む**すべて**のエントリ（`denied`/`error`/`ok` のエントリと、Effect を持つ Action
-では後続の `effects_dispatched` エントリ）に刻印されます。`pending` の Effect とその結果を
-対応づけるときは、フィールド一致と追記順に頼らずこの値を使ってください — 同じ Action を
+呼び出しごとに 1 つの id で、その呼び出しが書き込む**すべて**のエントリに刻印されます。
+エントリを対応づけるときは、フィールド一致と追記順に頼らずこの値を使ってください — 同じ Action を
 同じパラメータで 2 回呼ぶと、それ以外では区別できません。`None` はこのフィールドが存在
 しなかった頃のエントリ（古いエンジンが書いたストアファイル）を意味し、後から捏造される
 ことはありません。
 
 - `WriteRecord` — `op`（`create`/`update`/`link`）、`object_type`、`link_type`、
   `object_id`、`from_id`、`to_id`
-- `EffectRecord` — `api_name`、`payload`、`outcome`（`pending`/`dispatched`/`failed`）、`error`
 - `CapabilityAccessRecord` — `api_name`、`count`
 
 ---
@@ -648,8 +637,8 @@ Function の*パラメータ自体*はどちらの surface でも `dict[str, Any
 ### Function の監査境界
 
 監査対象となる call では、`OntologyClient.call_function` が `kind="function"` の監査エントリを 1 件追加します —
-invocation id、params、outcome、handler の `capability_accesses` を記録します。`writes` と
-`effects` は構造上空です。
+invocation id、params、outcome、handler の `capability_accesses` を記録します。`writes`
+は構造上空です。
 
 Function を監査するかは `FunctionDef.audited` による**条件付き**です。
 
@@ -690,12 +679,11 @@ store ではなく `execute()` に属するのと同じく、client surface に�
 
 ---
 
-## 統制された副作用
+## Capability
 
 ハンドラが外界に求めるものはすべて**宣言**し、バインド時に提供する必要があります。
-未宣言の利用は拒否され、利用はすべて監査されます。
-
-### Capability — ハンドラが読む／呼ぶもの
+未宣言の利用は拒否され、利用はすべて監査されます。Capability はハンドラが読む／呼ぶ
+ものです。
 
 ```python
 Clock = ontology.capability(ClockProto, name="clock")
@@ -708,50 +696,8 @@ def handler(ctx, params):
 未宣言の Capability を要求すると `UNDECLARED_CAPABILITY`、宣言済みでもプロバイダが
 バインドされていなければ `CAPABILITY_NOT_PROVIDED` になります。
 
-### Effect — ハンドラが「起きてほしい」こと
-
-```python
-Notify = ontology.effect(NotifyPayload, api_name="Notify")
-
-@ontology.action(P, target=T, roles=["Agent"], effects=[Notify])
-def handler(ctx, params):
-    ctx.emit(NotifyPayload(...))
-```
-
-Effect は**呼び出しではなくデータ**です。ハンドラはペイロードを発行するだけで、
-ディスパッチはトランザクションの外で起こります。各 Effect には `EffectMeta`
-（`action`、`actor_id`、`role`、`ts`、`effect_id`、`attempt`）が伴います。未宣言の
-Effect の発行は `UNDECLARED_EFFECT`、宣言済みでもディスパッチャが無ければ
-`EFFECT_NOT_DISPATCHABLE` になります。JSON 化できないペイロードは、トランザクション
-の**内側**で `EFFECT_NOT_SERIALIZABLE` を送出します。アクションはロールバックされ、
-外部へは何も送られません。
-
-プロバイダは `ontology.bind(store, capabilities={...}, effects={...})`、または
-クライアント単位で `for_consumer(...)` にバインドします。
-
-### 永続的な配信
-
-発行された Effect は、アクションのトランザクションの内側で `effect_outbox` テーブル
-に書き込まれます。つまり配信すべき仕事が、オントロジーへの書き込みと一緒にコミット
-されます。配信保証は **at-least-once** です。
-
-| API | シグネチャ | 補足 |
-| --- | --- | --- |
-| `RetryPolicy` | `RetryPolicy(max_attempts=3, initial_backoff=1s, multiplier=2.0, max_backoff=5m, lease=60s)` | ランタイム／クライアント単位に `effect_retry=` でバインド。`max_attempts=1` は従来の at-most-once と同じ挙動になる。バックオフは決定的（ジッタなし）。 |
-| `OntologyClient.drain_effects` | `drain_effects(*, limit=100, now=None) -> DrainReport` | 実行時刻に達した行をリース付きで確保し（二重送信を防ぐ）、そのクライアントのディスパッチャで試行して `DrainReport(claimed, delivered, retrying, failed, skipped)` を返す。`OntologyRuntime` にも同じメソッドがある。 |
-| `OntologyClient.outbox` | `outbox() -> list[OutboxRecord]` | 全行の管理用リード。`pending`・`delivered`・打ち切り済みの `failed` をすべて含む。 |
-
-`execute()` がコミット後に行う同期ディスパッチが、ポリシー上の 1 回目の試行です。
-以降の再試行が自動で走ることはありません。**この SDK はスレッドを一切起動しない**
-ので、障害からの回復が必要なら、ワーカー・cron・リクエスト末尾のいずれかから
-`drain_effects()` を呼ぶ必要があります。そのクライアントにディスパッチャが無い
-Effect の行は、失敗とは数えずリースを解放し、`skipped` に計上します。
-
-行が `delivered` になるのは外部呼び出しから戻った**後**なので、その間にプロセスが
-死ねば再配信されます。**ディスパッチャは `EffectMeta.effect_id` に対して冪等で
-なければなりません**。この id は 1 回の発行につき 1 つで、再試行をまたいでも変わり
-ません。`max_attempts` を使い切った行は `failed` になります。これは終端状態であり、
-読み出せるデッドレターとして残りますが、二度と再試行されません。
+プロバイダは `ontology.bind(store, capabilities={...})`、またはクライアント単位で
+`for_consumer(...)` にバインドします。
 
 ---
 
@@ -1025,7 +971,7 @@ client.ingest_links(
 from ontary.mcp_server import build_mcp_server
 
 server = build_mcp_server(ontology, store, consumer, *, name=None,
-                          capabilities=None, effects=None)  # -> FastMCP
+                          capabilities=None)  # -> FastMCP
 ```
 
 1 サーバープロセスにつき 1 つの `Consumer` アイデンティティ。宣言済みハンドラは
@@ -1087,7 +1033,7 @@ from ontary.mcp_server import build_multi_consumer_mcp_server, ConsumerResolver
 
 server = build_multi_consumer_mcp_server(
     ontology, store, *, resolve_consumer, name=None,
-    capabilities=None, effects=None,
+    capabilities=None,
     token_verifier=None, auth=None,
 )  # -> FastMCP
 ```
@@ -1157,7 +1103,7 @@ FastMCP 自身の `json_response` 設定で制御されており、いずれの�
 | `ObjectTypeDef` | `api_name`, `display_name`, `description`, `layer`, `properties`, `primary_key`, `owned` |
 | `PropertyDef` | `name`, `type`, `required`, `sensitivity`, `scope_level` |
 | `LinkTypeDef` | `api_name`, `from_type`, `to_type`, `cardinality`, `description`, `identity_revealing`, `owned` |
-| `ActionTypeDef` | `api_name`, `display_name`, `target_type`, `executable_by_roles`, `description`, `parameters`, `capabilities`, `effects` |
+| `ActionTypeDef` | `api_name`, `display_name`, `target_type`, `executable_by_roles`, `description`, `parameters`, `capabilities` |
 | `ActionParameterDef` | `name`, `type`, `required`, `refers_to`, `scope_semantics` |
 | `FunctionDef` | `api_name`, `description`, `input_description`, `output_description`, `capabilities` |
 | `Sensitivity` | `ai_usable`, `human_visible` |
@@ -1175,10 +1121,9 @@ MCP サーバーがバインドする単位です。この SDK には**モジュ
 **`Declarations`** / `declarations(...)` は宣言された契約をデータとして公開します —
 MCP の `get_declarations` が返すものです: `authority`（モデル宣言・実行時チェック）、
 `capabilities`（action/function ごとに宣言され、未提供・未宣言なら fail-closed。
-provider 自体はサンドボックス化されない作者コード）、`effects`（action ごとに宣言され、
-永続 outbox 経由で at-least-once、コミット後にディスパッチ）、`writeback`
+provider 自体はサンドボックス化されない作者コード）、`writeback`
 （オントロジーへの書き込みはすべてオントロジー所有。実行時自身の外部書き込み経路は
-宣言された effects だが、capability provider はインラインで外部書き込みもできるため、
+持たないが、capability provider はインラインで外部書き込みもできるため、
 これは宣言された規約であって強制された境界ではない）、`reingest`
 （upsert-merge。所有プロパティは残り、削除はない）、`visibility_default`
 （deny-by-default — 未解決のスコープは隠れる）、`transaction_ownership`
@@ -1198,9 +1143,7 @@ MCP サーバーでは、この実行時ではなくトランスポートによ�
 渡した resolver（サンドボックス化されない信頼された作者コード）によって `Consumer`
 にマッピングされ、トランスポートが証明した `principal` と解決された `actor` の
 どちらも監査されるため、resolver がすべてのプリンシパルを 1 つの特権的な actor に
-マッピングした場合、それはログ上で可視化されます。再配信された Effect の監査行は
-`actor` は書き戻しますが `principal` は書き戻さず、`invocation_id` で元の行に
-紐付けられます — そのため、それらの行では `principal` が `None` になります。
+マッピングした場合、それはログ上で可視化されます。
 監査された行のすべてが `principal` を持つわけではありません。`min_n`
 はオントロジー固有の唯一の答えで、オントロジー自身の `ScopePolicy.min_n`
 から読み取られます。
@@ -1260,7 +1203,6 @@ MCP サーバーでは、この実行時ではなくトランスポートによ�
 | Code | Meaning |
 | --- | --- |
 | `CAPABILITY_NOT_PROVIDED` | A declared capability had no provider bound for this call. |
-| `EFFECT_NOT_DISPATCHABLE` | A declared effect had no dispatcher bound for this call. |
 | `FUNCTION_ERROR` | Registering/calling a Function failed: undeclared api_name, duplicate registration, or no handler bound. |
 | `PRECONDITION_FAILED` | An action's precondition failed; the message names it. The conventional code for `ActionError` (kind precondition); an author may attach their own stable code instead (AC7), e.g. `raise ActionError("...", code="GAP_NOT_ACKNOWLEDGED")`. It is also used with overridden codes for unregistered/unhandled actions (`UNKNOWN_ACTION`) and parameter-validation failures (`INVALID_PARAMS`) -- see the `code=` overrides at those raise sites. |
 
@@ -1277,7 +1219,6 @@ MCP サーバーでは、この実行時ではなくトランスポートによ�
 | `PAGE_NOT_ITERABLE` | A `Page`/`TypedPage` was iterated, indexed or measured directly instead of through `.items`. Both are pydantic models, so the inherited `BaseModel.__iter__` would otherwise yield `(field_name, value)` pairs -- `for row in page` hands back `('items', [...])` and `('next_cursor', ...)`, and the failure surfaces later as `AttributeError: 'tuple' object has no attribute 'payload'` at whatever touched the row. This refuses at the iteration itself and names `.items` and `limit=None`. |
 | `INVALID_LIMIT` | `GuardedQuery.get_objects`'s (or `OntologyClient.list`'s) `limit` was < 1 -- a silently empty page would hide that the call was malformed rather than legitimately paginated. |
 | `STALE_CURSOR` | An ordered walk's cursor resolved to a row that is no longer current; restart the ordered walk from the first page. |
-| `EFFECT_NOT_SERIALIZABLE` | Raised inside the action transaction when an emitted payload cannot be JSON-encoded for the durable outbox (spec `durable-effect-outbox`). This deliberate M5 behavior change means the action rolls back and nothing is sent: before the outbox, an unencodable payload still dispatched while only the audit record degraded to `_safe_json_dumps`'s placeholder, but a durable work item is what a later attempt sends and must not deliver a placeholder as the author's data. Normal payloads use `model_dump(mode="json")` for datetime, UUID, Decimal, enums, and nested models; this takes an arbitrary Python object on a sufficiently loose field. |
 | `INVALID_PARAMS` | A call's parameters failed declared-shape validation: an action's params, or a read parameter whose SHAPE is wrong -- an `order_by` that is neither a field name nor a (field, direction) pair, or a `where=` that is not a mapping of field name to condition. A parameter naming something that does not exist is `UNKNOWN_FIELD` instead; this code is about the shape, not the name. |
 | `INVALID_RECORD` | A bulk_upsert record failed declared-shape validation (missing primary key, missing required property, unknown property, or a value that does not match its declared type). The validation kind carries the SAME `INVALID_RECORD` code that `bulk_upsert` already reports: from a caller's point of view, a record not matching the declaration is one failure regardless of which write path noticed. This closes the M9 hole where only ingest checked: `Store.insert`/`update` and therefore `ActionContext.insert`/`update` could commit a row missing a required property or carrying a wrong-typed value, report success, and leave the typed reader unable to hydrate it. The same code wraps a Pydantic `ValidationError` while hydrating a stored `OntologyObject` payload (for example, a non-ISO datetime string), never surfacing a bare traceback; a stored row failing declared-shape validation on read-back is the same failure class ingest carries on write. |
 | `LINK_NOT_FOUND` | A link closure found no matching live link. |
@@ -1288,7 +1229,6 @@ MCP サーバーでは、この実行時ではなくトランスポートによ�
 | `ONTOLOGY_INVALID` | `OntologyRegistry.validate()` rejected a declaration because its cross-references were invalid. |
 | `SCOPE_POLICY_ERROR` | A ScopePolicy declaration is unusable: a rule references an undeclared object type, link type, or scope level; a type declares an empty contributor rule list; or a type is listed in unscoped_types while also declaring scope rules. |
 | `UNDECLARED_CAPABILITY` | A handler requested a capability its action or function did not declare. |
-| `UNDECLARED_EFFECT` | An action emitted an effect it did not declare. |
 | `UNKNOWN_ACTION` | An action name is unregistered on the OntologyRegistry, or has no handler bound to it. |
 | `UNKNOWN_FIELD` | A typed `get`/`list` call named a key that is not one of the target class's declared properties (spec typed-authoring AC7). The existence-only check runs client-side before the guarded read layer; a hidden-but-declared key still reaches the visibility kind unchanged, and the string-form surface keeps its silent-non-match behavior (AC8). The error lives here since C3 of the staged refactor (previously `ontary.functions`, which re-exports it). |
 | `UNKNOWN_LINK_TYPE` | An operation referenced an unregistered link type. |
@@ -1304,7 +1244,7 @@ MCP サーバーでは、この実行時ではなくトランスポートによ�
 | `MIN_N_VIOLATION` | An aggregate would be computed over fewer than min_n distinct contributors. |
 | `VISIBILITY_DENIED` | A single-object read/write targeted an object outside the consumer's scope. |
 
-*全 53 コード / 7 種別。*
+*全 50 コード / 7 種別。*
 
 ---
 

@@ -15,7 +15,6 @@ from typing import Any, ClassVar, Generic, TypeVar
 
 from pydantic import BaseModel, ConfigDict, PrivateAttr, ValidationError
 
-from ontary.effects import EffectPayload
 from ontary.errors import ValidationFailed
 from ontary.meta import OntologyRegistry, Sensitivity
 from ontary.security import ConsumerKind
@@ -25,7 +24,6 @@ from ontary.typesys import _storage_scalar_violation
 __all__ = [
     "ActionParams",
     "CapabilityHandle",
-    "EffectHandle",
     "LinkHandle",
     "OntologyObject",
     "hydrate",
@@ -178,7 +176,6 @@ def _class_stamp(cls: type[Any]) -> tuple[str | None, OntologyRegistry | None]:
 
 _F = TypeVar("_F", bound=OntologyObject)
 _ProviderT_co = TypeVar("_ProviderT_co", covariant=True)
-_EffectT_co = TypeVar("_EffectT_co", bound=EffectPayload, covariant=True)
 
 
 @dataclass(frozen=True)
@@ -207,20 +204,4 @@ class CapabilityHandle(Generic[_ProviderT_co]):
 
     api_name: str
     proto: type[_ProviderT_co]
-    registry: OntologyRegistry
-
-
-@dataclass(frozen=True)
-class EffectHandle(Generic[_EffectT_co]):
-    """Typed identity for one outside-write payload declaration.
-
-    The payload class stays on the authoring handle for type narrowing, never
-    on `EffectTypeDef`; only the api-name and derived field IR cross the
-    authoring/runtime boundary. Registry identity is deliberately explicit,
-    because matching by api-name alone would allow two ontologies in one
-    process to cross-talk.
-    """
-
-    api_name: str
-    payload_cls: type[_EffectT_co]
     registry: OntologyRegistry

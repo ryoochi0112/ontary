@@ -17,7 +17,6 @@ from conftest import raises_code
 import ontary
 from examples.tickets.fixtures import load_fixtures
 from examples.tickets.ontology import (
-    NOTIFY_TICKET_ESCALATION,
     Agent,
     EscalateTicketParams,
     Org,
@@ -42,7 +41,6 @@ from ontary import (
 )
 from ontary.authoring import Ontology, OntologyObject, prop
 from ontary.client import OntologyClient, OntologyRuntime
-from ontary.effects import EffectMeta, EffectPayload
 from ontary.errors import VisibilityError
 
 
@@ -61,13 +59,6 @@ INLINE_CAPABILITY: CapabilityHandle[_InlineCapabilityProvider] = _CAPABILITY_ONT
 )
 
 
-_RECORDED_TICKET_EFFECTS: list[EffectPayload] = []
-
-
-def _record_ticket_effect(payload: EffectPayload, _meta: EffectMeta) -> None:
-    _RECORDED_TICKET_EFFECTS.append(payload)
-
-
 def _client() -> tuple[OntologyClient, dict[str, str]]:
     ontology, store = build_ontology()
     ids = load_fixtures(store)
@@ -78,12 +69,7 @@ def _client() -> tuple[OntologyClient, dict[str, str]]:
         scope_id=ids["queue_a_id"],
         kind="human",
     )
-    client = OntologyClient(
-        ontology,
-        store,
-        consumer,
-        effects={NOTIFY_TICKET_ESCALATION: _record_ticket_effect},
-    )
+    client = OntologyClient(ontology, store, consumer)
     return client, ids
 
 

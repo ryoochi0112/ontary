@@ -59,7 +59,7 @@ def main() -> None:
     print("2. a governed runtime comes up")
     # 0.6.0 moved the runtime entry points one namespace deeper and replaced
     # the legacy exception classes with the kind hierarchy. These are the
-    # import paths docs/storage.md and docs/effects.md teach, so the smoke
+    # import paths docs/storage.md teaches, so the smoke
     # test exercises what a reader is actually told to write.
     from ontary import (
         Consumer,

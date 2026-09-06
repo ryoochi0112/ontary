@@ -49,8 +49,7 @@ class MigrationReport(BaseModel):
     """What one `migrate_object_type` call did.
 
     `scanned == changed + unchanged + len(failures)` always holds, so a caller
-    can assert the whole accounting rather than one number -- the same shape
-    `DrainReport` uses for effect delivery."""
+    can assert the whole accounting rather than one number."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -96,8 +95,7 @@ def migrate_object_type(
 
     **`transform` must be idempotent.** Batches commit as they go, so a crash
     mid-run leaves some rows migrated and some not, and the fix is to run it
-    again -- the same contract the effect outbox puts on a dispatcher, for the
-    same reason.
+    again.
 
     `dry_run=True` reports exactly what a real run would do and writes nothing:
     every row is still transformed and validated, so a dry run finds the failures
@@ -226,9 +224,8 @@ def _audit_migration(store: Store, report: MigrationReport) -> None:
     auditor will look for. Filing it as an ordinary write would hide it among the
     writes it is supposed to explain.
 
-    Best-effort, like the effect outbox's finalization append: the rows are
-    already rewritten, and raising here would report a completed migration as a
-    failure.
+    Best-effort: the rows are already rewritten, and raising here would report
+    a completed migration as a failure.
     """
     try:
         store.append_audit(

@@ -131,8 +131,7 @@ ontology action or Function.
 Once a request resolves, audit entries retain both identities: `principal` records
 who the transport proved and `actor`/`role` records the consumer the resolver
 selected. That makes a resolver which maps every principal to one privileged actor
-visible to an auditor. A redelivered effect records its actor and joins back by
-`invocation_id`, but has no new transport principal.
+visible to an auditor.
 
 ## Transport requirements
 
