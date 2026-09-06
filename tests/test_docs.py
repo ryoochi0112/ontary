@@ -423,8 +423,8 @@ def test_cookbook_recipes_execute_verbatim(recipe: str) -> None:
 
 
 def test_readme_is_within_line_budget() -> None:
-    """T12's README skeleton has a hard 250-line budget."""
-    assert len(_read_readme().splitlines()) <= 250
+    """OSS v0 README: hard 200-line budget (spec § 4.1)."""
+    assert len(_read_readme().splitlines()) <= 200
 
 
 def _parse_api_reference_error_rows(text: str) -> dict[str, str]:
