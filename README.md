@@ -115,6 +115,7 @@ multi-consumer MCP server is [`examples/tickets/`](examples/tickets/).
 | Worked recipes | [Tickets reference app](examples/tickets/README.md) |
 | Compatibility and migration | [CHANGELOG.md](CHANGELOG.md) · [Compatibility](docs/compatibility.md) |
 | Cutting a release (maintainers) | [Releasing](docs/releasing.md) |
+| Reporting a vulnerability | [Security policy](SECURITY.md) |
 
 ## License
 
