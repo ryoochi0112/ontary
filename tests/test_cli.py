@@ -80,9 +80,7 @@ def _raising_builder() -> Ontology:
 def test_arg_parser_captures_validate_and_explain_options() -> None:
     parser = cli._build_parser()
 
-    validate = parser.parse_args(
-        ["validate", "module:ontology", "--store", "data.db", "--json"]
-    )
+    validate = parser.parse_args(["validate", "module:ontology", "--json"])
     explain = parser.parse_args(
         [
             "explain",
@@ -97,7 +95,6 @@ def test_arg_parser_captures_validate_and_explain_options() -> None:
 
     assert validate.command == "validate"
     assert validate.target == "module:ontology"
-    assert validate.store == "data.db"
     assert validate.as_json is True
     assert explain.command == "explain"
     assert explain.consumer == "Reader:org:org-1"
@@ -205,23 +202,6 @@ def test_explain_malformed_read_exits_two_without_traceback(
     assert code == 2
     assert "--read must use the form Type:id" in captured.err
     assert "Traceback" not in captured.err
-
-
-def test_validate_unreadable_store_exits_two(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    code = cli.main(
-        [
-            "validate",
-            _target("_warning_ontology"),
-            "--store",
-            str(tmp_path),
-        ]
-    )
-
-    captured = capsys.readouterr()
-    assert code == 2
-    assert "could not open SQLite store" in captured.err
 
 
 def test_erase_missing_store_is_distinct_and_does_not_create_file(

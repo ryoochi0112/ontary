@@ -282,7 +282,7 @@ def test_diagnose_converts_a_rule_failure_into_a_finding(
         )
     )
 
-    def broken_rule(_definition: object, _store: object) -> tuple[Finding, ...]:
+    def broken_rule(_definition: object) -> tuple[Finding, ...]:
         raise RuntimeError("deliberate diagnostic failure")
 
     monkeypatch.setattr(

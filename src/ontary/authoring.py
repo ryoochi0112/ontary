@@ -1021,15 +1021,13 @@ class Ontology:
             min_n=self.min_n,
         )
 
-    def diagnose(self, store: Store | None = None) -> list[Finding]:
+    def diagnose(self) -> list[Finding]:
         """Return all validation findings without raising mid-sweep.
 
-        ``store`` is accepted for rules that need runtime data in later
-        diagnostic tasks and is passed through to every rule.  T8's core
-        validation-parity rules do not use it.  If this ontology is still
-        being authored, diagnostics build a transient definition from the
-        same pre-freeze structures used by ``validate``; the cached definition
-        is left untouched so registration can continue afterwards.
+        If this ontology is still being authored, diagnostics build a
+        transient definition from the same pre-freeze structures used by
+        ``validate``; the cached definition is left untouched so
+        registration can continue afterwards.
         """
         if self._definition is not None:
             definition = self._definition
@@ -1043,7 +1041,7 @@ class Ontology:
                 registry=self.registry,
                 policy=policy,
             )
-        return _collect_findings(definition, store)
+        return _collect_findings(definition)
 
     def bind(
         self,

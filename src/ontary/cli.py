@@ -60,7 +60,6 @@ def _build_parser() -> argparse.ArgumentParser:
         "validate", help="validate an ontology and report diagnostics"
     )
     validate.add_argument("target", metavar="pkg.module:attr")
-    validate.add_argument("--store", metavar="PATH")
     validate.add_argument("--json", action="store_true", dest="as_json")
 
     explain = commands.add_parser(
@@ -201,25 +200,17 @@ def _render_findings(findings: list[Finding], as_json: bool) -> None:
         print(f"  fix: {finding.fix_hint}")
 
 
-def _run_validate(target: str, store_path: str | None, as_json: bool) -> int:
+def _run_validate(target: str, as_json: bool) -> int:
     try:
         ontology, _returned_store = _load_target(target)
     except _LoadFailure as exc:
         _print_load_failure(exc)
         return 2
 
-    store: Store | None = None
-    if store_path is not None:
-        try:
-            store = _open_sqlite(ontology, store_path)
-        except _LoadFailure as exc:
-            _print_load_failure(exc)
-            return 2
-
     # `diagnose` is the complete collector, including every finding that
     # `validate()` would reject.
     try:
-        findings = ontology.diagnose(store=store)
+        findings = ontology.diagnose()
     except Exception as exc:
         _print_load_failure(_LoadFailure(f"could not diagnose {target!r}: {exc}"))
         return 2
@@ -468,7 +459,7 @@ def main(argv: list[str] | None = None) -> int:
         print(ontary.__version__)
         return 0
     if args.command == "validate":
-        return _run_validate(args.target, args.store, args.as_json)
+        return _run_validate(args.target, args.as_json)
     if args.command == "explain":
         return _run_explain(
             args.target,

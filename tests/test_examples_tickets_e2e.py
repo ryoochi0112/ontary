@@ -34,7 +34,6 @@ from mcp.server.fastmcp import FastMCP
 
 import ontary
 import ontary.cli as cli
-import ontary.diagnose as diagnose_module
 import ontary.mcp_server as mcp_server
 from examples.tickets.connector import TicketsCSVLikeSource, build_tickets_mapping_spec
 from examples.tickets.fixtures import load_fixtures
@@ -896,46 +895,6 @@ def test_tickets_ontology_diagnose_is_clean() -> None:
     ontology, _ = build_ontology()
 
     assert ontology.diagnose() == []
-
-
-def test_tickets_ontology_diagnose_storage_envelope_exceeded(
-    tickets_store_factory: StoreFactory,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    ontology, _ = build_ontology()
-    store = tickets_store_factory(ontology.registry)
-    load_fixtures(store)
-
-    backend = type(store).__name__
-    monkeypatch.setattr(
-        diagnose_module,
-        "STORAGE_ENVELOPE",
-        {backend: diagnose_module.StorageEnvelope(rows=0, seconds_per_row=0.0001, label=backend)},
-    )
-
-    findings = ontology.diagnose(store=store)
-
-    ticket_finding = next(
-        finding
-        for finding in findings
-        if finding.code == "STORAGE_ENVELOPE_EXCEEDED"
-        and finding.location == "Ticket"
-    )
-    assert ticket_finding.severity == "warn"
-
-
-def test_tickets_ontology_diagnose_storage_envelope_is_silent_at_ordinary_size(
-    tickets_store_factory: StoreFactory,
-) -> None:
-    ontology, _ = build_ontology()
-    store = tickets_store_factory(ontology.registry)
-    load_fixtures(store)
-
-    findings = ontology.diagnose(store=store)
-
-    assert not any(
-        finding.code == "STORAGE_ENVELOPE_EXCEEDED" for finding in findings
-    )
 
 
 def test_diagnose_returns_typed_findings_for_lint_dirty_scratch_ontology() -> None:

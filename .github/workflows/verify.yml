@@ -55,27 +55,6 @@ jobs:
             tests/test_multi_tenancy.py tests/test_erase.py tests/test_actions.py \
             tests/test_examples_tickets_e2e.py -q
 
-      # Storage envelope curve (spec `storage-envelope.md` AC1/AC2/AC10). This
-      # is the PUBLISHED, reader-reproducible Postgres curve -- run on this
-      # fixed `postgres:16` service, not a developer machine (spec §4: "a
-      # laptop number is not reproducible by a reader"). It asserts no timing
-      # threshold and never gates the merge (L23); `continue-on-error` means
-      # its failure or absence is reported in this job's own log, never
-      # silently treated as a measured number (L30). `docs/storage.md` now
-      # quotes `PostgresStore` figures derived from this exact step's own CI
-      # runs, not a laptop: the local Homebrew 17.11 run this comment used
-      # to point readers at was superseded by 55ad234 during this feature's own
-      # development, and is kept in that section only as labelled, superseded provenance.
-      # Reconcile a future log against `docs/storage.md#storage-envelope`'s
-      # own publication rule instead: a slower worst point earns a new run
-      # table and lowers the published floor; anything else is recorded in
-      # the observed-run log there without one.
-      - name: Storage envelope curve (informational, non-gating)
-        continue-on-error: true
-        run: |
-          uv run python scripts/scan_curve.py 1000 5000 25000 --uncached \
-            --dsn postgresql://postgres:postgres@localhost:5432/postgres
-
   # The check that had never existed (M6 step 3). `verify` above runs from the
   # source tree with every extra installed -- precisely the environment an
   # outside adopter does NOT have. Their first command is

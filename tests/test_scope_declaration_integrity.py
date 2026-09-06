@@ -236,7 +236,7 @@ def test_diagnose_reports_the_intersection_without_raising() -> None:
     -- and `_collect_findings` reported nothing here before this change."""
     definition, _store_ = _incoherent()
 
-    findings = _collect_findings(definition, None)
+    findings = _collect_findings(definition)
 
     offending = [f for f in findings if f.code == "SCOPE_POLICY_ERROR"]
     assert offending, [f.message for f in findings]
