@@ -15,7 +15,7 @@ from ontary.meta import OntologyRegistry
 from ontary.store.schema import _SCHEMA_SQL, SCHEMA_VERSION
 
 
-class SqliteSchemaMigrator:
+class SqliteSchemaGate:
     """Schema-creation half of `ObjectStore`.
 
     Annotations only, no state: `ObjectStore.__init__` owns `_conn` and

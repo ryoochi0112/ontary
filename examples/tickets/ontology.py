@@ -138,6 +138,9 @@ escalationAssignedTo: LinkHandle[Escalation, Agent] = _ontology.link(
 
 class EscalateTicketParams(ActionParams):
     ticket_id: str = target(Ticket)
+    # Audited, not read: the handler does not branch on `reason`, but every
+    # parameter is recorded in the `AuditEntry`, so the caller's stated reason
+    # is preserved with the escalation. Not dead code.
     reason: str | None = None
 
 

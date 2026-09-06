@@ -653,6 +653,7 @@ class InMemoryStore:
         with self._transaction_lock:
             return [entry.model_copy(deep=True) for entry in self._audit]
 
+
 def _static_conformance_check(registry: OntologyRegistry) -> Store:
     """Never called at runtime -- exists purely so mypy (which runs
     `--strict` over `src/`, see `make verify`) fails the build if

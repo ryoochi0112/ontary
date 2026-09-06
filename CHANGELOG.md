@@ -34,7 +34,9 @@ under `### Removed`; the next release (0.11.0) is the first to ship without them
 
 - docs/compatibility.md is now a one-paragraph pre-1.0 policy; CHANGELOG's Removed/Changed sections are the migration guide.
 - SQLite stores no longer migrate older files in place; a file stamped below
-  `SCHEMA_VERSION` 10 is refused with `STORE_VERSION_UNSUPPORTED`.
+  `SCHEMA_VERSION` 10 is refused with `STORE_VERSION_UNSUPPORTED`. The internal
+  mixin `ontary.store.migration.SqliteSchemaMigrator` is renamed
+  `SqliteSchemaGate` to match: it gates, it does not migrate.
 - Decision B: exact-scope-id match is the v1 contract; parent-covers-child
   coverage is opt-in and post-1.0. The `covers_scope` and `ScopePolicy`
   docstrings cite the decision instead of calling it deferred, and a contract

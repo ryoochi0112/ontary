@@ -464,6 +464,7 @@ FROM audit_log
 WHERE tenant = {{p}} ORDER BY seq ASC
 """
 
+
 def _placeholder(dialect: Dialect) -> str:
     return "?" if dialect == "sqlite" else "%s"
 

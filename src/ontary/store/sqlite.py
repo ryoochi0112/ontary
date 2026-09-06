@@ -45,7 +45,7 @@ from ontary.store._shared import (
     retire_object_refusal,
     unknown_page_token,
 )
-from ontary.store.migration import SqliteSchemaMigrator
+from ontary.store.migration import SqliteSchemaGate
 from ontary.store.values import (
     DEFAULT_BATCH,
     DEFAULT_TENANT,
@@ -67,7 +67,7 @@ def _is_busy_error(exc: sqlite3.OperationalError) -> bool:
     return "database is locked" in message or "database table is locked" in message
 
 
-class ObjectStore(SqliteSchemaMigrator):
+class ObjectStore(SqliteSchemaGate):
     """SQLite-backed store for canonical objects, links, and audit log.
 
     Postgres-shaped SQL (standard types, no SQLite-only quirks) so the schema

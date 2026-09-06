@@ -250,24 +250,24 @@ def test_the_audit_log_is_tenant_scoped(tenants: tuple[Any, Any]) -> None:
     assert globex.audit_entries() == []
 
 
-# -- the default tenant and migration ----------------------------------------
+# -- the default tenant -------------------------------------------------------
 
 
-def test_rows_written_before_tenancy_belong_to_the_default_tenant(
+def test_rows_written_without_a_tenant_belong_to_the_default_tenant(
     tmp_path: Path,
     make_ontology: OntologyFactory,
     make_store: StoreFactory,
 ) -> None:
-    """The v7 -> v8 backfill, from the outside: a store opened without a tenant
-    argument still reads what it wrote before the column existed."""
+    """A store opened without a tenant argument writes and reads under
+    `DEFAULT_TENANT`, and naming that tenant explicitly sees the same rows."""
     ontology = _tenancy_ontology(make_ontology)
     path = str(tmp_path / "upgraded.db")
     before = make_store(ontology.registry, path)
-    before.insert("W", {"id": "legacy", "label": "written pre-v8"}, SRC)
+    before.insert("W", {"id": "legacy", "label": "written without a tenant"}, SRC)
 
     after = make_store(ontology.registry, path)
     row = after.read_current("W", "legacy")
-    assert row is not None and row.payload["label"] == "written pre-v8"
+    assert row is not None and row.payload["label"] == "written without a tenant"
 
     named = make_store(ontology.registry, path, tenant=DEFAULT_TENANT)
     assert named.read_current("W", "legacy") is not None
