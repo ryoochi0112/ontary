@@ -2,7 +2,7 @@
 
 **English** · [日本語](api-reference.ja.md) · [← README](../README.md)
 
-The curated front door of `ontary`: **58 names** in `__all__`. The rest of the
+The curated front door of `ontary`: **42 names** in `__all__`. The rest of the
 engine remains available from its canonical submodule (`ontary.meta`,
 `ontary.store`, and so on).
 
@@ -32,7 +32,7 @@ read, serve — start with the [README](../README.md).
 
 ## Front door
 
-`__all__` is sorted, duplicate-free, importable, and capped at 58 names. These
+`__all__` is sorted, duplicate-free, importable, and exactly 42 names. These
 are the names an ontology author should reach for without choosing an engine
 namespace.
 
@@ -55,7 +55,7 @@ namespace.
 `PermissionDenied`, `PreconditionFailed`, `ValidationFailed`, and
 `VisibilityError`.
 
-The 58-name count is asserted by `tests/test_docs.py`, so a
+The 42-name count is asserted exactly by `tests/test_docs.py`, so a
 new root export cannot quietly expand this vocabulary.
 
 ```python
@@ -461,6 +461,45 @@ The contract:
   sort value moves behind it is duplicated. Only a quiescent ordered walk is
   gap-free and repeat-free.
 - `after` without `limit` → `AFTER_WITHOUT_LIMIT`. `limit < 1` → `INVALID_LIMIT`.
+  A malformed or unknown cursor → `INVALID_CURSOR`. An ordered walk cannot resume
+  after any write to its own cursor row — including a retirement or an `update`
+  that supersedes it — and raises `STALE_CURSOR`; restart from the first page.
+
+**Scale caveat for ordered pages.** Each ordered page currently materializes and
+sorts the whole object type, regardless of `limit` or `where` selectivity. In the
+measured 20,000-row case, `limit=10` read all 20,000 rows with `order_by` versus
+500 without it: O(N log N) per ordered page, and O(N² log N) for a full ordered
+walk.
+
+### `traverse`
+
+`client.traverse(link_cls, from_obj_or_id)` is the typed form;
+`client.traverse("Comment", "commentOnTicket", comment_id)` names the source type,
+link API name, and source id in that order. `BoundQuery` accepts the same
+handle-first typed form inside Functions.
+
+Returned targets are subject to the same visibility checks as any other read.
+Traversal through an identity-revealing link raises `VisibilityError` with
+`VISIBILITY_DENIED` for a human consumer before the target is returned; AI
+consumers still receive normal scope and sensitivity enforcement on the target
+rows. `reverse=True` traverses from the link's target side, and the
+identity-revealing denial is symmetric in both directions.
+
+### Visible-row counting
+
+`count(obj_type, where=None)` returns the number of matching rows after the
+consumer's scope and row-visibility checks; `exists(...)` reports whether that same
+post-visibility selection is non-empty. Both accept the same `where` operator
+grammar as `list`. A consumer scoped away from every matching row receives `0`
+from `count` and `False` from `exists`, not a privacy refusal.
+
+These two operations are deliberately not min-N-gated. They reveal only the size
+of a row set after post-visibility filtering, and the consumer
+can already enumerate the same rows with `list(..., limit=None)`, so a min-N
+refusal would add no disclosure protection.
+`count_contributors` remains the sole privacy-counting primitive: unlike
+visible-row counting, it resolves the distinct contributor population behind an
+aggregate and therefore keeps the aggregate's min-N release discipline.
 
 ### Aggregates
 
@@ -851,7 +890,7 @@ Every denial in this list fails closed — the object's own owner is denied,
 nothing is disclosed.
 <!-- scope-denied-consequences:end -->
 
-Three implementations ship, all proven against one 192-assertion conformance suite:
+Three implementations ship, all proven against one shared conformance suite:
 
 - **`ObjectStore`** — SQLite. History (close-old / insert-new), links, audit log.
 - **`InMemoryStore`** — pure Python. No file, no SQL; for tests and dogfooding.

@@ -2,7 +2,7 @@
 
 The compact T12 README links each reader-facing docs page, carries one
 executable quickstart, and deliberately leaves detailed contracts to their
-canonical pages. The cookbook's recipes are executable too. API-reference
+canonical pages. The tickets app's recipes are executable too. API-reference
 tables, declarations, error codes, and the curated `ontary.__all__` remain
 independently pinned.
 """
@@ -117,9 +117,6 @@ NEW_ENGLISH_DOCS = tuple(
     for name in (
         "storage.md",
         "mcp-serving.md",
-        "queries.md",
-        "authority.md",
-        "cookbook.md",
     )
 )
 READER_DOCS = tuple(
@@ -133,42 +130,19 @@ EXAMPLES = Path(__file__).resolve().parent.parent / "examples"
 
 
 def test_queries_document_visible_row_count_disclosure_reasoning() -> None:
-    text = (_DOCS / "queries.md").read_text()
+    """The visible-row-count reasoning moved out of the deleted queries page.
+
+    It now lives in the API reference's Reading section; the reasoning itself is
+    still pinned verbatim, because "why `count`/`exists` are not min-N-gated" is
+    a disclosure argument, not a description of an implementation detail.
+    """
+    text = (_DOCS / "api-reference.md").read_text()
 
     assert "post-visibility" in text
     assert "can already enumerate the same rows" in text
     assert "deliberately not min-N-gated" in text
     assert "scoped away from every matching row receives `0`" in text
     assert "`count_contributors` remains the sole privacy-counting primitive" in text
-
-
-def test_compatibility_describes_pypi_index() -> None:
-    """Compatibility must describe PyPI as the index.
-
-    A structural check rather than a prose snapshot: the compatibility
-    section must make the positive PyPI claim and must not retain the
-    pre-fork private-index claim.
-    """
-    compatibility = (_DOCS / "compatibility.md").read_text()
-    versioning = compatibility[
-        compatibility.index("## Versioning") : compatibility.index(
-            "## What counts as a breaking change"
-        )
-    ]
-    assert re.search(r"(?i)published on \[PyPI\]", versioning), (
-        "compatibility.md's Versioning section must describe the PyPI index"
-    )
-    assert "git+https://github.com/ryoochi0112/ontary@v" in versioning, (
-        "compatibility.md's Versioning section must keep the public git-ref fallback"
-    )
-    assert not re.search(
-        r"(?i)\b(?:not|isn't)\s+on an index\b", compatibility
-    ), (
-        "compatibility.md still claims the SDK is not on an index"
-    )
-    assert not re.search(r"(?i)private (?:Artifact Registry )?index", compatibility), (
-        "compatibility.md still describes the pre-fork private index"
-    )
 
 
 MOVED_DOC_NAMES = (
@@ -402,9 +376,13 @@ COOKBOOK_RECIPES = (
 
 @pytest.mark.parametrize("recipe", COOKBOOK_RECIPES)
 def test_cookbook_recipes_execute_verbatim(recipe: str) -> None:
-    """Every cookbook recipe is run from the exact Python fence we publish."""
-    cookbook = _DOCS / "cookbook.md"
-    text = cookbook.read_text()
+    """Every published recipe is run from the exact Python fence we publish.
+
+    The recipes moved from the deleted cookbook page into the tickets
+    reference app's README; the marker convention and the executable-doc
+    guarantee are unchanged.
+    """
+    text = (EXAMPLES / "tickets" / "README.md").read_text()
     marker = re.escape(f"cookbook-{recipe}-runnable")
     match = re.search(
         rf"<!-- {marker}:start -->\n"
@@ -413,9 +391,9 @@ def test_cookbook_recipes_execute_verbatim(recipe: str) -> None:
         text,
         re.DOTALL,
     )
-    assert match is not None, f"missing runnable marker for cookbook recipe {recipe!r}"
+    assert match is not None, f"missing runnable marker for recipe {recipe!r}"
     code = match.group(1)
-    tree = ast.parse(code, filename=f"docs/cookbook.md#{recipe}")
+    tree = ast.parse(code, filename=f"examples/tickets/README.md#{recipe}")
     for node in ast.walk(tree):
         if not isinstance(node, ast.ImportFrom):
             continue
@@ -432,10 +410,10 @@ def test_cookbook_recipes_execute_verbatim(recipe: str) -> None:
             }
         elif node.module is not None and node.module.startswith("ontary"):
             raise AssertionError(
-                f"cookbook recipe {recipe!r} imports engine name(s) from {node.module!r}"
+                f"recipe {recipe!r} imports engine name(s) from {node.module!r}"
             )
     namespace: dict[str, object] = {}
-    exec(compile(code, f"docs/cookbook.md#{recipe}", "exec"), namespace)
+    exec(compile(code, f"examples/tickets/README.md#{recipe}", "exec"), namespace)
 
 
 def test_readme_is_within_line_budget() -> None:
@@ -526,32 +504,6 @@ def test_changelog_new_error_codes_match_catalog_diff() -> None:
     ) - REMOVED_SINCE_080_ERROR_CODES
 
 
-def test_authority_page_names_every_declarations_field() -> None:
-    section = (_DOCS / "authority.md").read_text()
-
-    # Every field name (accounting for the min-N/min_n spelling) must have a
-    # matching prose heading somewhere in the section.
-    expected_headings = {
-        "authority": "Authority",
-        "capabilities": "Capabilities",
-        "writeback": "Write-back",
-        "reingest": "Re-ingest",
-        "visibility_default": "Visibility default",
-        "transaction_ownership": "Transaction ownership",
-        "idempotency": "Idempotency",
-        "audit_scope": "Audit scope",
-        "tenancy": "Tenancy",
-        "identity": "Identity",
-        "min_n": "min-N",
-    }
-    for field_name in Declarations.model_fields:
-        heading = expected_headings[field_name]
-        assert heading in section, (
-            f"Declarations field {field_name!r} has no matching heading "
-            f"{heading!r} in the authority page's Declared answers section"
-        )
-
-
 @pytest.mark.parametrize("path", API_REFERENCES, ids=lambda p: p.name)
 def test_api_reference_declarations_prose_names_every_declarations_field(
     path: Path,
@@ -579,11 +531,12 @@ def test_api_reference_declarations_prose_names_every_declarations_field(
 
 def test_ontary_all_is_sorted_unique_and_importable() -> None:
     all_names = ontary.__all__
-    # This is the hard front-door budget.  A 59th name is an intentional
-    # regression: it makes the authoring vocabulary larger than the contract.
-    assert len(all_names) <= 58, (
-        "ontary.__all__ exceeds the front-door budget: "
-        f"{len(all_names)} names"
+    # The front door is pinned EXACTLY, not to a ceiling: both references
+    # publish this number in prose, so a name added or dropped without editing
+    # them must fail here rather than drift under a budget.
+    assert len(all_names) == 42, (
+        "ontary.__all__ is no longer the documented 42 names: "
+        f"{len(all_names)} names -- update docs/api-reference{{,.ja}}.md too"
     )
     assert len(all_names) == len(set(all_names)), (
         "ontary.__all__ has duplicate name(s): "

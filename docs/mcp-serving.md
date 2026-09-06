@@ -148,7 +148,8 @@ process. The SDK does not provide its own HTTP entrypoint: the deployer runs the
 FastMCP server or wraps its ASGI application in the host's process.
 
 See [the API reference MCP section](api-reference.md#mcp-server) for the builder
-signatures and tool behavior. See [authority and architecture](authority.md) for
-the runtime's declared identity contract.
+signatures and tool behavior, and its
+[`Declarations`](api-reference.md#descriptor-authoring) paragraph for the runtime's
+declared identity contract.
 
 [Return to the README](../README.md) · [Return to the API reference](api-reference.md)

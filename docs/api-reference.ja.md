@@ -2,7 +2,7 @@
 
 [English](api-reference.md) · **日本語** · [← README](../README.md)
 
-`ontary` のキュレーションされたフロントドア: `__all__` の **58 個の名前**。
+`ontary` のキュレーションされたフロントドア: `__all__` の **42 個の名前**。
 残りのエンジン API は、`ontary.meta`、`ontary.store` などの
 定義元サブモジュールから利用します。
 
@@ -32,7 +32,7 @@
 
 ## フロントドア
 
-`__all__` はソート済み・重複なし・import 可能で、58 個を上限とします。オントロジーの
+`__all__` はソート済み・重複なし・import 可能で、ちょうど 42 個です。オントロジーの
 作者がエンジンの名前空間を選ばずに使う名前だけをここに置きます。
 
 ### Authoring vocabulary / 宣言用語彙
@@ -53,7 +53,7 @@
 `ActionError`、`AuthorityError`、`ConflictError`、`InternalError`、`OntaryError`、
 `PermissionDenied`、`PreconditionFailed`、`ValidationFailed`、`VisibilityError`。
 
-この 58 個の上限は `tests/test_docs.py` が検証するため、root export の増加を
+この 42 個という個数は `tests/test_docs.py` が厳密に検証するため、root export の増加を
 見落としません。
 
 ```python
@@ -451,6 +451,43 @@ list を返し、正の `limit` を渡すとページを返します。
   カーソルより前に移動した行は静かに取りこぼされ、後ろに移動した行は重複します。
   順序付き walk が欠落も重複も起こさないのは、ストアが静止している場合だけです。
 - `limit` なしの `after` → `AFTER_WITHOUT_LIMIT`。`limit < 1` → `INVALID_LIMIT`。
+  不正または未知のカーソル → `INVALID_CURSOR`。順序付き walk は、自身のカーソル行への
+  書き込み（retire や行を差し替える `update` を含む）の後は再開できず、`STALE_CURSOR`
+  になります。先頭ページからやり直してください。
+
+**順序付きページのスケール上の注意。** 順序付きページは現状、`limit` や `where` の
+絞り込みに関わらず、毎回そのオブジェクト型全体を展開してソートします。実測した
+20,000 行のケースでは、`order_by` ありの `limit=10` が 20,000 行すべてを読み、
+なしでは 500 行でした。1 ページあたり O(N log N)、順序付き walk 全体で O(N² log N)
+です。
+
+### `traverse`
+
+型付き形式は `client.traverse(link_cls, from_obj_or_id)` です。文字列形式は
+`client.traverse("Comment", "commentOnTicket", comment_id)` のように、ソース型・
+リンク API 名・ソース id をこの順で渡します。Function 内の `BoundQuery` も同じ
+ハンドル先頭の型付き形式を受け付けます。
+
+返される対象行にも通常どおり可視性チェックが適用されます。identity-revealing な
+リンクの traverse は、human コンシューマーに対しては対象を返す前に `VisibilityError`
+（`VISIBILITY_DENIED`）になります。AI コンシューマーには対象行への通常のスコープと
+sensitivity の強制が適用されます。`reverse=True` はリンクの対象側から辿り、
+identity-revealing の拒否は双方向で対称です。
+
+### 可視行のカウント
+
+`count(obj_type, where=None)` は、コンシューマーのスコープと行可視性のチェックを
+適用した後に一致する行数を返します。`exists(...)` は同じ post-visibility の選択が
+空でないかを返します。どちらも `list` と同じ `where` 演算子文法を受け付けます。
+一致する行すべてからスコープ外に置かれたコンシューマーは、プライバシー拒否ではなく
+`count` から `0`、`exists` から `False` を受け取ります。
+
+この 2 つの操作は意図的に min-N の対象外です。開示するのは post-visibility
+フィルター後の行集合のサイズだけであり、コンシューマーは
+`list(..., limit=None)` で同じ行を列挙できるため、min-N 拒否を加えても開示保護は
+増えません。`count_contributors` は引き続き唯一のプライバシー計数プリミティブです。
+可視行のカウントとは異なり、集計の背後にある distinct な貢献者母集団を解決するため、
+集計と同じ min-N のリリース規律を保ちます。
 
 ### 集計
 
@@ -826,7 +863,7 @@ target の level に答える hop は、その target の他の hop がまった
 情報は出ません。
 <!-- scope-denied-consequences:end -->
 
-3 つの実装が同梱され、すべて同じ 192 assertion の適合性テストスイートで検証されています。
+3 つの実装が同梱され、すべて同じ適合性テストスイートで検証されています。
 
 - **`ObjectStore`** — SQLite。履歴（close-old / insert-new）、リンク、監査ログ。
 - **`InMemoryStore`** — 純 Python。ファイルも SQL も無し。テストやドッグフーディング向け。

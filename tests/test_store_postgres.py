@@ -1,6 +1,6 @@
 """M8a: the Postgres backend's own behavior, beyond the shared contract.
 
-`tests/test_store_conformance.py` runs all 64 behavioral assertions against this
+`tests/test_store_conformance.py` runs its whole behavioral suite against this
 backend when `ONTARY_TEST_POSTGRES_DSN` is set -- that suite is the real proof
 the seam holds. What is here is what the shared suite CANNOT express, because it
 is Postgres-specific: the schema stamp, the refusal of a database this engine did

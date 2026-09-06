@@ -243,11 +243,12 @@ system, so its table names, identifiers, and quirks become the public domain mod
 integration details; and the same real-world entity arrives as several
 source-specific objects with no stable identity.
 
-**In ontary:** keep a vendor-independent canonical staging model. Each connector
-maps source data to canonical records, then canonical records to the ontology:
-source → canonical → ontology. Use `Source` to preserve lineage and use `owned`
-declarations to keep source-backed facts separate from ontology-owned state. Design
-`ObjectTypeDef` and `LinkTypeDef` names from the domain, never from an extract.
+**In ontary:** keep the ontology vendor-independent. Name `ObjectTypeDef` and
+`LinkTypeDef` from the domain, never from an extract. Load source data through
+`OntologyClient.ingest`, which maps each incoming record onto those declared types
+rather than letting the extract's own shape through. Use `Source` to preserve
+lineage, and use `owned` declarations to keep source-backed facts separate from
+ontology-owned state.
 
 *Source: Palantir, "Ontology design: Anti-patterns".*
 

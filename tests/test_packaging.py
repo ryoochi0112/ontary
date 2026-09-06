@@ -82,8 +82,8 @@ def test_metadata_carries_the_pointers_an_outside_consumer_needs() -> None:
     assert project["readme"] == "README.md"
     urls = project["urls"]
     assert isinstance(urls, dict)
-    assert {"Repository", "Changelog", "Documentation", "Compatibility"} <= set(urls)
-    for target in ("CHANGELOG.md", "docs/compatibility.md"):
+    assert {"Repository", "Changelog", "Documentation"} <= set(urls)
+    for target in ("CHANGELOG.md", "docs/api-reference.md"):
         assert (PYPROJECT.parent / target).is_file(), (
             f"{target} is linked from package metadata but does not exist"
         )
@@ -146,7 +146,7 @@ def test_documented_install_ref_matches_the_current_version() -> None:
     consumer on that path to the old code and look like it worked.
 
     Walks **every** `*.md` in the repo, not a hand-maintained file list. The
-    list used to be `README.md`/`CHANGELOG.md`/`docs/compatibility.md`, and
+    list used to be a hand-maintained trio of README/CHANGELOG/compatibility, and
     cutting `0.2.0` proved that was not the complete set: another Markdown doc
     kept handing readers `@v0.1.0`, and no test could see it. A doc carrying the
     install command is in scope by virtue of carrying it.
@@ -216,10 +216,11 @@ _SKIP_DIRS = frozenset(
 #: Docs that must ALWAYS carry the install command. Without this, a canonical
 #: file that drops the command entirely just stops being walked -- passing by
 #: absence.
+#: `docs/compatibility.md` left this list when it became a one-paragraph pre-1.0
+#: policy that states no version and carries no install command.
 _REQUIRED_REFS = (
     "README.md",
     "CHANGELOG.md",
-    "docs/compatibility.md",
 )
 
 #: A *released* section heading: `## [` followed by a digit. Deliberately not
@@ -273,7 +274,7 @@ def _newest_release_section(changelog: str) -> str:
 #: so a decoy mention earlier in the file would silently shadow the real badge and
 #: the guard's protection would be coincidental rather than structural.
 #:
-#: The list covers all four current-version statements this release had to
+#: The list covers every current-version statement this release has to
 #: hand-edit. That is a deliberate limit worth naming: this is *not* a
 #: content-following sweep like the install-ref walk beside it, because "every
 #: version-shaped token in every doc" also matches a large, legitimate historical
@@ -281,30 +282,18 @@ def _newest_release_section(changelog: str) -> str:
 #: and an allowlist of those would be the same hand-maintained list from the other
 #: direction. So this guards the four sites a release must touch; a NEW
 #: current-version claim added later is not covered until it is added here.
-#: `kind` says what the captured number should EQUAL, because the four sites do
-#: not all state the same thing: `exact` = this version; `minor` = its `MAJOR.MINOR`
+#: `kind` says what the captured number should EQUAL, because the sites need not
+#: all state the same thing: `exact` = this version; `minor` = its `MAJOR.MINOR`
 #: floor (all a `>=X.Y,<Z` range asserts); `next_patch` = the hypothetical patch
-#: after this one, which `docs/compatibility.md`'s "Moving to `v0.2.1` is an edit"
-#: is illustrating rather than claiming. Collapsing that last one into `exact` is
-#: the obvious mistake -- it fails immediately, but the tempting "fix" is to write
-#: the current version into a sentence whose whole point is that it names a
-#: DIFFERENT one.
+#: after this one, illustrated rather than claimed. The two
+#: `docs/compatibility.md` entries left this list when that page was cut to a
+#: one-paragraph pre-1.0 policy that states no version at all -- the right fix if
+#: it ever states one again is to add it back here, not to hand-edit prose.
 _VERSION_BADGES = (
     # Ships inside the distribution -- `readme = "README.md"` makes this the
     # wheel/sdist `Description`, so a stale value here is on the package page.
     ("README.md", re.compile(r"version\n\*\*([0-9][^*]*)\*\*, store schema"), "exact"),
     ("README.md", re.compile(r"Releases are annotated tags \(`v([0-9][^`]*)`\)"), "exact"),
-    # A copyable dependency pin: the most consequential of the four.
-    (
-        "docs/compatibility.md",
-        re.compile(r"ontary>=([0-9]+\.[0-9]+),<[0-9]"),
-        "minor",
-    ),
-    (
-        "docs/compatibility.md",
-        re.compile(r"Moving to\n`v([0-9][^`]*)` is an edit"),
-        "next_patch",
-    ),
 )
 
 

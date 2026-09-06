@@ -95,10 +95,9 @@ assert client.get(Ticket, ticket_id).escalated is True
 | API リファレンス | [日本語リファレンス](docs/api-reference.ja.md) |
 | Storage and tenancy | [Storage, tenancy, and schema](docs/storage.md) |
 | MCP serving | [MCP serving](docs/mcp-serving.md) |
-| Queries and pagination | [Queries, typed reads, and pagination](docs/queries.md) |
-| Authority and architecture | [Authority, declarations, and architecture](docs/authority.md) |
-| Cookbook recipes | [Cookbook](docs/cookbook.md) |
+| Worked recipes | [Tickets reference app](examples/tickets/README.md) |
 | Compatibility and migration | [CHANGELOG.md](CHANGELOG.md) · [Compatibility](docs/compatibility.md) |
+
 ## License
 
 MIT — see [LICENSE](LICENSE). `ontary` continues the `ontos` SDK, which

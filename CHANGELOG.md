@@ -28,9 +28,11 @@ under `### Removed`; the next release (0.11.0) is the first to ship without them
 - Effects and the durable outbox: EffectDispatcher, EffectHandle, EffectMeta, EffectPayload, OutboxRecord, RetryPolicy, DrainReport, Ontology.effect, Ontology.action(effects=), ActionContext.emit, OntologyRuntime.drain_effects, OntologyClient.drain_effects, OntologyClient.outbox, ontary.testing.capture_effects, AuditEntry.effects, the effect_outbox table, and codes EFFECT_NOT_DISPATCHABLE, UNDECLARED_EFFECT, EFFECT_NOT_SERIALIZABLE.
 - Ontology fingerprints and drift detection (ontary.fingerprint, Store.read/write_ontology_fingerprint, accept_ontology_drift=, code ONTOLOGY_DRIFT); declared type versions and upcasters (Ontology.object(version=), Ontology.upcaster, ontary.upcast, code UPCAST_FAILED); ontary.migrate (migrate_object_type, upcast_object_type).
 - Connectors: ontary.connect (BaseConnector, CanonicalBatch, CanonicalRecord, MappingSpec, ObjectBinding, LinkBinding, RawTables, oid, run_pipeline), the dlt and bq extras, docs/connectors.md, and codes ENTITY_KEY_MISMATCH, MISSING_MAPPED_FIELD. Bulk loading stays via OntologyClient.ingest / ingest_links.
+- docs/authority.md, docs/queries.md, docs/cookbook.md (content folded into docs/api-reference.md and examples/tickets/README.md); the Compatibility project URL.
 
 ### Changed
 
+- docs/compatibility.md is now a one-paragraph pre-1.0 policy; CHANGELOG's Removed/Changed sections are the migration guide.
 - SQLite stores no longer migrate older files in place; a file stamped below
   `SCHEMA_VERSION` 10 is refused with `STORE_VERSION_UNSUPPORTED`.
 - Decision B is recorded in `docs/v1-gate.md`: exact-scope-id match is the v1
