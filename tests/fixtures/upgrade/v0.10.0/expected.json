@@ -430,6 +430,7 @@
   },
   "metadata": {
     "generated_at": "2026-09-04T09:00:00Z",
+    "ontary_version": "0.10.0",
     "ontology_fingerprint": {
       "as_written": {
         "digest": "c27e85c6385d794098ce730594a7391d2dd6d8403b93e9b25711e5d898240d92",
@@ -495,7 +496,6 @@
       },
       "note": "Unlike v0.7.0/v0.8.0, `as_written` and `expected_after_upgrade` are the SAME value here: this writer's own `examples.tickets` registry IS the registry that reads this fixture back (at least until the NEXT crossing), so there is no fingerprint drift for `check_ontology_fingerprint` (`ontary.store.protocol`) to classify -- `stored.digest == current.digest` returns early. This fixture becomes the OLDER one the next crossing's writer upcasts, the same way this crossing's writer upcasts v0.7.0/v0.8.0 today."
     },
-    "ontary_version": "0.10.0",
     "schema_version": 9,
     "tag": "v0.10.0"
   },

@@ -128,7 +128,10 @@ class _DeterministicAutoIds:
 
     def __call__(self) -> uuid.UUID:
         self._count += 1
-        return uuid.uuid5(uuid.NAMESPACE_URL, f"ontary-fixture-writer:{self._tag}:{self._count}")
+        # The seed keeps the pre-fork `ontos-` spelling on purpose: it is an opaque
+        # hash input, and the committed fixture's Escalation ids derive from it.
+        # Renaming it would silently change those ids and red the honesty job.
+        return uuid.uuid5(uuid.NAMESPACE_URL, f"ontos-fixture-writer:{self._tag}:{self._count}")
 
 #: Arbitrary and fixed -- the exact instant carries no meaning beyond "the
 #: same one on every run", which is what `ontary.testing.FixedClock` needs
