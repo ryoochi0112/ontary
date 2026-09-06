@@ -21,10 +21,9 @@ is stored anywhere.
 1. On a branch, set `project.version` in `pyproject.toml` to `X.Y.Z`.
 2. In `README.md`, update the version badge line (`version **X.Y.Z**, store
    schema **vN**`), the tag line (``annotated tags (`vX.Y.Z`)``), and the
-   `ontary@vX.Y.Z` install fallback.
+   git-ref install fallback line (the one pinned to the release tag).
 3. In `CHANGELOG.md`, rename `## [Unreleased]` to `## [X.Y.Z] — YYYY-MM-DD`,
-   put the `uv add "ontary @ git+https://github.com/ryoochi0112/ontary@vX.Y.Z"`
-   fence under the heading, and open a fresh empty `## [Unreleased]` above it.
+   put the git-ref install fence (the `uv add "ontary @ git+…"` line from the previous release section, re-pinned to `vX.Y.Z`) under the heading, and open a fresh empty `## [Unreleased]` above it.
    `make verify` fails if any of these versioned references is missed.
 4. `make verify`, open the PR, merge it.
 5. Tag the merge commit and push the tag:
