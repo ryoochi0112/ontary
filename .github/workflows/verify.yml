@@ -9,8 +9,8 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.0.1
         with:
           python-version: "3.12"
           enable-cache: true
@@ -40,8 +40,8 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.0.1
         with:
           python-version: "3.12"
           enable-cache: true
@@ -82,7 +82,7 @@ jobs:
       matrix:
         tag: [v0.7.0, v0.8.0, v0.9.0, v0.10.0]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Resolve the old ref (tag, or the PR head for the untagged current version)
         id: resolve-old-ref
         run: |
@@ -98,11 +98,11 @@ jobs:
             echo "::error::upgrade-fixture-honesty (${{ matrix.tag }}): tag not found on origin and ${{ matrix.tag }} is not the current version (v$version); a missing tag for a non-current version is a defect, not a fallback"
             exit 1
           fi
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ steps.resolve-old-ref.outputs.ref }}
           path: old
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v10.0.1
         with:
           python-version: "3.12"
           enable-cache: true
@@ -160,8 +160,8 @@ jobs:
   package:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.0.1
         with:
           python-version: "3.12"
           enable-cache: true
@@ -174,7 +174,7 @@ jobs:
       - name: Smoke-test the installed package
         run: /tmp/clean/bin/python scripts/install_smoke.py
       - name: Upload the distributions
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dist
           path: dist/

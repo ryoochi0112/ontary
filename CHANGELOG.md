@@ -9,6 +9,25 @@ you**.
 2026-09-06 for open-source development under MIT. Entries below `[0.10.0]` describe
 `ontos` releases; their tags exist here as renamed snapshots of the same source.
 
+## [Unreleased]
+
+Pre-v1 hygiene: closes the remaining repository and CI gaps before the v1.0.0
+crossing without changing the package version or the runtime contract.
+
+### Changed
+
+- Decision B is recorded in `docs/v1-gate.md`: exact-scope-id match is the v1
+  contract; parent-covers-child coverage is opt-in and post-1.0. The `covers_scope`
+  and `ScopePolicy` docstrings cite the decision instead of calling it deferred, and
+  a contract test pins that a parent-scoped consumer never covers a child-owned row.
+- Every GitHub Actions `uses:` entry in `verify.yml` and `release.yml` moved off the
+  Node 20 runtime: `checkout` v7, `setup-uv` v10.0.1, `upload-artifact` v7,
+  `download-artifact` v8.
+- `release.yml` serializes runs per tag (`concurrency`, `cancel-in-progress: false`)
+  so a re-push cannot cancel a publish that is already uploading.
+- The README links the release runbook. The carried release backlog is re-triaged
+  for the PyPI path in `rstaff/var/specs/ontary/post-v1-backlog.md`.
+
 ## [0.10.0] — 2026-09-04
 
 ```bash

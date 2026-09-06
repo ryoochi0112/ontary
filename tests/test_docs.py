@@ -528,6 +528,45 @@ def test_v1_gate_decision_a_is_resolved_and_recorded() -> None:
     )
 
 
+def test_v1_gate_decision_b_is_resolved_and_recorded() -> None:
+    """Decision B is resolved, and the box and the durable record agree."""
+    gate = (_DOCS / "v1-gate.md").read_text()
+
+    boxes = {
+        match.group("letter"): match.group("box")
+        for match in _V1_GATE_DECISION_BOX.finditer(gate)
+    }
+    assert set(boxes) == {"A", "B", "C"}, (
+        f"v1-gate.md's decision checklist no longer parses as A/B/C: {boxes}"
+    )
+    assert boxes["B"] == "x", (
+        "docs/v1-gate.md's Decision B box must be checked -- exact-scope-id match "
+        "was resolved as the v1 contract on 2026-09-04 (spec v1-0-0 Q3=A)"
+    )
+
+    section = re.search(
+        r"(?ms)^## Decision B \u2014 parent-covers-child\s*\n(?P<body>.*?)(?=^## |\Z)",
+        gate,
+    )
+    assert section is not None, (
+        "v1-gate.md checks Decision B's box but has no "
+        "`## Decision B \u2014 parent-covers-child` section recording the decision"
+    )
+    body = section.group("body")
+    assert body.lstrip().startswith("**Resolved.**"), (
+        "Decision B's section must open **Resolved.**, as Decision C's does"
+    )
+    assert re.search(r"(?i)exact-scope-id match is the v1 contract", body)
+    assert "opt-in" in body and "default-off" in body and "post-1.0" in body
+
+    assert not re.search(
+        r"(?i)decisions? B[^.]*(?:\bopen\b|\bunresolved\b|\bdeferred\b)", gate
+    ), (
+        "v1-gate.md records Decision B as resolved but still calls it open, "
+        "unresolved, or deferred elsewhere"
+    )
+
+
 def test_v1_gate_release_table_matches_upgrade_fixture_ceiling() -> None:
     gate = _DOCS / "v1-gate.md"
     assert gate.is_file(), f"missing v1 gate document: {gate}"

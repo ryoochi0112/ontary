@@ -90,6 +90,23 @@ def test_different_id_at_company_level_denies(
     assert covers_scope(make_policy(levels=LEVELS, min_n=3), consumer, resolved) is False
 
 
+def test_a_parent_scoped_consumers_id_appearing_at_a_different_level_does_not_leak_access(
+    make_consumer: ConsumerFactory,
+    make_policy: PolicyFactory,
+) -> None:
+    consumer = make_consumer(
+        actor_id="u1",
+        role="Admin",
+        scope_level="company",
+        scope_id="company-1",
+        kind="human",
+    )
+    resolved = {"team": "company-1", "company": "company-2"}
+    assert covers_scope(make_policy(levels=LEVELS, min_n=3), consumer, resolved) is False
+    # The mirror ALLOW case is pinned by
+    # `test_same_level_and_id_covers_at_company_level_too`.
+
+
 # -- unresolved dimension never fails open ------------------------------------
 
 

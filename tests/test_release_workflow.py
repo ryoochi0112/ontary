@@ -97,6 +97,19 @@ def test_release_trigger_is_only_v_tag_pushes() -> None:
     ), f"release.yml must trigger only on push tags ['v*']; {_PARSER_HINT}"
 
 
+def test_release_serializes_each_tag_without_cancelling_in_progress_publish() -> None:
+    header, _ = _workflow_parts()
+    assert re.search(
+        r"(?ms)^concurrency:\s*\n"
+        r"  group: release-\$\{\{\s*github\.ref_name\s*\}\}\s*\n"
+        r"  cancel-in-progress: false\s*$",
+        header,
+    ), (
+        "release.yml must serialize runs by tag and keep an in-progress publish "
+        f"alive; {_PARSER_HINT}"
+    )
+
+
 def test_release_privileges_are_confined_to_publish_job() -> None:
     header, jobs_text = _workflow_parts()
     jobs = _job_blocks(jobs_text)
@@ -158,8 +171,8 @@ def test_gate_checks_tag_version_before_running_copied_gate_steps() -> None:
     steps = _step_blocks(gate)
     step_heads = [step.splitlines()[0].strip() for step in steps]
     assert step_heads == [
-        "- uses: actions/checkout@v4",
-        "- uses: astral-sh/setup-uv@v5",
+        "- uses: actions/checkout@v7",
+        "- uses: astral-sh/setup-uv@v10.0.1",
         "- name: Check tag matches project version",
         "- name: Install dependencies",
         "- name: make verify",
@@ -207,7 +220,7 @@ def test_gate_uploads_the_built_dist_artifact() -> None:
     upload = _step_blocks(gate)[-1]
     assert re.fullmatch(
         r"(?s)      - name: Upload the distributions\n"
-        r"        uses: actions/upload-artifact@v4\n"
+        r"        uses: actions/upload-artifact@v7\n"
         r"        with:\n"
         r"          name: dist\n"
         r"          path: dist/\s*",
@@ -232,7 +245,7 @@ def test_publish_depends_on_gate_and_downloads_dist_without_building() -> None:
     ], f"publish must not execute extra steps, found {step_heads}; {_PARSER_HINT}"
     assert re.fullmatch(
         r"(?s)      - name: Download the distributions\n"
-        r"        uses: actions/download-artifact@v4\n"
+        r"        uses: actions/download-artifact@v8\n"
         r"        with:\n"
         r"          name: dist\n"
         r"          path: dist/\s*",
