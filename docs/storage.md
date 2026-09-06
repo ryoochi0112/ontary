@@ -99,17 +99,13 @@ single database is the better fit.
 
 ## Schema version compatibility
 
-SQLite stamps each file with `SCHEMA_VERSION` through `PRAGMA user_version`. A file
-with a higher stamp is refused with `ConflictError` and code
-`STORE_VERSION_UNSUPPORTED`, naming the engine and file versions. A version-zero
-file is inspected rather than trusted, because `CREATE TABLE IF NOT EXISTS` would
-otherwise leave a narrower pre-existing table in place.
-
-The known legacy pagination-column change is migrated in place, including its
-backfill and index, before the file is stamped. If any other required column is
-missing, opening the file raises `ConflictError` with code
-`STORE_SCHEMA_INCOMPATIBLE` and leaves the stamp untouched. A schema stamp is never
-written for a file the engine cannot actually read.
+SQLite stamps each file with `SCHEMA_VERSION` through `PRAGMA user_version` when it
+creates it; Postgres records the same number in `schema_meta`. Neither backend
+carries a migration ladder, so any other stamp — higher, lower, or an unstamped store
+that already has an `objects` table — is refused at construction with `ConflictError`
+and code `STORE_VERSION_UNSUPPORTED`, naming the engine and store versions. Moving a
+store across schema versions is an explicit operator step: open it with the matching
+ontary version, or migrate the data into a fresh store.
 
 The SDK simplification does not bump the schema version. Existing store files stay
 on the compatible schema path; check [the compatibility policy](compatibility.md)

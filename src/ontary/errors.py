@@ -615,36 +615,18 @@ ERROR_CODES: dict[str, ErrorCodeInfo] = {
     "STORE_VERSION_UNSUPPORTED": ErrorCodeInfo(
         kind="conflict",
         description=(
-            "Raised at `ObjectStore.__init__` when a store file's `PRAGMA "
-            "user_version` is HIGHER than this engine's `SCHEMA_VERSION`, or "
-            "any OTHER non-zero version this engine does not recognize. A newer "
-            "ontary wrote a schema shape this engine does not know how to read, "
-            "so construction refuses outright rather than opening and failing "
-            "later with a confusing SQL error. Version 1 is recognized explicitly "
-            "and migrated to version 2. The message names BOTH the file's and "
-            "engine's versions so an operator knows exactly what to upgrade. "
-            "Never a silent stamp-and-hope: an unreadable version is refused "
-            "before any other query runs."
-        ),
-    ),
-    "STORE_SCHEMA_INCOMPATIBLE": ErrorCodeInfo(
-        kind="conflict",
-        description=(
-            "Raised at `ObjectStore.__init__` when a legacy, never-stamped "
-            "(`user_version == 0`) file's `objects`/`links`/`audit_log` table "
-            "ALREADY EXISTS but is missing one or more DDL columns, other than "
-            "the explicitly migrated `objects.page_token`, `audit_log.effects`, "
-            "and `audit_log.capability_accesses`. Without this check, "
-            "`_create_or_migrate_unstamped` would migrate known columns, then "
-            "`CREATE TABLE IF NOT EXISTS` would silently no-op against a narrower "
-            "existing table and stamp `SCHEMA_VERSION` anyway: a LYING STAMP. A "
-            "pre-Milestone-3 file missing `objects.extracted_at` and "
-            "`audit_log.writes` would then open and every read/write would raise "
-            "an uncoded `sqlite3.OperationalError` forever because `_init_schema` "
-            "would not re-inspect a file it believed current. Refusing leaves "
-            "`user_version` at 0 and the file otherwise untouched for a future "
-            "engine version with a migration; the message names the table and "
-            "exact missing columns."
+            "Raised at store construction when the store's schema stamp is not "
+            "this engine's `SCHEMA_VERSION` -- a SQLite file's `PRAGMA "
+            "user_version`, or a Postgres database's `schema_meta` row. Neither "
+            "backend carries a migration ladder: a store written by a different "
+            "ontary schema shape is REFUSED, never migrated in place and never "
+            "adopted. An unstamped store that already has an `objects` table is "
+            "refused for the same reason -- stamping a shape this engine cannot "
+            "read would be a lying stamp, and every later query would fail as a "
+            "confusing uncoded SQL error instead. The message names BOTH the "
+            "store's and the engine's versions, so an operator knows exactly "
+            "what to upgrade; the way forward is a matching ontary version, or "
+            "a fresh store the data is migrated into."
         ),
     ),
     "INTERNAL_ERROR": ErrorCodeInfo(

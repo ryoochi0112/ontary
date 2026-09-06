@@ -22,9 +22,12 @@ under `### Removed`; the next release (0.11.0) is the first to ship without them
 <!-- one bullet per removed public name; each task appends here -->
 - The v1 acceptance gate, upgrade-fixture ladder, and `upgrade-fixture-honesty` CI job (docs/v1-gate.md, docs/releasing.md, tests/fixtures/upgrade).
 - The storage envelope: `STORAGE_ENVELOPE_EXCEEDED` finding, `Ontology.diagnose(store=)`, `ontary validate --store`, scripts/scan_curve.py.
+- Error code `STORE_SCHEMA_INCOMPATIBLE`.
 
 ### Changed
 
+- SQLite stores no longer migrate older files in place; a file stamped below
+  `SCHEMA_VERSION` 10 is refused with `STORE_VERSION_UNSUPPORTED`.
 - Decision B is recorded in `docs/v1-gate.md`: exact-scope-id match is the v1
   contract; parent-covers-child coverage is opt-in and post-1.0. The `covers_scope`
   and `ScopePolicy` docstrings cite the decision instead of calling it deferred, and

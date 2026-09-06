@@ -22,12 +22,11 @@ What genuinely differs from SQLite, and why each choice was made:
 - **A `schema_meta` table, not `PRAGMA user_version`.** Postgres has no
   per-database integer to stamp, and inventing one on `pg_class` comments would
   be worse than a table anyone can read.
-- **No migration ladder.** SQLite carries v1 -> v8 migrations because files
-  written by older engines exist in the world. This backend ships AT the current
-  SCHEMA_VERSION, so a
-  store it did not create at the current version is refused rather than
-  migrated. A migration path that has never had anything to migrate is untested
-  code pretending to be a safety net.
+- **No migration ladder** -- which is now what SQLite does too, so this is a
+  shared rule rather than a Postgres-only one. Both backends ship AT the current
+  SCHEMA_VERSION, so a store they did not create at that version is refused
+  rather than migrated. A migration path is untested code pretending to be a
+  safety net unless something is actually exercising it.
 - **`payload` is `TEXT`, not `JSONB`.** JSONB is what a Postgres deployment
   eventually wants (indexing, containment queries), and it also normalizes: key
   order changes, duplicate keys collapse, numeric literals are rewritten. The
@@ -240,13 +239,12 @@ class PostgresStore:
         """Create the schema at `SCHEMA_VERSION`, or refuse a store this engine
         did not write.
 
-        No migration ladder, and that is a decision rather than an omission: the
-        SQLite backend carries v1 -> v8 migrations because files written by older
-        engines exist. Nothing has ever written a Postgres store with this
-        package, so every database is either empty (create it) or already at this
-        version (use it). Anything else is refused with the same coded error a
-        wrong-version SQLite file gets, because the honest answer is identical:
-        this engine cannot read it, and guessing is worse than stopping.
+        No migration ladder, and that is a decision rather than an omission --
+        the same decision the SQLite backend makes. Every database is either
+        empty (create it) or already at this version (use it). Anything else is
+        refused with the same coded error a wrong-version SQLite file gets,
+        because the honest answer is identical: this engine cannot read it, and
+        guessing is worse than stopping.
         """
         with self._conn.cursor() as cur:
             cur.execute(

@@ -990,18 +990,13 @@ live なオブジェクトを閉じたうえで、オブジェクト、監査、
 
 ### スキーマバージョニング
 
-すべての SQLite ファイルは、作成時または初回オープン時に `PRAGMA user_version` で
-刻印されます。
-
-- エンジンの `SCHEMA_VERSION` **より高い**刻印 → `STORE_VERSION_UNSUPPORTED`。
-  後段で分かりにくい SQL エラーになる前に、構築時点で拒否します。
-- **未刻印（version 0）** のファイルは、盲信せず検査します。既存のすべてのテーブルを、
-  スキーマが要求するすべてのカラムと突き合わせます。ページネーション用カーソル
-  カラムが欠けているだけなら、その場で移行し（`ALTER TABLE` 1 回、バックフィル、
-  インデックス）、そのうえで刻印します。それ以外のカラム欠落は
-  `STORE_SCHEMA_INCOMPATIBLE` としてテーブル名とカラム名を挙げて拒否し、
-  `user_version` は 0 のままにします。エンジンが実際には読めないファイルに刻印を
-  書き込むことは決してありません。
+すべての SQLite ファイルは、作成時にエンジンの `SCHEMA_VERSION` を `PRAGMA
+user_version` へ刻印します。Postgres も同じ番号を `schema_meta` に記録します。
+どちらのバックエンドも移行のはしご（migration ladder）を持ちません。そのため、刻印が
+一致しないストアはすべて、構築時点で `STORE_VERSION_UNSUPPORTED` として両方のバージョンを
+挙げて拒否します。刻印が高い場合も低い場合も、未刻印で `objects` テーブルをすでに
+持つ場合も同じです。スキーマバージョンをまたぐ移行はオペレーターの明示的な手順です。
+対応する ontary バージョンで開くか、新しいストアにデータを移してください。
 
 ---
 
@@ -1299,8 +1294,7 @@ MCP サーバーでは、この実行時ではなくトランスポートによ�
 | `CARDINALITY_VIOLATION` | A link creation would violate its LinkTypeDef cardinality. |
 | `OBJECT_ALREADY_ERASED` | An operator erasure targeted an object whose content was already erased; when no newly matched content is found, it returns a coded no-op report rather than raising. |
 | `OBJECT_ALREADY_RETIRED` | A retirement targeted an object whose current row is already closed. |
-| `STORE_SCHEMA_INCOMPATIBLE` | Raised at `ObjectStore.__init__` when a legacy, never-stamped (`user_version == 0`) file's `objects`/`links`/`audit_log` table ALREADY EXISTS but is missing one or more DDL columns, other than the explicitly migrated `objects.page_token`, `audit_log.effects`, and `audit_log.capability_accesses`. Without this check, `_create_or_migrate_unstamped` would migrate known columns, then `CREATE TABLE IF NOT EXISTS` would silently no-op against a narrower existing table and stamp `SCHEMA_VERSION` anyway: a LYING STAMP. A pre-Milestone-3 file missing `objects.extracted_at` and `audit_log.writes` would then open and every read/write would raise an uncoded `sqlite3.OperationalError` forever because `_init_schema` would not re-inspect a file it believed current. Refusing leaves `user_version` at 0 and the file otherwise untouched for a future engine version with a migration; the message names the table and exact missing columns. |
-| `STORE_VERSION_UNSUPPORTED` | Raised at `ObjectStore.__init__` when a store file's `PRAGMA user_version` is HIGHER than this engine's `SCHEMA_VERSION`, or any OTHER non-zero version this engine does not recognize. A newer ontary wrote a schema shape this engine does not know how to read, so construction refuses outright rather than opening and failing later with a confusing SQL error. Version 1 is recognized explicitly and migrated to version 2. The message names BOTH the file's and engine's versions so an operator knows exactly what to upgrade. Never a silent stamp-and-hope: an unreadable version is refused before any other query runs. |
+| `STORE_VERSION_UNSUPPORTED` | Raised at store construction when the store's schema stamp is not this engine's `SCHEMA_VERSION` -- a SQLite file's `PRAGMA user_version`, or a Postgres database's `schema_meta` row. Neither backend carries a migration ladder: a store written by a different ontary schema shape is REFUSED, never migrated in place and never adopted. An unstamped store that already has an `objects` table is refused for the same reason -- stamping a shape this engine cannot read would be a lying stamp, and every later query would fail as a confusing uncoded SQL error instead. The message names BOTH the store's and the engine's versions, so an operator knows exactly what to upgrade; the way forward is a matching ontary version, or a fresh store the data is migrated into. |
 | `STORE_BUSY` | A SQLite transaction could not acquire or retain its database lock within ObjectStore's configured busy timeout; retry after the competing writer finishes or increase busy_timeout. This is a conflict, not a precondition: retrying is the remedy, and the kind travels on the MCP wire so callers can branch on retryability. |
 
 ### `internal`
@@ -1369,7 +1363,7 @@ MCP サーバーでは、この実行時ではなくトランスポートによ�
 | `MIN_N_VIOLATION` | An aggregate would be computed over fewer than min_n distinct contributors. |
 | `VISIBILITY_DENIED` | A single-object read/write targeted an object outside the consumer's scope. |
 
-*全 56 コード / 7 種別。*
+*全 55 コード / 7 種別。*
 
 ---
 

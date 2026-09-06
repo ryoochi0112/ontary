@@ -81,11 +81,11 @@ class ObjectStore(SqliteSchemaMigrator):
     Postgres-shaped SQL (standard types, no SQLite-only quirks) so the schema
     can be lifted to Postgres later with minimal changes.
 
-    File upgrades require a quiesced rollout. A v1 process whose connection
-    was already open can finish old-shape inserts after a v2 migration because
-    the new audit columns have constant defaults, but an old v1 binary opening
-    the file after its v2 stamp will reject it. No v2 implementation can alter
-    an already-deployed v1 reader's version gate.
+    Every file is stamped with `SCHEMA_VERSION` and there is no migration
+    ladder: a file written by a different ontary schema shape is refused with
+    `STORE_VERSION_UNSUPPORTED` rather than upgraded in place. Moving a store
+    between schema versions is an explicit operator step -- open it with the
+    matching ontary version, or migrate the data into a fresh file.
     """
 
     def __init__(

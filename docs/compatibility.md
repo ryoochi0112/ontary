@@ -78,33 +78,21 @@ engine-internal -- see *Storage backends* below).
 ## Store files and `SCHEMA_VERSION`
 
 The SQLite store file carries its own stamp in `PRAGMA user_version`, independent of the
-package version. Current: **9**.
-
-| Version | Added |
-| --- | --- |
-| 1 | `objects.page_token` |
-| 2 | `audit_log.effects`, `audit_log.capability_accesses` |
-| 3 | `audit_log.invocation_id` (nullable — old rows keep `None`, never a backfilled id) |
-| 4 | `effect_outbox` table |
-| 5 | `audit_log.kind` (backfilled `'action'` — every prior row genuinely was one) |
-| 6 | `ontology_fingerprint` table (see *Changing your own ontology* below) |
-| 7 | `objects.type_version` + `ontology_fingerprint.versions` (declared type versions) |
-| 8 | `tenant` on `objects`, `links`, `audit_log`, `effect_outbox` (backfilled `'default'`) |
-| 9 | `audit_log.principal` (nullable — a historical row means "we do not know who authenticated," never a backfilled/invented value; see *Multi-consumer MCP serving* in the README) |
+package version; Postgres records the same number in `schema_meta`. Current: **10**.
 
 Two rules, both learned the hard way:
 
-- **Upgrades are automatic and forward-only.** Opening a file stamped lower migrates it
-  in place, under one transaction, and stamps the new version. Every migration this
-  engine owns is additive and idempotent, so an interrupted upgrade re-runs correctly
-  and a file that skips versions (3 → 5) lands in a single pass. A file stamped *higher*
-  than the running engine is refused outright with `STORE_VERSION_UNSUPPORTED` rather
-  than opened and left to fail on the first query that touches an unknown column.
-- **A version bump requires a quiesced rollout.** Because the upgrade is forward-only and
-  the older binary refuses the newer stamp, **stop every writer before upgrading any of
-  them.** A mixed fleet does not degrade gracefully: the first upgraded process stamps
-  the file, and every process still on the old version starts refusing it at
-  construction. Plan the bump as a brief stop-the-world, not a rolling deploy.
+- **A store is never migrated in place.** Neither backend carries a migration ladder. A
+  store stamped anything other than the running engine's `SCHEMA_VERSION` — higher or
+  lower — is refused at construction with `STORE_VERSION_UNSUPPORTED`, naming both
+  versions, rather than opened and left to fail on the first query that touches an
+  unknown column. An unstamped store that already has an `objects` table is refused for
+  the same reason: stamping a shape this engine cannot read would be a lying stamp.
+- **A version bump requires a quiesced rollout, and an explicit data move.** Stop every
+  writer before upgrading any of them, then move the data into a store created by the
+  new version. A mixed fleet does not degrade gracefully in either direction: each
+  process refuses every stamp that is not its own. Plan the bump as a brief
+  stop-the-world, not a rolling deploy.
 
 There is deliberately **no downgrade path**. Keep a copy of the file if you need to roll
 back the code.
@@ -274,21 +262,13 @@ join that outer transaction.
 
 `SCHEMA_VERSION` is shared, but what it means differs:
 
-- **SQLite** (`ObjectStore`) carries the full v1 → v8 migration ladder, because files written
-  by every past version exist. Upgrades are automatic, forward-only, and require the quiesced
-  rollout described above.
-- **Postgres** (`PostgresStore`) ships *at* the current version with **no ladder** — still, even
-  now that `SCHEMA_VERSION` has moved (8 → 9, M10). This gap was named here in advance rather
-  than discovered at upgrade time, and this is the move that gap warned about: it stays safe
-  only because no *released* ontary ever wrote a v8 Postgres store to begin with — `0.1.0`
-  shipped `SCHEMA_VERSION` **5**, and every schema bump since (6, 7, 8, and now 9) landed after
-  that tag, on `main`, never in a tagged release a Postgres deployment could have pinned. Nothing
-  has ever written a Postgres store with an older ontary, so there is nothing to migrate *yet*; a
-  database at any other version — or one holding an `objects` table with no ontary stamp — is
-  refused with `STORE_VERSION_UNSUPPORTED` rather than adopted. **The gap is still open, and
-  narrower than it looks:** the day a Postgres deployment is actually running a tagged release
-  below the current `SCHEMA_VERSION`, that deployment has no migration path, and today's answer
-  remains dump, recreate, and reload.
+- **SQLite** (`ObjectStore`) stamps every file it creates and refuses every other stamp.
+  It shipped a v1 → v9 migration ladder up to `SCHEMA_VERSION` 9; the ladder was removed
+  at 10, so a file written by an older ontary is refused rather than upgraded.
+- **Postgres** (`PostgresStore`) behaves identically and always has: it ships *at* the
+  current version with no ladder. Nothing has ever written a Postgres store with a
+  released ontary below the current version — `0.1.0` shipped `SCHEMA_VERSION` **5**, and
+  every bump since landed on `main`, never in a tagged release a deployment could pin.
 - **In-memory** has no persistence and therefore no version to check.
 
 ### Tenancy

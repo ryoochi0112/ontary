@@ -41,7 +41,6 @@ STORE_EXCEPTION_CODES: dict[str, tuple[type[OntaryError], str]] = {
     "STORE_VERSION_UNSUPPORTED": (ConflictError, "conflict"),
     "INVALID_RECORD": (ValidationFailed, "validation"),
     "ONTOLOGY_DRIFT": (ConflictError, "conflict"),
-    "STORE_SCHEMA_INCOMPATIBLE": (ConflictError, "conflict"),
     "AUTHORITY_ERROR": (AuthorityError, "authority"),
     "SOURCE_CREATE_REFUSED": (AuthorityError, "authority"),
     "UNDECLARED_SOURCE_WRITE": (AuthorityError, "authority"),
