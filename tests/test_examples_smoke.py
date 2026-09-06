@@ -21,7 +21,7 @@ import json
 from typing import Any
 
 import pytest
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 from examples.tickets import run_mcp
 from examples.tickets.fixtures import load_fixtures
@@ -224,13 +224,11 @@ def test_agent_email_hidden_from_human_visible_to_ai() -> None:
 # -- MCP smoke ----------------------------------------------------------
 
 
-def _call(server: FastMCP, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+def _call(server: MCPServer, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     result = asyncio.run(server.call_tool(name, arguments))
-    if isinstance(result, tuple):
-        _content, structured = result
-        assert isinstance(structured, dict)
-        return structured
-    payload: dict[str, Any] = json.loads(result[0].text)  # type: ignore[union-attr]
+    if result.structured_content is not None:
+        return result.structured_content
+    payload: dict[str, Any] = json.loads(result.content[0].text)
     return payload
 
 

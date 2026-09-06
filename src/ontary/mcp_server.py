@@ -81,7 +81,7 @@ from ontary.store import Store, StoredObject
 if TYPE_CHECKING:
     from mcp.server.auth.provider import AccessToken, TokenVerifier
     from mcp.server.auth.settings import AuthSettings
-    from mcp.server.fastmcp import FastMCP
+    from mcp.server.mcpserver import MCPServer
     from mcp.types import ToolAnnotations
 
 
@@ -89,8 +89,8 @@ if TYPE_CHECKING:
 # exists under `TYPE_CHECKING` above (see `_load_get_access_token`'s
 # docstring for why it must stay out of the runtime import graph), so a
 # real (unquoted) reference here would `NameError` the moment this module
-# is imported without the `mcp` extra -- exactly the failure `_load_fastmcp`
-# already exists to avoid for `FastMCP` itself.
+# is imported without the `mcp` extra -- exactly the failure `_load_mcp_server`
+# already exists to avoid for `MCPServer` itself.
 ConsumerResolver = Callable[["AccessToken"], "Consumer | None"]
 """Maps one request's verified `AccessToken` to the `Consumer` it should act
 as, or `None` if nothing maps it (spec `multi-consumer-mcp.md` §4.1). Must be
@@ -138,7 +138,7 @@ what a caller guarding an optional integration already catches.
 
 MCP_INCOMPATIBLE_HINT = (
     "the installed `mcp` version is unsupported by ontary -- install the "
-    "`mcp>=1.27.2,<2` range with `pip install 'ontary[mcp]'` "
+    "`mcp>=2.1.1,<3` range with `pip install 'ontary[mcp]'` "
     "(or `uv add 'ontary[mcp]'`) and try again"
 )
 """What to tell someone whose installed MCP has an incompatible layout."""
@@ -155,8 +155,8 @@ def _raise_mcp_import_error(exc: ModuleNotFoundError) -> None:
     raise ImportError(hint) from exc
 
 
-def _load_fastmcp() -> type[FastMCP]:
-    """Import `FastMCP` on demand, or explain how to install it.
+def _load_mcp_server() -> type[MCPServer]:
+    """Import `MCPServer` on demand, or explain how to install it.
 
     Deferred to call time rather than module scope so that importing
     `ontary.mcp_server` (and therefore running the `ontary-mcp` entrypoint, or
@@ -164,10 +164,10 @@ def _load_fastmcp() -> type[FastMCP]:
     message instead of a traceback from the import system.
     """
     try:
-        from mcp.server.fastmcp import FastMCP
+        from mcp.server.mcpserver import MCPServer
     except ModuleNotFoundError as exc:
         _raise_mcp_import_error(exc)
-    return FastMCP
+    return MCPServer
 
 
 def _load_tool_annotations() -> type[ToolAnnotations]:
@@ -180,14 +180,14 @@ def _load_tool_annotations() -> type[ToolAnnotations]:
 
 
 def _load_get_access_token() -> Callable[[], "AccessToken | None"]:
-    """Import `get_access_token` on demand, exactly like `_load_fastmcp`
-    above defers `FastMCP` -- so importing `ontary.mcp_server` (and
+    """Import `get_access_token` on demand, exactly like `_load_mcp_server`
+    above defers `MCPServer` -- so importing `ontary.mcp_server` (and
     therefore `ontary`, which imports `build_multi_consumer_mcp_server`
     unconditionally) never needs the `mcp` extra just to define this
     module. Called once, from `build_multi_consumer_mcp_server` itself --
-    and called BEFORE that function's own `_load_fastmcp()` call, so if the
+    and called BEFORE that function's own `_load_mcp_server()` call, so if the
     `mcp` extra is missing THIS loader is the one that raises first and
-    surfaces `MCP_EXTRA_HINT`, not `_load_fastmcp`. It stays a separate
+    surfaces `MCP_EXTRA_HINT`, not `_load_mcp_server`. It stays a separate
     deferred loader (rather than a plain module-scope import) purely so the
     invariant above -- module import never requires the extra -- holds
     structurally, regardless of which loader happens to run first.
@@ -269,7 +269,7 @@ def _generic_error() -> dict[str, Any]:
 
 
 # `SkipValidation` preserves the public primitive JSON schemas while ensuring
-# FastMCP passes supplied values into the tool body. Parameters whose missing
+# MCPServer passes supplied values into the tool body. Parameters whose missing
 # value must be handled under `_try` use nullable annotations only at this
 # framework boundary; their `None` defaults still reach the body, which then
 # decides whether the value is required or an accepted optional. `reverse`
@@ -526,14 +526,14 @@ def _aggregate_objects(
 
 
 def _register_aggregate_tool(
-    server: FastMCP,
+    server: MCPServer,
     resolve_client: Callable[[], OntologyClient],
     read_only: ToolAnnotations,
 ) -> None:
     """Register the guarded aggregate tool on one MCP server."""
 
     @server.tool(annotations=read_only)
-    def aggregate_objects(
+    async def aggregate_objects(
         obj_type: _ToolString = None,
         value_field: _ToolString = None,
         group_by: Annotated[
@@ -646,7 +646,7 @@ def _function_payload(defn: FunctionDef) -> dict[str, Any]:
 
 
 def _register_tools(
-    server: FastMCP,
+    server: MCPServer,
     ontology: OntologyDef,
     resolve_client: Callable[[], OntologyClient],
 ) -> None:
@@ -679,11 +679,11 @@ def _register_tools(
     """
 
     tool_annotations = _load_tool_annotations()
-    read_only = tool_annotations(readOnlyHint=True)
-    destructive = tool_annotations(destructiveHint=True)
+    read_only = tool_annotations(read_only_hint=True)
+    destructive = tool_annotations(destructive_hint=True)
 
     @server.tool(annotations=read_only)
-    def list_object_types() -> dict[str, Any]:
+    async def list_object_types() -> dict[str, Any]:
         """List every declared object type (introspection, not consumer data)."""
 
         def _list() -> dict[str, Any]:
@@ -698,7 +698,7 @@ def _register_tools(
         return _run_unwrapped(_list)
 
     @server.tool(annotations=read_only)
-    def list_link_types() -> dict[str, Any]:
+    async def list_link_types() -> dict[str, Any]:
         """List every declared link type (introspection, not consumer data)."""
 
         def _list() -> dict[str, Any]:
@@ -712,7 +712,7 @@ def _register_tools(
         return _run_unwrapped(_list)
 
     @server.tool(annotations=read_only)
-    def list_action_types() -> dict[str, Any]:
+    async def list_action_types() -> dict[str, Any]:
         """List every declared action type (introspection, not consumer data)."""
 
         def _list() -> dict[str, Any]:
@@ -727,7 +727,7 @@ def _register_tools(
         return _run_unwrapped(_list)
 
     @server.tool(annotations=read_only)
-    def list_functions() -> dict[str, Any]:
+    async def list_functions() -> dict[str, Any]:
         """List every declared function (introspection, not consumer data)."""
 
         def _list() -> dict[str, Any]:
@@ -741,7 +741,7 @@ def _register_tools(
         return _run_unwrapped(_list)
 
     @server.tool(annotations=read_only)
-    def get_declarations() -> dict[str, Any]:
+    async def get_declarations() -> dict[str, Any]:
         """This runtime's declared contracts (spec AC10): authority model,
         write-back/re-ingest/visibility/transaction-ownership/idempotency
         stance, audit scope, and this ontology's `min_n` -- identical to
@@ -749,7 +749,7 @@ def _register_tools(
         return _run(lambda: resolve_client().declarations.model_dump())
 
     @server.tool(annotations=read_only)
-    def get_object(
+    async def get_object(
         obj_type: _ToolString = None, obj_id: _ToolString = None
     ) -> dict[str, Any]:
         """Fetch one object by type + id, through the guarded read layer.
@@ -773,7 +773,7 @@ def _register_tools(
         )
 
     @server.tool(annotations=read_only)
-    def query_objects(
+    async def query_objects(
         obj_type: _ToolString = None,
         where: Annotated[
             dict[str, Any] | None,
@@ -845,7 +845,7 @@ def _register_tools(
         )
 
     @server.tool(annotations=read_only)
-    def count_objects(
+    async def count_objects(
         obj_type: _ToolString = None,
         where: Annotated[
             dict[str, Any] | None,
@@ -875,7 +875,7 @@ def _register_tools(
     _register_aggregate_tool(server, resolve_client, read_only)
 
     @server.tool(annotations=read_only)
-    def traverse_links(
+    async def traverse_links(
         obj_type: _ToolString = None,
         obj_id: _ToolString = None,
         link_api_name: _ToolString = None,
@@ -901,7 +901,7 @@ def _register_tools(
         )
 
     @server.tool(annotations=destructive)
-    def execute_action(
+    async def execute_action(
         api_name: _ToolString = None, params: _ToolObject = None
     ) -> dict[str, Any]:
         """Execute a governed action (role/scope/precondition/audit pipeline)."""
@@ -912,7 +912,7 @@ def _register_tools(
         )
 
     @server.tool(annotations=read_only)
-    def call_function(
+    async def call_function(
         api_name: _ToolString = None, params: _ToolObject = None
     ) -> dict[str, Any]:
         """Call a derived Function through the guarded read layer."""
@@ -930,8 +930,8 @@ def build_mcp_server(
     *,
     name: str | None = None,
     capabilities: Mapping[CapabilityHandle[Any], object] | None = None,
-) -> FastMCP:
-    """Build a `FastMCP` server bound to exactly one `(ontology, store,
+) -> MCPServer:
+    """Build an `MCPServer` bound to exactly one `(ontology, store,
     consumer)` triple -- one server process, one Consumer identity (spec
     §5).
 
@@ -960,7 +960,7 @@ def build_mcp_server(
     )
 
     definition = resolve_definition(ontology)
-    server = _load_fastmcp()(name or definition.name)
+    server = _load_mcp_server()(name or definition.name)
     _register_tools(server, definition, lambda: client)
     return server
 
@@ -974,23 +974,23 @@ def build_multi_consumer_mcp_server(
     capabilities: Mapping[CapabilityHandle[Any], object] | None = None,
     token_verifier: TokenVerifier | None = None,
     auth: AuthSettings | None = None,
-) -> FastMCP:
-    """Build a `FastMCP` server serving MANY proven identities over one
+) -> MCPServer:
+    """Build an `MCPServer` serving MANY proven identities over one
     `(ontology, store)` pair -- no `consumer` parameter (spec
     `multi-consumer-mcp.md` §3 AC1). Each tool invocation resolves its own
     `Consumer` from that request's verified MCP `AccessToken`, via the
     caller-supplied `resolve_consumer`.
 
     `token_verifier` and `auth` are forwarded VERBATIM to the underlying
-    `FastMCP(...)` call below -- this is the only place a deployer can wire
-    them, because `FastMCP` has no public setter for either afterwards (its
+    `MCPServer(...)` call below -- this is the only place a deployer can wire
+    them, because `MCPServer` has no public setter for either afterwards (its
     token verifier lives on a private, underscore-prefixed field, and its
     auth pipeline -- `RequireAuthMiddleware`, the bearer-auth backend, the
     `/.well-known/oauth-protected-resource` metadata route -- is built once,
     inside `streamable_http_app()`/`sse_app()`, gated on both being present
     at that call). Passing neither is a legitimate stdio-only or
     intentionally-open deployment; passing exactly one of `token_verifier`/
-    `auth` is not a fail-closed runtime state at all -- `FastMCP.__init__`
+    `auth` is not a fail-closed runtime state at all -- `MCPServer.__init__`
     itself raises `ValueError` (`"Cannot specify auth_server_provider or
     token_verifier without auth settings"` / `"Must specify either
     auth_server_provider or token_verifier when auth is enabled"`), so
@@ -1057,8 +1057,8 @@ def build_multi_consumer_mcp_server(
     value discarded, never read.
 
     The import of `get_access_token` is deferred to call time via
-    `_load_get_access_token`, exactly like `_load_fastmcp` above defers
-    `FastMCP` -- see that function's docstring.
+    `_load_get_access_token`, exactly like `_load_mcp_server` above defers
+    `MCPServer` -- see that function's docstring.
     """
     definition = resolve_definition(ontology)
     runtime = OntologyRuntime(
@@ -1115,33 +1115,8 @@ def build_multi_consumer_mcp_server(
         stamped = consumer.model_copy(update={"principal": principal})
         return runtime.for_consumer(stamped)
 
-    # `stateless_http=True` -- NOT a knob, hardcoded. FastMCP's DEFAULT
-    # stateful streamable HTTP starts one long-lived session TASK on the
-    # `initialize` request and reuses it for every later request bearing
-    # that session's `Mcp-Session-Id`; a tool body invoked on request #2
-    # therefore runs *inside request #1's task*, which copied the auth
-    # contextvar once, at task-start time. `get_access_token()` inside
-    # `resolve_client` above would then return request #1's `AccessToken`
-    # for the entire session's life, no matter which request's bearer
-    # token actually reached the transport -- silently falsifying "never
-    # cached" (spec AC2) for a revoked or re-scoped token. `stateless_http
-    # =True` makes `StreamableHTTPSessionManager` build a brand-new
-    # transport AND a brand-new session task for every single request, so
-    # there is no persistent task left to freeze a token into; the cost is
-    # real (no session resumability / no replay of missed events -- `mcp`'s
-    # own stateless handler still honors `json_response`, so SSE responses
-    # are NOT disabled by this flag; see the README's multi-consumer
-    # section) and accepted deliberately, over weakening AC2's claim
-    # instead (whole-branch `/review` P0, `multi-consumer-mcp.md` §4,
-    # pinned at the ASGI level by `tests/test_mcp_multi_consumer
-    # .py::test_stateless_http_serves_each_request_its_own_token`).
-    # `build_mcp_server` above is NOT touched: it is single-consumer/
-    # stdio, has no session concept to freeze a token into in the first
-    # place (one `Consumer` for the process's whole life, always), and is
-    # explicitly out of scope for this fix.
-    server = _load_fastmcp()(
+    server = _load_mcp_server()(
         name or definition.name,
-        stateless_http=True,
         token_verifier=token_verifier,
         auth=auth,
     )
@@ -1163,7 +1138,7 @@ def main() -> None:
     would be misleading advice for someone who cannot import `mcp` yet.
     """
     try:
-        _load_fastmcp()
+        _load_mcp_server()
     except ImportError as exc:
         raise SystemExit(str(exc)) from exc
     raise SystemExit(

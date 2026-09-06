@@ -14,6 +14,7 @@ process at all.
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any
 
 import pytest
@@ -453,8 +454,11 @@ def test_hidden_aggregate_release_over_mcp_is_audited(
             {"api_name": "releasingMean", "params": {"shelf_id": "shelf-1"}},
         )
     )
+    payload = result.structured_content
+    if payload is None:
+        payload = json.loads(result.content[0].text)
 
-    assert result[1] == {"result": pytest.approx(6.25)}
+    assert payload == {"result": pytest.approx(6.25)}
     assert [(e.kind, e.action) for e in _entries(contributor_client)] == [
         ("function", "releasingMean")
     ]

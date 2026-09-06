@@ -30,7 +30,7 @@ import pytest
 from mcp.server.auth.middleware.auth_context import auth_context_var
 from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
 from mcp.server.auth.provider import AccessToken
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 import ontary
 import ontary.cli as cli
@@ -268,7 +268,7 @@ def test_testing_harness_drives_the_escalation_through_the_public_helpers() -> N
     assert caught_precondition.value.code == "PRECONDITION_FAILED"
 
 
-def _call_mcp(server: FastMCP, client_id: str) -> dict[str, Any]:
+def _call_mcp(server: MCPServer, client_id: str) -> dict[str, Any]:
     token = AccessToken(token="offline", client_id=client_id, scopes=[])
     reset = auth_context_var.set(AuthenticatedUser(token))
     try:
@@ -277,13 +277,9 @@ def _call_mcp(server: FastMCP, client_id: str) -> dict[str, Any]:
         )
     finally:
         auth_context_var.reset(reset)
-    if isinstance(result, tuple):
-        _content, structured = result
-        assert isinstance(structured, dict)
-        return structured
-    assert isinstance(result, list)
-    assert len(result) == 1
-    payload: dict[str, Any] = json.loads(result[0].text)  # type: ignore[union-attr]
+    if result.structured_content is not None:
+        return result.structured_content
+    payload: dict[str, Any] = json.loads(result.content[0].text)
     return payload
 
 

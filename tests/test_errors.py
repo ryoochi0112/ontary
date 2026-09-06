@@ -319,7 +319,7 @@ def _static_name(node: ast.expr) -> str | None:
     ``ValidationFailed`` and ``errors.ValidationFailed`` name the same class:
     the module qualifier carries no extra meaning for this guard, so both
     resolve to the bare attribute name.  Anything with no static name at all
-    (``_load_fastmcp()(...)``) returns ``None`` for the caller to fail closed
+    (``_load_mcp_server()(...)``) returns ``None`` for the caller to fail closed
     on -- never to skip silently.
     """
     if isinstance(node, ast.Name):
@@ -622,11 +622,11 @@ def test_kind_class_raise_sites_use_literal_catalog_codes() -> None:
         ),
     }
     allowed_unnameable_callees: set[str] = {
-        # `_load_fastmcp()(...)` builds the FastMCP server through the lazy
+        # `_load_mcp_server()(...)` builds the MCPServer through the lazy
         # loader, so the callee is a call rather than a name. A loader
         # indirection cannot name a kind class -- but any OTHER unnameable
         # callee must fail this guard rather than slip through it.
-        "_load_fastmcp",
+        "_load_mcp_server",
     }
     ingest_report_row_forwarding_sites: set[_Site] = {
         # bulk_upsert forwards the `(code, reason)` returned by its record

@@ -594,7 +594,7 @@ def _public_type_hints(member: object) -> tuple[object, ...]:
         return tuple(get_type_hints(member).values())
     except (NameError, TypeError):
         # Optional extras can leave a return annotation unresolved in a core-only
-        # install (for example FastMCP). Resolved signatures still contribute
+        # install (for example MCPServer). Resolved signatures still contribute
         # through their other reachable members. Retry with unresolved names
         # bound to an opaque placeholder so one missing forward reference does
         # not hide a sibling public type such as ScopePolicy.

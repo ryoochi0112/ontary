@@ -12,6 +12,7 @@ documented as reaching the identical auto-bound handler (spec AC6/AC8).
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any
 
 import pytest
@@ -211,9 +212,9 @@ def test_consumer_hidden_aggregate_is_refused_on_client_typed_and_mcp_surfaces()
             {"obj_type": "Reading", "value_field": "raw_score"},
         )
     )
-    assert isinstance(result, tuple)
-    _content, payload = result
-    assert isinstance(payload, dict)
+    payload = result.structured_content
+    if payload is None:
+        payload = json.loads(result.content[0].text)
     assert payload["error"]["code"] == "VISIBILITY_DENIED"
 
 

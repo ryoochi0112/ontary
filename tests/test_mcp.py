@@ -1,7 +1,7 @@
 """In-process smoke tests for `ontary.mcp_server` (spec AC8, §7, §8 "MCP
-server tools" row): every tool exercised via `FastMCP.call_tool` against the
+server tools" row): every tool exercised via `MCPServer.call_tool` against the
 same toy "library" ontology `test_client.py` uses, with no network/subprocess
-involved -- `FastMCP.call_tool` invokes the tool function directly in this
+involved -- `MCPServer.call_tool` invokes the tool function directly in this
 process.
 
 The toy ontology is class-authored (`ontary.authoring.Ontology`, spec
@@ -36,7 +36,7 @@ from typing import Any, Protocol
 
 import pytest
 from conftest import _mcp_uninstalled, raises_code
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 from ontary.actions import ActionContext, ActionError
 from ontary.authoring import ActionParams, Ontology, OntologyObject, prop, scope_ref, target
@@ -51,7 +51,7 @@ from ontary.functions import BoundQuery
 from ontary.mcp_server import (
     DEFAULT_LIMIT,
     MAX_LIMIT,
-    _load_fastmcp,
+    _load_mcp_server,
     build_mcp_server,
     main,
 )
@@ -197,7 +197,7 @@ def _library_librarian(scope_id: str = "lib-1") -> Consumer:
 
 def _build_server(
     consumer: Consumer, *, include_reverse_link: bool = False
-) -> tuple[FastMCP, ObjectStore]:
+) -> tuple[MCPServer, ObjectStore]:
     ontology, _Book = _base_library_ontology(include_reverse_link=include_reverse_link)
     ontology.validate()
     store = ObjectStore(ontology.registry)
@@ -226,25 +226,12 @@ def _build_server(
     return server, store
 
 
-def _call(server: FastMCP, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-    """Call `name` in-process (no network/subprocess) and decode the JSON
-    payload the tool returned.
-
-    Every tool here returns a `dict`, so FastMCP's `call_tool` (with
-    `convert_result=True`) returns a `(content_blocks, structured_dict)`
-    pair -- the structured dict IS the tool's returned payload, decoded
-    already; fall back to parsing the text content block for any other
-    shape a future tool might return.
-    """
+def _call(server: MCPServer, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    """Call `name` in-process (no network/subprocess) and decode its payload."""
     result = asyncio.run(server.call_tool(name, arguments))
-    if isinstance(result, tuple):
-        _content, structured = result
-        assert isinstance(structured, dict)
-        return structured
-    assert isinstance(result, list)
-    assert len(result) == 1
-    text = result[0].text  # type: ignore[union-attr]
-    payload: dict[str, Any] = json.loads(text)
+    if result.structured_content is not None:
+        return result.structured_content
+    payload: dict[str, Any] = json.loads(result.content[0].text)
     return payload
 
 
@@ -608,7 +595,7 @@ def test_aggregate_objects_invalid_function_is_structured(func: object) -> None:
     assert payload["error"]["kind"] == "validation"
 
 
-def _build_many_books_server(count: int) -> tuple[FastMCP, ObjectStore]:
+def _build_many_books_server(count: int) -> tuple[MCPServer, ObjectStore]:
     """Build the shared library fixture with exactly `count` visible books."""
     server, store = _build_server(_librarian())
     for number in range(2, count + 1):
@@ -714,11 +701,11 @@ def test_mcp_read_annotations_and_execute_destructive_annotation() -> None:
     for name in read_names:
         annotations = tools[name].annotations
         assert annotations is not None
-        assert annotations.readOnlyHint is True
+        assert annotations.read_only_hint is True
 
     execute_annotations = tools["execute_action"].annotations
     assert execute_annotations is not None
-    assert execute_annotations.destructiveHint is True
+    assert execute_annotations.destructive_hint is True
 
 
 def test_query_objects_description_and_schema_state_where_and_pagination_contract() -> None:
@@ -738,7 +725,7 @@ def test_query_objects_description_and_schema_state_where_and_pagination_contrac
     ):
         assert phrase in description
 
-    where_description = query_tool.inputSchema["properties"]["where"]["description"]
+    where_description = query_tool.input_schema["properties"]["where"]["description"]
     assert "Typed operator matching on declared payload fields" in where_description
     assert "unknown keys raise UNKNOWN_FIELD" in where_description
 
@@ -780,7 +767,7 @@ def test_traverse_links_reverse_flag_is_symmetric_and_pinned() -> None:
     """
     server, _ = _build_server(_library_librarian(), include_reverse_link=True)
     tool = next(tool for tool in asyncio.run(server.list_tools()) if tool.name == "traverse_links")
-    assert tool.inputSchema["properties"]["reverse"] == {
+    assert tool.input_schema["properties"]["reverse"] == {
         "type": "boolean",
         "default": False,
         "title": "Reverse",
@@ -883,7 +870,7 @@ def _blow_up(query: BoundQuery, params: dict[str, Any]) -> Any:
     raise RuntimeError("secret internals")
 
 
-def _build_min_n_server(consumer: Consumer) -> FastMCP:
+def _build_min_n_server(consumer: Consumer) -> MCPServer:
     """A dedicated ontology with `min_n=3` (unlike `_build_server`'s
     `min_n=1`) so an aggregate over fewer than 3 contributors actually
     trips `MIN_N_VIOLATION` -- proving the structured error survives the MCP
@@ -982,7 +969,7 @@ def test_call_function_internal_error_is_generic_and_hides_internals() -> None:
 # -- governed capability error codes (spec AC16) -----------------------------
 
 
-def _build_governed_error_server() -> FastMCP:
+def _build_governed_error_server() -> MCPServer:
     class Reader(Protocol):
         def read(self) -> str: ...
 
@@ -1109,7 +1096,7 @@ def test_get_declarations_matches_client_declarations() -> None:
 # -- client/MCP error-code parity (spec AC8) ----------------------------------
 
 
-def _client_and_server(consumer: Consumer) -> tuple[OntologyClient, FastMCP]:
+def _client_and_server(consumer: Consumer) -> tuple[OntologyClient, MCPServer]:
     """A client and an MCP server bound to the SAME (ontology, store,
     consumer) triple, for asserting the two surfaces raise/report the same
     stable code for the same refusal."""
@@ -1260,7 +1247,7 @@ def _build_relabel_ontology() -> tuple[Ontology, type[OntologyObject]]:
     return ontology, Book
 
 
-def _client_and_server_with_relabel(consumer: Consumer) -> tuple[OntologyClient, FastMCP]:
+def _client_and_server_with_relabel(consumer: Consumer) -> tuple[OntologyClient, MCPServer]:
     ontology, _Book = _build_relabel_ontology()
     ontology.validate()
     store = ObjectStore(ontology.registry)
@@ -1378,7 +1365,7 @@ def test_a_broken_mcp_install_is_not_reported_as_a_missing_extra() -> None:
     sys.meta_path.insert(0, finder)
     try:
         with pytest.raises(ModuleNotFoundError) as exc_info:
-            _load_fastmcp()
+            _load_mcp_server()
     finally:
         sys.meta_path.remove(finder)
         sys.modules.update(cached)

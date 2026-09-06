@@ -225,7 +225,7 @@ def _run_serve(target: str, store_path: str | None, port: int) -> int:
 
     # Keep the optional dependency out of the CLI import graph. Importing
     # this module is safe without the extra; its builder performs the existing
-    # guarded FastMCP import and supplies the established installation hint.
+    # guarded MCPServer import and supplies the established installation hint.
     try:
         from ontary.mcp_server import build_mcp_server
 
