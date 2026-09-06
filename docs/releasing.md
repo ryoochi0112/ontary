@@ -16,6 +16,8 @@ PyPI trusted publisher: project `ontary`, owner `ryoochi0112`, repository
 exists in the repository settings and is restricted to `v*` tags. No API token
 is stored anywhere.
 
+## Action pins
+
 Every `uses:` in the workflows is pinned to a commit SHA with a `# vX.Y.Z`
 comment. Dependabot bumps the SHA and the comment together in a weekly PR;
 never edit a `uses:` line by hand. The `workflows` job in `verify.yml` fails

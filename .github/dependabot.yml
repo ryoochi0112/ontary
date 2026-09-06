@@ -9,6 +9,11 @@ updates:
     schedule:
       interval: weekly
       day: monday
+    # Wait a week after a release before proposing it: a compromised release is
+    # usually yanked within days. With the weekly schedule, a bump can lag a
+    # release by up to ~14 days; that is the intended trade-off.
+    cooldown:
+      default-days: 7
     groups:
       # One PR for every minor and patch bump. Majors match no group, so each
       # opens its own PR and gets read on its own.
@@ -20,6 +25,8 @@ updates:
     schedule:
       interval: weekly
       day: monday
+    cooldown:
+      default-days: 7
     groups:
       # Actions are SHA-pinned with a `# vX.Y.Z` comment; Dependabot bumps the
       # SHA and rewrites the comment in the same PR.

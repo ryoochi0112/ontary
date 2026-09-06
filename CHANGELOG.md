@@ -20,7 +20,7 @@ you**.
 - `SECURITY.md`: supported versions, private vulnerability reporting, and what
   counts as a vulnerability in the engine.
 - Dependabot (`.github/dependabot.yml`) for `uv` and GitHub Actions, weekly,
-  grouped, never automerged.
+  grouped, with a 7-day cooldown, never automerged.
 
 ### Changed
 

@@ -915,6 +915,7 @@ def test_no_doc_teaches_a_code_less_kind_class_construction() -> None:
     paths = [
         *sorted(_DOCS.rglob("*.md")),
         Path(__file__).resolve().parent.parent / "README.md",
+        Path(__file__).resolve().parent.parent / "SECURITY.md",
     ]
     assert len(paths) > 5, "doc scan found too few files to be meaningful"
 
