@@ -210,7 +210,7 @@ _DOC_SUFFIXES = (".md", ".html")
 #: alone would do today; the rest keep a future build/vendor directory from
 #: silently failing the walk. `site` is the MkDocs build output written by `make docs-build`.
 _SKIP_DIRS = frozenset(
-    {".venv", ".git", ".mypy_cache", ".pytest_cache", "node_modules", "build", "dist", "site", ".superpowers"}
+    {".venv", ".git", ".mypy_cache", ".pytest_cache", "node_modules", "build", "dist", "site"}
 )
 
 #: Docs that must ALWAYS carry the install command. Without this, a canonical
