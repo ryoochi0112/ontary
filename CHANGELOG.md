@@ -11,11 +11,28 @@ you**.
 
 ## [Unreleased]
 
-Pre-v1 hygiene: closes the remaining repository and CI gaps before the v1.0.0
-crossing without changing the package version or the runtime contract.
+## [0.11.0] — 2026-09-06
 
-OSS v0 cut: reduces `ontary` to its core. Every removed public name is listed
-under `### Removed`; the next release (0.11.0) is the first to ship without them.
+```bash
+uv add "ontary @ git+https://github.com/ryoochi0112/ontary@v0.11.0"
+```
+
+OSS v0: `ontary` is cut to its core and published with a docs site. Every
+removed public name is listed under `### Removed`; this is the first release
+that ships without them. Pre-v1 hygiene from the same cycle is under
+`### Changed`.
+
+### Added
+
+- Docs site at https://ryoochi0112.github.io/ontary/ (English / 日本語): MkDocs
+  Material + `mkdocs-static-i18n`, built strict on every PR and deployed from
+  `main` by `.github/workflows/docs.yml`. `make docs` serves a local preview.
+- The stranger test in CI: the wheel is installed with `[mcp]` into an empty
+  venv, then the README quickstart and the tickets example run from it
+  (`scripts/stranger_smoke.py`).
+- `docs/releasing.md`, a minimal release runbook for the tag-driven PyPI publish.
+- The README quickstart now declares two object types and one action, opens a
+  SQLite store, and builds an MCP server.
 
 ### Removed
 

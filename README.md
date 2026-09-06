@@ -8,7 +8,7 @@ engine is domain-agnostic; the ticket domain below is just an example.
 Python 3.12+ · pydantic-only core · `mypy --strict` · offline `make verify`.
 
 Release metadata: version
-**0.10.0**, store schema **v10**. Releases are annotated tags (`v0.10.0`).
+**0.11.0**, store schema **v10**. Releases are annotated tags (`v0.11.0`).
 
 Documentation: **https://ryoochi0112.github.io/ontary/** (English / 日本語).
 
@@ -25,19 +25,19 @@ core depends only on `pydantic`. Pin an exact version: `ontary` is pre-1.0 and
 any minor may break you (see [Compatibility](docs/compatibility.md)).
 
 ```bash
-uv add "ontary[mcp]==0.10.0"
+uv add "ontary[mcp]==0.11.0"
 ```
 
 or in `pyproject.toml`:
 
 ```toml
 [project]
-dependencies = ["ontary[mcp]==0.10.0"]
+dependencies = ["ontary[mcp]==0.11.0"]
 ```
 
 Without an index, install the tagged git ref:
 
-    uv add "ontary @ git+https://github.com/ryoochi0112/ontary@v0.10.0"
+    uv add "ontary @ git+https://github.com/ryoochi0112/ontary@v0.11.0"
 
 ## Quickstart
 
