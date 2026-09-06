@@ -30,13 +30,13 @@ that ships without them. Pre-v1 hygiene from the same cycle is under
 - The stranger test in CI: the wheel is installed with `[mcp]` into an empty
   venv, then the README quickstart and the tickets example run from it
   (`scripts/stranger_smoke.py`).
-- `docs/releasing.md`, a minimal release runbook for the tag-driven PyPI publish.
+- `docs/releasing.md` is back as a minimal runbook for the tag-driven PyPI publish; it replaces the v1-gate version listed under Removed.
 - The README quickstart now declares two object types and one action, opens a
   SQLite store, and builds an MCP server.
 
 ### Removed
 
-- The v1 acceptance gate, upgrade-fixture ladder, and `upgrade-fixture-honesty` CI job (docs/v1-gate.md, docs/releasing.md, tests/fixtures/upgrade).
+- The v1 acceptance gate, upgrade-fixture ladder, and `upgrade-fixture-honesty` CI job (docs/v1-gate.md, the v1-gate docs/releasing.md, tests/fixtures/upgrade).
 - The storage envelope: `STORAGE_ENVELOPE_EXCEEDED` finding, `Ontology.diagnose(store=)`, `ontary validate --store`, scripts/scan_curve.py.
 - Error code `STORE_SCHEMA_INCOMPATIBLE`.
 - ontary.explain (DecisionTrace, explain_read, explain_list, explain_scan) and the `ontary explain` CLI.
