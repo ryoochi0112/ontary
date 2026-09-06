@@ -20,11 +20,8 @@ def _print_effect(payload: EffectPayload, meta: EffectMeta) -> None:
 
 
 # Bound through an annotated name so the reference app exercises the public
-# `EffectDispatcher`: the v1 coverage gate (tests/test_v1_gate_coverage.py)
-# requires every public name to appear here or carry an allowlist reason, and
-# this one's reason was deleted. Inlining `_print_effect` into `effects=` below
-# reds `make verify` -- the coverage gate if the import goes with it, ruff's
-# F401 if the import stays behind.
+# `EffectDispatcher` type. Inlining `_print_effect` into `effects=` below
+# would leave the `EffectDispatcher` import unused (ruff F401).
 _dispatch_escalation: EffectDispatcher = _print_effect
 
 

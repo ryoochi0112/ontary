@@ -94,13 +94,6 @@ default = true
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-# Frozen per-tag fixture writers (spec `v1-acceptance-gate` §6 "AC4"): each is
-# written against ITS OWN tag's `ontary` API and is only ever executed under
-# that tag's venv, never under this repo's HEAD -- so it must not be
-# reformatted/fixed/relinted to match a lint config that postdates it. The
-# `tests/test_upgrade_fixtures.py` (T8) + fixture-honesty CI job (T9) are
-# what keep it honest instead; see that directory's module docstrings.
-extend-exclude = ["tests/fixtures/upgrade/writers"]
 
 [tool.ruff.lint]
 extend-select = ["I", "B", "C901"]

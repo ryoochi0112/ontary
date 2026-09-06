@@ -338,69 +338,6 @@ def test_doc_version_badges_match_pyproject() -> None:
         )
 
 
-#: A SIBLING generating rule to `_VERSION_BADGES` above (S2, backlog item 11),
-#: not a fifth entry in that tuple: `_VERSION_BADGES`' framework requires
-#: EXACTLY ONE match per pattern across the whole file, but
-#: `examples/tickets/README.md`'s migration diary carries one
-#: `### X.Y.Z → X.Y.Z` heading per past crossing -- a blanket pattern would
-#: match every one of them, not only the newest. The diary's own prose states
-#: "Entries are newest first", so this rule takes the FIRST heading match
-#: (structural, not a hand-picked index) and pins ITS right-hand version to
-#: pyproject's -- the same generating rule keeps applying, unedited, to every
-#: future crossing this diary records, rather than a one-off assertion of
-#: today's `0.9.0` heading that would silently stop checking anything the
-#: moment a newer entry lands above it.
-#:
-#: Both the left- and right-hand version of EVERY heading are captured (a
-#: `(start, end)` tuple per heading), not just the newest heading's
-#: right-hand side: a heading's left-hand version records what crossing it
-#: claims to start FROM, and nothing checked that claim against the diary's
-#: own history before -- a diary could claim to start from any prior
-#: version with nothing catching it.
-_MIGRATION_DIARY_HEADING = re.compile(r"(?m)^### ([0-9][^\n]*?)\s*→\s*([0-9][^\n]*)$")
-
-
-def test_migration_diary_newest_heading_pins_pyproject_version() -> None:
-    """`examples/tickets/README.md`'s newest migration-diary heading names
-    the version this crossing produced -- pin it to `pyproject.toml`, the
-    same source of truth `_VERSION_BADGES` above pins the other four
-    current-version statements to."""
-    version = str(_project()["version"])
-    diary = PYPROJECT.parent / "examples" / "tickets" / "README.md"
-    headings = _MIGRATION_DIARY_HEADING.findall(diary.read_text())
-    assert headings, f"{diary}: no `### X.Y.Z → X.Y.Z` migration-diary heading found"
-    newest_end = headings[0][1]
-    assert newest_end == version, (
-        f"{diary}: newest migration-diary heading names {newest_end!r}, pyproject names {version!r}"
-    )
-
-
-def test_migration_diary_chain_is_continuous() -> None:
-    """The migration diary is ordered newest first (its own prose says so),
-    so each heading's LEFT-hand version -- what that crossing claims to
-    start FROM -- must equal the RIGHT-hand version of the heading right
-    below it -- what the PREVIOUS crossing actually ended at. This is a
-    structural rule over every adjacent pair in the whole chain (S2): it
-    works unedited for any number of entries, including exactly one (there
-    is no older heading to compare against, so the loop below has nothing
-    to iterate and the rule holds vacuously rather than failing)."""
-    diary = PYPROJECT.parent / "examples" / "tickets" / "README.md"
-    headings = _MIGRATION_DIARY_HEADING.findall(diary.read_text())
-    assert headings, f"{diary}: no `### X.Y.Z → X.Y.Z` migration-diary heading found"
-    # `headings` and `headings[1:]` are deliberately one apart in length (the
-    # standard adjacent-pairs idiom) -- `strict=True` would raise on every
-    # diary, including a correct one.
-    for newer, older in zip(headings, headings[1:], strict=False):
-        newer_start, _newer_end = newer
-        _older_start, older_end = older
-        assert newer_start == older_end, (
-            f"{diary}: migration-diary chain breaks -- heading "
-            f"'{newer[0]} → {newer[1]}' claims to start from {newer_start!r}, "
-            f"but the entry right below it, '{older[0]} → {older[1]}', "
-            f"actually ended at {older_end!r}"
-        )
-
-
 #: Every fenced TOML sample under `## Install` is parsed, then the one that pins
 #: `ontary` as a project dependency is inspected. Anchoring to the fence and then
 #: to a parsed dependency means a decoy mention in prose cannot shadow the real pin.

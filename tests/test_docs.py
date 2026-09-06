@@ -26,15 +26,10 @@ import ontary.diagnose as diagnose_module
 from ontary.declarations import Declarations
 from ontary.effects import EffectMeta, EffectPayload
 from ontary.errors import ERROR_CODES
-from tests.test_upgrade_fixtures import (
-    _COMPLETED_MAJOR_LAST_MINOR,
-    REQUIRED_FIXTURE_TAGS,
-)
 
 README = Path(__file__).resolve().parent.parent / "README.md"
 CHANGELOG = Path(__file__).resolve().parent.parent / "CHANGELOG.md"
 _DOCS = Path(__file__).resolve().parent.parent / "docs"
-RELEASING = _DOCS / "releasing.md"
 API_REFERENCES = (_DOCS / "api-reference.md", _DOCS / "api-reference.ja.md")
 # The evidence CENSUS for the PostgresStore envelope derivation (E5e, S2
 # closure of coverage clause c'): the CI run ids `docs/storage.md` is
@@ -147,25 +142,17 @@ NEW_ENGLISH_DOCS = tuple(
         "queries.md",
         "authority.md",
         "cookbook.md",
-        "v1-gate.md",
     )
 )
-# The release runbook is an operational document, not a reader-facing API page;
-# keep it out of the README reachability census because its dedicated guard below
-# checks its presence and release-specific contract directly.
-OPERATIONAL_DOCS = frozenset({_DOCS / "releasing.md"})
 READER_DOCS = tuple(
     sorted(
         path
         for path in _DOCS.rglob("*")
-        if path.is_file()
-        and path.suffix in {".html", ".md"}
-        and path not in OPERATIONAL_DOCS
+        if path.is_file() and path.suffix in {".html", ".md"}
     )
 )
 EXAMPLES = Path(__file__).resolve().parent.parent / "examples"
 WORKFLOW = Path(__file__).resolve().parent.parent / ".github" / "workflows" / "verify.yml"
-HONESTY_JOB = "upgrade-fixture-honesty"
 
 
 def test_queries_document_visible_row_count_disclosure_reasoning() -> None:
@@ -178,39 +165,13 @@ def test_queries_document_visible_row_count_disclosure_reasoning() -> None:
     assert "`count_contributors` remains the sole privacy-counting primitive" in text
 
 
-def test_release_runbook_and_compatibility_describe_index_rollback() -> None:
-    """The release runbook must make rollback safe, and compatibility must
-    describe PyPI as the index.
+def test_compatibility_describes_pypi_index() -> None:
+    """Compatibility must describe PyPI as the index.
 
-    These are structural checks rather than a prose snapshot: the rollback
-    section must carry the yank/never-delete/never-re-publish policy, while the
-    compatibility section must make the positive PyPI claim and must not retain
-    the pre-fork private-index claim.
+    A structural check rather than a prose snapshot: the compatibility
+    section must make the positive PyPI claim and must not retain the
+    pre-fork private-index claim.
     """
-    assert RELEASING.is_file(), f"missing release runbook: {RELEASING}"
-    releasing = RELEASING.read_text()
-    rollback_match = re.search(
-        r"(?ms)^## Rollback\s*\n(?P<body>.*?)(?=^## |\Z)",
-        releasing,
-    )
-    assert rollback_match is not None, "releasing.md is missing its Rollback section"
-    rollback = rollback_match.group("body")
-    assert re.search(r"(?i)\byank(?:ing)?\b", rollback), (
-        "releasing.md's Rollback section must yank the bad PyPI version"
-    )
-    assert re.search(r"(?i)\b(?:do not|never)\s+delete\b", rollback), (
-        "releasing.md's Rollback section must say not to delete the release"
-    )
-    assert re.search(r"(?i)\b(?:do not|never)\s+re-?publish\b", rollback), (
-        "releasing.md's Rollback section must say not to re-publish"
-    )
-    assert re.search(r"(?i)\bPyPI\b", rollback)
-    assert "PEP 592" in rollback
-    for stale in ("Artifact Registry", "gcloud", "pkg.dev", "WIF"):
-        assert stale not in releasing, (
-            f"releasing.md still describes the pre-fork private index: {stale!r}"
-        )
-
     compatibility = (_DOCS / "compatibility.md").read_text()
     versioning = compatibility[
         compatibility.index("## Versioning") : compatibility.index(
@@ -230,76 +191,6 @@ def test_release_runbook_and_compatibility_describe_index_rollback() -> None:
     )
     assert not re.search(r"(?i)private (?:Artifact Registry )?index", compatibility), (
         "compatibility.md still describes the pre-fork private index"
-    )
-
-
-#: The runbook's fenced commands are copy-pasted onto a maintainer's own laptop, so a
-#: command word that resolves to nothing there is a shipped defect rather than a typo.
-_RELEASING_BASH_FENCE = re.compile(r"(?ms)^```bash[ \t]*\n(?P<body>.*?)^```[ \t]*$")
-
-#: A bare ``python`` command word. The boundaries exclude the three spellings that are
-#: safe in this runbook: ``python3``, a path-qualified interpreter such as
-#: ``/tmp/ontary-clean-X.Y.Z/bin/python``, and a flag like ``--python 3.12``.
-_BARE_PYTHON = re.compile(r"(?<![\w/.-])python(?![\w.])")
-
-#: ``uv run`` is the one accepted way to reach an interpreter: uv is already a hard
-#: prerequisite of every block, and it provisions the interpreter itself. The exemption
-#: is anchored to the same command -- a separator between ``uv run`` and the match ends
-#: it, so ``python -c ... && uv run x`` stays an offender.
-_UV_RUN_PREFIX = re.compile(r"\buv run\b[^;&|]*$")
-
-
-def _strip_shell_comments(line: str) -> str:
-    """Drop a shell comment so prose *about* a command cannot stand in for it.
-
-    A guard that filters a whole block by substring is trippable by the block's own
-    explanatory comment, which pressures the next editor to delete the explanation
-    rather than the defect. Whole-line and trailing comments both go; a ``#`` inside a
-    quoted string stays, since it is data rather than a comment.
-    """
-    kept: list[str] = []
-    quote = ""
-    for index, char in enumerate(line):
-        if quote:
-            if char == quote:
-                quote = ""
-        elif char in "'\"":
-            quote = char
-        elif char == "#" and (index == 0 or line[index - 1].isspace()):
-            break
-        kept.append(char)
-    return "".join(kept)
-
-
-def test_release_runbook_bash_blocks_never_invoke_a_bare_python() -> None:
-    """No fenced command in the runbook may depend on a bare ``python``.
-
-    macOS with Homebrew ships ``python3`` and no ``python``, and some Linux images
-    ship neither, so ``python -c ...`` dies with ``command not found``. Wrapped in
-    ``test "$(...)" = "X.Y.Z"`` it then exits 1 and misreads as a tag/version
-    mismatch, which sends the maintainer after the wrong problem. Nothing earlier in
-    that block supplies an interpreter either: ``uv sync`` runs on the *next* line,
-    so there is no ``.venv`` yet.
-    """
-    blocks = [
-        match.group("body")
-        for match in _RELEASING_BASH_FENCE.finditer(RELEASING.read_text())
-    ]
-    assert blocks, f"no fenced bash block found in {RELEASING}"
-
-    offenders: list[str] = []
-    for body in blocks:
-        for line in body.splitlines():
-            command = _strip_shell_comments(line)
-            for match in _BARE_PYTHON.finditer(command):
-                if _UV_RUN_PREFIX.search(command[: match.start()]):
-                    continue
-                offenders.append(line.strip())
-
-    assert not offenders, (
-        "docs/releasing.md invokes a bare `python`, which does not exist on macOS "
-        "with Homebrew nor on several Linux images. Reach the interpreter through "
-        f"`uv run` instead. Offending lines: {offenders}"
     )
 
 
@@ -462,139 +353,6 @@ def test_new_english_pages_are_reachable_and_cross_linked() -> None:
         assert "api-reference.md" in text, f"{path.name} does not link to API reference"
 
 
-#: The gate checklist is `v1.0.0`'s precondition list, so a box's state is a claim about
-#: the project rather than formatting. Parsed per decision rather than substring-matched:
-#: a bare `- [x]` search would match Decision C's already-checked box and pass while A
-#: stayed open.
-_V1_GATE_DECISION_BOX = re.compile(
-    r"(?m)^- \[(?P<box>[ x])\] \*\*Decision (?P<letter>[A-C]) \u2014 (?P<topic>[^:*]+):\*\*"
-)
-
-
-def test_v1_gate_decision_a_is_resolved_and_recorded() -> None:
-    """Decision A is resolved, and the box and the durable record agree.
-
-    Resolved 2026-09-06 (human, at the fork of `ontos` into `ontary`): the
-    audience is public, served by PyPI through trusted publishing. This
-    supersedes the 2026-09-04 pre-fork decision (internal, private index). A
-    checked box with no section recording *what* was decided is not a durable
-    project record, and a section with an unchecked box understates the gate --
-    so both are pinned, together with the supersession, so the doc cannot
-    contradict itself about its own release preconditions.
-    """
-    gate = (_DOCS / "v1-gate.md").read_text()
-
-    boxes = {
-        match.group("letter"): match.group("box")
-        for match in _V1_GATE_DECISION_BOX.finditer(gate)
-    }
-    assert set(boxes) == {"A", "B", "C"}, (
-        f"v1-gate.md's decision checklist no longer parses as A/B/C: {boxes}"
-    )
-    assert boxes["A"] == "x", (
-        "docs/v1-gate.md's Decision A box must be checked -- the audience was "
-        "resolved 2026-09-06 (public, PyPI)"
-    )
-
-    section = re.search(
-        r"(?ms)^## Decision A \u2014 audience\s*\n(?P<body>.*?)(?=^## |\Z)", gate
-    )
-    assert section is not None, (
-        "v1-gate.md checks Decision A's box but has no `## Decision A \u2014 audience` "
-        "section recording the decision"
-    )
-    body = section.group("body")
-
-    assert "**Resolved.**" in body, (
-        "Decision A's section must open **Resolved.**, as Decision C's does"
-    )
-    assert "https://pypi.org/project/ontary/" in body, (
-        "Decision A's section must name the index the audience is served from"
-    )
-    for pattern, missing in (
-        (r"(?i)\bpublic\b", "that the audience is public"),
-        (r"(?i)trusted publishing", "how PyPI is reached"),
-        (r"(?i)supersedes", "that the pre-fork internal decision is superseded"),
-        (r"(?i)git[- ]ref", "that the git-ref install stays documented"),
-        (r"(?i)\byank", "that rollback is by yank, not deletion"),
-    ):
-        assert re.search(pattern, body), (
-            f"Decision A's section does not record {missing}"
-        )
-
-    assert not re.search(r"(?i)decisions? A[^.]*\bunresolved\b", gate), (
-        "v1-gate.md records Decision A as resolved but still says it is unresolved "
-        "elsewhere; Decision C's closing paragraph now covers B only"
-    )
-
-
-def test_v1_gate_decision_b_is_resolved_and_recorded() -> None:
-    """Decision B is resolved, and the box and the durable record agree."""
-    gate = (_DOCS / "v1-gate.md").read_text()
-
-    boxes = {
-        match.group("letter"): match.group("box")
-        for match in _V1_GATE_DECISION_BOX.finditer(gate)
-    }
-    assert set(boxes) == {"A", "B", "C"}, (
-        f"v1-gate.md's decision checklist no longer parses as A/B/C: {boxes}"
-    )
-    assert boxes["B"] == "x", (
-        "docs/v1-gate.md's Decision B box must be checked -- exact-scope-id match "
-        "was resolved as the v1 contract on 2026-09-04 (spec v1-0-0 Q3=A)"
-    )
-
-    section = re.search(
-        r"(?ms)^## Decision B \u2014 parent-covers-child\s*\n(?P<body>.*?)(?=^## |\Z)",
-        gate,
-    )
-    assert section is not None, (
-        "v1-gate.md checks Decision B's box but has no "
-        "`## Decision B \u2014 parent-covers-child` section recording the decision"
-    )
-    body = section.group("body")
-    assert body.lstrip().startswith("**Resolved.**"), (
-        "Decision B's section must open **Resolved.**, as Decision C's does"
-    )
-    assert re.search(r"(?i)exact-scope-id match is the v1 contract", body)
-    assert "opt-in" in body and "default-off" in body and "post-1.0" in body
-
-    assert not re.search(
-        r"(?i)decisions? B[^.]*(?:\bopen\b|\bunresolved\b|\bdeferred\b)", gate
-    ), (
-        "v1-gate.md records Decision B as resolved but still calls it open, "
-        "unresolved, or deferred elsewhere"
-    )
-
-
-def test_v1_gate_release_table_matches_upgrade_fixture_ceiling() -> None:
-    gate = _DOCS / "v1-gate.md"
-    assert gate.is_file(), f"missing v1 gate document: {gate}"
-    text = gate.read_text()
-    table_match = re.search(
-        r"(?ms)^## Release table\n.*?"
-        r"\| Major \| Last completed minor \|\n"
-        r"\| --- \| --- \|\n"
-        r"(?P<rows>(?:\| \d+ \| v\d+\.\d+\.0 \|\n?)+)",
-        text,
-    )
-    assert table_match is not None, "v1-gate.md is missing its release table"
-
-    recorded: dict[int, int] = {}
-    for row in table_match.group("rows").splitlines():
-        cells = [cell.strip() for cell in row.strip().strip("|").split("|")]
-        assert len(cells) == 2, f"malformed v1-gate release-table row: {row!r}"
-        major = int(cells[0])
-        tag_match = re.fullmatch(r"v(\d+)\.(\d+)\.0", cells[1])
-        assert tag_match is not None, f"malformed release tag in row: {row!r}"
-        tag_major, last_minor = (int(part) for part in tag_match.groups())
-        assert tag_major == major, f"major mismatch in release-table row: {row!r}"
-        assert major not in recorded, f"duplicate major in release table: {major}"
-        recorded[major] = last_minor
-
-    assert recorded == _COMPLETED_MAJOR_LAST_MINOR
-
-
 def test_storage_envelope_doc_ceiling_matches_published_constants() -> None:
     """`docs/storage.md`'s stated row ceiling is a STRUCTURAL pin against
     `ontary.diagnose.STORAGE_ENVELOPE`, not a hand-copied number that can
@@ -618,8 +376,8 @@ def test_storage_envelope_doc_ceiling_matches_published_constants() -> None:
     already polices code-internally -- verifying the DOC's own claim against
     the code, rather than hand-copying a second figure the table never
     states. A `seconds_per_row` change large enough to break the "under one
-    second" story this table tells now reds HERE too, not only in
-    `docs/v1-gate.md`'s prose-pair pin or that code-internal band test.
+    second" story this table tells now reds HERE too, not only in that
+    code-internal band test.
     """
     storage = _DOCS / "storage.md"
     text = storage.read_text()
@@ -740,11 +498,11 @@ def test_storage_envelope_postgres_ceiling_is_derived_from_the_published_curves(
     the published `STORAGE_ENVELOPE["PostgresStore"].rows` sits at or below
     the one-second crossing that rate implies. Paste a slower run 3's table
     in and this assertion re-derives itself without touching this file (S2:
-    not another hand-copied constant -- `docs/storage.md`, `docs/v1-gate.md`,
-    `CHANGELOG.md`, and `tests/test_diagnose_lints.py` each also carry this
-    pair, or its `rows` half alone, as hand-written prose today; this assertion
-    does not add a further hand-copied site to that list, and does not claim
-    any of those four is itself guarded -- verify each independently before
+    not another hand-copied constant -- `docs/storage.md`, `CHANGELOG.md`,
+    and `tests/test_diagnose_lints.py` each also carry this pair, or its
+    `rows` half alone, as hand-written prose today; this assertion does not
+    add a further hand-copied site to that list, and does not claim any of
+    those three is itself guarded -- verify each independently before
     relying on it).
 
     E5e (S2 closure of coverage clause c'): the SET of run ids this parse is
@@ -1396,54 +1154,9 @@ def test_storage_envelope_observed_run_log_matches_pinned_constant() -> None:
     )
 
 
-def test_v1_gate_envelope_pair_matches_published_constants() -> None:
-    """`docs/v1-gate.md`'s quoted envelope pair is a STRUCTURAL pin against
-    `ontary.diagnose.STORAGE_ENVELOPE`, not a hand-copied pair that can go
-    stale the moment the code constant moves. E5c's own P0 finding was that
-    this exact paragraph quoted the retracted `3,200 rows / 0.000312s/row`
-    pair with nothing in `make verify` to catch it -- `docs/storage.md`'s
-    ceiling table was pinned (see
-    `test_storage_envelope_doc_ceiling_matches_published_constants` above)
-    but this second, independently hand-copied prose pair was not. L23: no
-    millisecond figure is asserted here -- only a relation between numbers
-    PARSED from the doc's prose and the published constant, and nothing is
-    measured at test time.
-    """
-    v1_gate = _DOCS / "v1-gate.md"
-    text = v1_gate.read_text()
-
-    pair = re.compile(
-        r"`(?P<backend>ObjectStore|PostgresStore)` \([^)]+\) holds "
-        r"\*\*(?P<rows>[\d,]+)\s+rows\*\* at \*\*(?P<seconds>[\d.]+)s/row\*\*"
-    )
-    documented = {
-        match.group("backend"): (
-            int(match.group("rows").replace(",", "")),
-            float(match.group("seconds")),
-        )
-        for match in pair.finditer(text)
-    }
-    assert documented, (
-        "v1-gate.md has no `` `<Backend>` (<Label>) holds **N rows** at "
-        "**Ss/row** `` pair in its Decision C paragraph -- this test would "
-        "otherwise pass vacuously"
-    )
-
-    published = {
-        backend: (envelope.rows, envelope.seconds_per_row)
-        for backend, envelope in diagnose_module.STORAGE_ENVELOPE.items()
-    }
-    assert documented == published, (
-        f"v1-gate.md's Decision C paragraph quotes {documented!r} but "
-        f"`STORAGE_ENVELOPE` publishes {published!r} -- re-copy the pair "
-        "from the code constant (docs/storage.md#storage-envelope quotes "
-        "the same pair and is pinned against it too)"
-    )
-
-
 def test_changelog_current_version_envelope_pair_matches_published_constants() -> None:
     """`CHANGELOG.md`'s current-version section quotes the SAME envelope pair
-    `docs/storage.md` and `docs/v1-gate.md` do -- "...stays under one second
+    `docs/storage.md` does -- "...stays under one second
     below ~32,000 rows on `ObjectStore` ... and ~1,600 rows on
     `PostgresStore`..." -- and until T2 (envelope-backlog) this THIRD,
     independently hand-copied `rows` figure had zero structural coverage:
@@ -1521,198 +1234,6 @@ def test_changelog_current_version_envelope_pair_matches_published_constants() -
             f"{envelope.seconds_per_row} puts {doc_rows:,} * "
             f"seconds_per_row={product:.4f}s outside the [0.9, 1.0] "
             "one-second-crossing band"
-        )
-
-
-def test_fixture_honesty_job_claimed_by_docs_exists_in_ci() -> None:
-    """Both docs call the honesty job the writer-freeze enforcement; pin it.
-
-    The claim is only true while the job exists, and a reader can only check it
-    if the docs name the job and its workflow. Deleting or renaming the job, or
-    dropping either name from either doc, reds here. This pins the artifact,
-    not the prose around it: a doc can still describe a live job wrongly.
-    """
-    workflow_path = WORKFLOW.relative_to(WORKFLOW.parents[2]).as_posix()
-    parts = WORKFLOW.read_text().split("\njobs:\n", 1)
-    assert len(parts) == 2, f"{workflow_path} has no top-level `jobs:` block"
-    jobs = set(re.findall(r"(?m)^  ([a-z][a-z0-9-]*):$", parts[1]))
-    assert HONESTY_JOB in jobs, (
-        f"docs call `{HONESTY_JOB}` the writer-freeze enforcement, but "
-        f"{workflow_path} defines only {sorted(jobs)}"
-    )
-
-    for path in (_DOCS / "v1-gate.md", EXAMPLES / "tickets" / "README.md"):
-        text = path.read_text()
-        assert HONESTY_JOB in text, f"{path.name} does not name the {HONESTY_JOB} job"
-        assert workflow_path in text, f"{path.name} does not name {workflow_path}"
-
-
-def _honesty_job_block() -> tuple[str, str]:
-    """Return (`workflow_path`, the `HONESTY_JOB` job's raw YAML block).
-
-    Shared by every test that inspects the `upgrade-fixture-honesty` job's
-    shape, so the job-block-splitting regex lives in exactly one place.
-    """
-    workflow_path = WORKFLOW.relative_to(WORKFLOW.parents[2]).as_posix()
-    parts = WORKFLOW.read_text().split("\njobs:\n", 1)
-    assert len(parts) == 2, f"{workflow_path} has no top-level `jobs:` block"
-
-    job_matches = list(
-        re.finditer(r"(?m)^  ([a-z][a-z0-9-]*):$", parts[1])
-    )
-    job_blocks = {
-        match.group(1): parts[1][
-            match.end() : (
-                job_matches[index + 1].start()
-                if index + 1 < len(job_matches)
-                else len(parts[1])
-            )
-        ]
-        for index, match in enumerate(job_matches)
-    }
-    job_block = job_blocks.get(HONESTY_JOB, "")
-    assert job_block.strip(), (
-        f"{workflow_path} job `{HONESTY_JOB}` block not found or empty; expected a "
-        "non-empty two-space-indented top-level job block (update this parser if the "
-        "workflow shape changed)"
-    )
-    return workflow_path, job_block
-
-
-def test_fixture_honesty_job_falls_back_only_for_the_untagged_current_version() -> None:
-    """D-1: the honesty job's untagged-current-version fallback, by shape only.
-
-    This proves the YAML SHAPE of the fallback exists; it cannot prove the
-    fallback executes correctly (that only runs in GitHub Actions -- L30).
-    Each required literal is mutation-proven by deleting it from a scratch
-    copy of the workflow (probe protocol) and confirming this test reds
-    naming that literal.
-    """
-    workflow_path, job_block = _honesty_job_block()
-
-    required_literals = (
-        (
-            "git ls-remote --tags origin",
-            "the resolve step must query the remote for the tag before falling back",
-        ),
-        (
-            "pyproject.toml",
-            "the resolve step must read the current version from pyproject.toml",
-        ),
-        (
-            '[ "${{ matrix.tag }}" = "v$version" ]',
-            "the fallback must be keyed on the matrix tag literally equalling "
-            "v<current version>, not any looser check",
-        ),
-        (
-            "describe --tags --exact-match",
-            "the tagged-mode proof must still exact-match the checked-out tag",
-        ),
-        (
-            "::warning::",
-            "an untagged-current fallback run must emit a visible warning so the "
-            "log cannot read as a tagged run",
-        ),
-    )
-    for literal, why in required_literals:
-        assert literal in job_block, (
-            f"{workflow_path} job `{HONESTY_JOB}` is missing {literal!r}: {why}"
-        )
-    assert "untagged-current" in job_block, (
-        f"{workflow_path} job `{HONESTY_JOB}`'s `::warning::` must name the "
-        "untagged-current fallback mode"
-    )
-
-
-def test_fixture_honesty_matrix_covers_required_fixture_tags() -> None:
-    workflow_path, job_block = _honesty_job_block()
-
-    tag_lines = re.findall(r"(?m)^\s+tag:\s*\[([^\]\n]*)\]\s*$", job_block)
-    assert len(tag_lines) == 1, (
-        f"{workflow_path} job `{HONESTY_JOB}` expected exactly one inline "
-        f"`tag: [vX.Y.Z, ...]` matrix line, found {len(tag_lines)}; update this parser "
-        "if the matrix changed to YAML block style or fromJSON"
-    )
-    tags = {tag.strip() for tag in tag_lines[0].split(",") if tag.strip()}
-    assert tags, (
-        f"{workflow_path} job `{HONESTY_JOB}` expected a non-empty inline "
-        "`tag: [vX.Y.Z, ...]` matrix list; update this parser if the matrix shape changed"
-    )
-
-    required_tags = set(REQUIRED_FIXTURE_TAGS)
-    assert tags == required_tags, (
-        f"{workflow_path} job `{HONESTY_JOB}` matrix must equal REQUIRED_FIXTURE_TAGS; "
-        f"missing {sorted(required_tags - tags)}, extra {sorted(tags - required_tags)}"
-    )
-
-
-def test_v1_gate_l30_bullet_names_every_ci_only_job() -> None:
-    """S2 (T6, envelope-backlog): census EVERY CI-only job, not a hand-typed set.
-
-    `docs/v1-gate.md`'s L30 bullet used to name exactly two jobs (the
-    `postgres` e2e job and the `upgrade-fixture-honesty` job) as the ones
-    `make verify` never runs -- an undercount found by re-deriving from
-    `.github/workflows/verify.yml` itself: `package` (the bare-`pip install`
-    packaging smoke test) is CI-only too, and was never restated as such.
-    This closes it with ONE generating rule instead of a third fixed
-    literal: parse `verify.yml`'s own top-level job ids (the same
-    `jobs:`-split-plus-`^  <job-id>:$`-regex census used by
-    `_postgres_job_scan_curve_row_counts` and
-    `test_fixture_honesty_matrix_covers_required_fixture_tags` above),
-    subtract `verify` -- the one job with a local equivalent (`make verify`,
-    run by both arms of this feature's own DoD) -- and assert every
-    REMAINING id is named in the L30 bullet's own text. Add a fourth CI-only
-    job to `verify.yml` and this reds naming that job id, with no edit to
-    this file, until `docs/v1-gate.md` is updated to match.
-
-    Scoped to the bullet's OWN text, not the whole document: several of the
-    surrounding bullets in this same "Release checklist" section also name
-    `upgrade-fixture-honesty` (e.g. "extend the `upgrade-fixture-honesty`
-    matrix"), so checking the whole page would make deleting a job's name
-    from the L30 bullet specifically invisible to this test -- it would
-    still find that name elsewhere on the page and pass regardless. The
-    bullet is isolated by matching from its own literal "Restate the **L30
-    CI-only blind spot**" opening through to (not including) the next
-    top-level `- ` list item or heading.
-
-    Matching is plain substring containment of the LITERAL job id against
-    the bullet's own text -- not a fuzzy or aliased match -- which is why
-    the L30 bullet was rewritten (this same task) to hold each job id in
-    backticks alongside its prose gloss, rather than relying on the prior
-    purely-descriptive phrasing ("the Postgres e2e job", "the
-    fixture-honesty job") that never printed a literal job id at all.
-    """
-    text = WORKFLOW.read_text()
-    parts = text.split("\njobs:\n", 1)
-    assert len(parts) == 2, f"{WORKFLOW} has no top-level `jobs:` block"
-    job_ids = re.findall(r"(?m)^  ([a-z][a-z0-9-]*):$", parts[1])
-    assert job_ids, f"{WORKFLOW} defines no top-level jobs under `jobs:`"
-    ci_only_job_ids = [job_id for job_id in job_ids if job_id != "verify"]
-    assert ci_only_job_ids, (
-        f"{WORKFLOW} defines no CI-only job besides `verify` -- nothing for "
-        "docs/v1-gate.md's L30 bullet to name"
-    )
-
-    gate_path = _DOCS / "v1-gate.md"
-    gate_text = gate_path.read_text()
-    bullet_match = re.search(
-        r"(?ms)^- Restate the \*\*L30 CI-only blind spot\*\*.*?(?=\n- |\n#|\Z)",
-        gate_text,
-    )
-    assert bullet_match is not None, (
-        f"{gate_path} has no 'Restate the L30 CI-only blind spot' bullet in "
-        "its Release checklist -- update this parser if the bullet's own "
-        "wording changed"
-    )
-    bullet_text = bullet_match.group(0)
-
-    for job_id in ci_only_job_ids:
-        assert job_id in bullet_text, (
-            f"`.github/workflows/verify.yml` job `{job_id}` is CI-only (it "
-            "is not `verify`, the one job `make verify` mirrors) but "
-            f"{gate_path}'s L30 CI-only blind spot bullet does not name "
-            f"`{job_id}` -- a release engineer restating that bullet would "
-            f"never be told `{job_id}` has no local pre-merge proof"
         )
 
 

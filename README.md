@@ -102,8 +102,6 @@ assert client.get(Ticket, ticket_id).escalated is True
 | Authority and architecture | [Authority, declarations, and architecture](docs/authority.md) |
 | Cookbook recipes | [Cookbook](docs/cookbook.md) |
 | Compatibility and migration | [CHANGELOG.md](CHANGELOG.md) · [Compatibility](docs/compatibility.md) |
-| v1 release gate | [v1.0.0 acceptance gate](docs/v1-gate.md) |
-| Release runbook | [Releasing](docs/releasing.md) |
 ## License
 
 MIT — see [LICENSE](LICENSE). `ontary` continues the `ontos` SDK, which

@@ -20,6 +20,7 @@ under `### Removed`; the next release (0.11.0) is the first to ship without them
 ### Removed
 
 <!-- one bullet per removed public name; each task appends here -->
+- The v1 acceptance gate, upgrade-fixture ladder, and `upgrade-fixture-honesty` CI job (docs/v1-gate.md, docs/releasing.md, tests/fixtures/upgrade).
 
 ### Changed
 

@@ -103,23 +103,20 @@ def test_storage_envelope_rows_times_seconds_per_row_stays_near_one_second() -> 
     whole residual, though: the exact-value pin right above already reds
     the moment `rows` moves on its own, `tests/test_docs.py`'s structural
     summary-ceiling pin reds the moment this module's `STORAGE_ENVELOPE`
-    and `docs/storage.md`'s ceiling row disagree, its structural
-    `docs/v1-gate.md` pin reds the moment Decision C's quoted prose pair
-    disagrees with the same constant, and (E5c, the S2 closure)
+    and `docs/storage.md`'s ceiling row disagree, and (E5c, the S2 closure)
     `tests/test_docs.py`'s doc-PARSING pin independently re-derives the
     ceiling from the doc's own raw per-run Postgres cost tables (all
     four, as of E5f) and reds if the published `rows` exceeds what those
     tables support. A wrong-but-self-consistent pair now ships green only
-    if it is copied identically into FIVE places at once -- this module's
+    if it is copied identically into FOUR places at once -- this module's
     constant, the doc's summary ceiling row, the exact-value pin above,
-    `docs/v1-gate.md`'s Decision C prose pair, AND the doc's raw per-run
-    cost tables themselves -- verified by mutation: `rows=6_400,
-    seconds_per_row=0.000156` (E5b's proven escape, same 0.998 product),
-    changed in the first four alone leaves the raw tables un-fabricated,
-    so `tests/test_docs.py`'s doc-parsing test reds (`rows=6,400 exceeds
-    the one-second crossing (1,643.1 rows)`, the crossing implied by all
-    four published runs) while every other test in the suite, including
-    this one and the `v1-gate.md` pin, stays green. Fabricating the fifth
+    AND the doc's raw per-run cost tables themselves -- verified by
+    mutation: `rows=6_400, seconds_per_row=0.000156` (E5b's proven escape,
+    same 0.998 product), changed in the first three alone leaves the raw
+    tables un-fabricated, so `tests/test_docs.py`'s doc-parsing test reds
+    (`rows=6,400 exceeds the one-second crossing (1,643.1 rows)`, the
+    crossing implied by all four published runs) while every other test in
+    the suite, including this one, stays green. Fabricating the fourth
     (the raw tables) is what is left to escape all tests, and is exactly
     what this task's reviewer protocol hands to a human: independently
     re-reading the actual CI job logs (`gh run view --job <id> --log`), not

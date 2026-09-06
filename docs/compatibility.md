@@ -8,8 +8,6 @@ patch bump may not.** Everything below is the detail that makes that sentence us
 in particular *what counts as breaking*, which for a governance SDK is a wider set than
 "the function signature changed".
 
-When `v1.0.0` may be tagged is defined in the [v1.0.0 acceptance gate](v1-gate.md).
-
 ## Versioning
 
 `MAJOR.MINOR.PATCH`, SemVer-shaped, with the standard 0.x caveat: **`0.MINOR` behaves as

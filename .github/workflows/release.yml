@@ -46,10 +46,9 @@ jobs:
   publish:
     # The only job that can reach PyPI. It holds `id-token: write` so PyPI's
     # trusted publishing can mint a short-lived token from the OIDC identity of
-    # THIS workflow on THIS repository (registered once on PyPI, see
-    # docs/releasing.md "One-time setup"). No long-lived API token is stored
-    # anywhere. It publishes exactly the bytes `gate` built and smoke-tested;
-    # it never rebuilds.
+    # THIS workflow on THIS repository (registered once on PyPI as a trusted
+    # publisher). No long-lived API token is stored anywhere. It publishes
+    # exactly the bytes `gate` built and smoke-tested; it never rebuilds.
     needs: gate
     runs-on: ubuntu-latest
     environment: pypi

@@ -18,4 +18,4 @@ The ontology SDK: author an ontology and get a governed runtime.
 
 ## Repository workflow
 
-This repository lives at `github.com/ryoochi0112/ontary` and is public (MIT). The `main` branch is protected; all changes land via PRs. Releases are annotated tags (`vX.Y.Z`); pushing a tag runs `.github/workflows/release.yml`, which publishes to PyPI through trusted publishing. See [docs/releasing.md](docs/releasing.md).
+This repository lives at `github.com/ryoochi0112/ontary` and is public (MIT). The `main` branch is protected; all changes land via PRs. Releases are annotated tags (`vX.Y.Z`); pushing a tag runs `.github/workflows/release.yml`, which publishes to PyPI through trusted publishing.
