@@ -1,4 +1,4 @@
-.PHONY: verify test lint typecheck fmt setup
+.PHONY: verify test lint typecheck fmt setup docs docs-build
 
 setup:
 	uv sync --all-extras
@@ -19,3 +19,11 @@ test:
 
 fmt:
 	uv run ruff format src tests examples && uv run ruff check --fix src tests examples
+
+# Docs site. `docs` serves a live preview; `docs-build` is the CI gate
+# (`--strict` turns every MkDocs warning, e.g. a broken link, into a failure).
+docs:
+	uv run --group docs mkdocs serve
+
+docs-build:
+	uv run --group docs mkdocs build --strict
