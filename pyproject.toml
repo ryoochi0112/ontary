@@ -1,6 +1,6 @@
 [project]
 name = "ontary"
-version = "0.10.0"
+version = "0.11.0"
 description = "Domain-agnostic ontology SDK — declare a Foundry-style ontology (typed objects, links, actions, functions) and get a governed runtime"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -25,7 +25,7 @@ dependencies = [
 [project.urls]
 Repository = "https://github.com/ryoochi0112/ontary"
 Changelog = "https://github.com/ryoochi0112/ontary/blob/main/CHANGELOG.md"
-Documentation = "https://github.com/ryoochi0112/ontary/blob/main/docs/api-reference.md"
+Documentation = "https://ryoochi0112.github.io/ontary/"
 License = "https://github.com/ryoochi0112/ontary/blob/main/LICENSE"
 
 [project.optional-dependencies]
@@ -108,3 +108,9 @@ packages = ["ontary"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src", "."]
+
+[dependency-groups]
+docs = [
+    "mkdocs-material==9.7.7",
+    "mkdocs-static-i18n==1.3.1",
+]

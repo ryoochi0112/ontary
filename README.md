@@ -1,52 +1,64 @@
-# ontary — a domain-agnostic ontology SDK
+# ontary — the ontology SDK
 
-Declare an ontology once — typed objects, links, actions, functions, and a
+Author an ontology once — typed objects, links, actions, functions, and a
 security policy — and get a governed runtime: scope- and sensitivity-aware
-reads, audited business-verb actions, and an MCP server for AI agents.
-The engine stays domain-agnostic; the tickets example is just one small domain.
+reads, audited business-verb actions, and an MCP server for AI agents. The
+engine is domain-agnostic; the ticket domain below is just an example.
 
 Python 3.12+ · pydantic-only core · `mypy --strict` · offline `make verify`.
 
 Release metadata: version
-**0.10.0**, store schema **v9**. Releases are annotated tags (`v0.10.0`).
+**0.11.0**, store schema **v10**. Releases are annotated tags (`v0.11.0`).
+
+Documentation: **https://ryoochi0112.github.io/ontary/** (English / 日本語).
 
 ## Install
 
 From PyPI:
 
 ```bash
-uv add "ontary[mcp,postgres]==0.10.0"
+pip install "ontary[mcp]"
 ```
 
-or pin it in `pyproject.toml`:
+`mcp` serves the ontology to AI agents; `postgres` adds `PostgresStore`. The
+core depends only on `pydantic`. Pin an exact version: `ontary` is pre-1.0 and
+any minor may break you (see [Compatibility](docs/compatibility.md)).
+
+```bash
+uv add "ontary[mcp]==0.11.0"
+```
+
+or in `pyproject.toml`:
 
 ```toml
 [project]
-dependencies = ["ontary[mcp,postgres]==0.10.0"]
+dependencies = ["ontary[mcp]==0.11.0"]
 ```
 
-The extras are optional: `mcp` serves the ontology to AI agents and
-`postgres` adds the `PostgresStore` backend. The core needs only `pydantic`.
+Without an index, install the tagged git ref:
 
-Without an index, install the tagged git ref instead (exact tag, no patch
-updates):
-
-    uv add "ontary @ git+https://github.com/ryoochi0112/ontary@v0.10.0"
+    uv add "ontary @ git+https://github.com/ryoochi0112/ontary@v0.11.0"
 
 ## Quickstart
 
-This short runnable path uses a support-ticket domain. The complete
-`Org → Queue → Ticket → Comment` ontology, functions, and a
-runnable MCP stdio example are in
-[`examples/tickets/`](examples/tickets/).
+Two object types, one business-verb action, a SQLite store, and an MCP server
+for one queue-scoped agent. Runs as-is (`tests/test_docs.py` executes it).
 
 <!-- quickstart-runnable:start -->
 ```python
 from ontary import (
     ActionContext, ActionError, ActionParams, Consumer, DirectProperty,
-    ObjectStore, Ontology, OntologyObject, Source, prop, target,
+    ObjectStore, Ontology, OntologyObject, SelfScope, Source,
+    build_mcp_server, prop, target,
 )
+
 ontology = Ontology(name="tickets", scope_levels=["queue"])
+
+@ontology.object(layer="L0", scope=[SelfScope(level="queue")])
+class Queue(OntologyObject):
+    id: str = prop(primary_key=True)
+    name: str
+
 @ontology.object(
     layer="L0", owned={"escalated": False},
     scope=[DirectProperty(level="queue", property_name="queue_id")],
@@ -56,8 +68,10 @@ class Ticket(OntologyObject):
     subject: str
     queue_id: str = prop(scope_level="queue")
     escalated: bool | None = prop(default=False)
+
 class EscalateTicket(ActionParams):
     ticket_id: str = target(Ticket)
+
 @ontology.action(
     EscalateTicket, target=Ticket, roles=["Agent"],
     display_name="Escalate ticket", description="Mark a ticket urgent.",
@@ -68,35 +82,39 @@ def escalate(ctx: ActionContext, params: EscalateTicket) -> dict[str, str]:
         raise ActionError("ticket does not exist", code="PRECONDITION_FAILED")
     ctx.update("Ticket", params.ticket_id, {"escalated": True})
     return {"ticket_id": params.ticket_id}
+
 ontology.validate()
-store = ObjectStore(ontology.registry)
+store = ObjectStore(ontology.registry)          # ObjectStore(registry, "tickets.db") persists
+source = Source(source_system="demo")
+store.insert("Queue", {"id": "queue-a", "name": "Billing"}, source)
 ticket_id = store.insert(
-    "Ticket", {"subject": "Invoice mismatch", "queue_id": "queue-a"},
-    Source(source_system="demo"),
+    "Ticket", {"subject": "Invoice mismatch", "queue_id": "queue-a"}, source
 )
-client = ontology.bind(store).for_consumer(
-    Consumer(actor_id="agent-1", role="Agent", scope_level="queue",
-             scope_id="queue-a", kind="human")
-)
-ticket = client.get(Ticket, ticket_id)
-assert ticket is not None and ticket.subject == "Invoice mismatch"
+agent = Consumer(actor_id="agent-1", role="Agent", scope_level="queue",
+                 scope_id="queue-a", kind="human")
+client = ontology.bind(store).for_consumer(agent)
 client.execute(EscalateTicket(ticket_id=ticket_id))
 assert client.get(Ticket, ticket_id).escalated is True
+
+server = build_mcp_server(ontology, store, agent)   # server.run() serves stdio
 ```
 <!-- quickstart-runnable:end -->
+
+The full `Org → Queue → Ticket → Comment` ontology with functions and a
+multi-consumer MCP server is [`examples/tickets/`](examples/tickets/).
 
 ## Where to go
 
 | Learn about | Destination |
 | --- | --- |
-| Authoring an ontology | [Ontology design guide](docs/ontology-design.md) |
-| オントロジー設計 | [日本語ガイド](docs/ontology-design.ja.md) |
-| Look up names and errors | [API reference](docs/api-reference.md) · [error-code table](docs/api-reference.md#error-codes) |
-| API リファレンス | [日本語リファレンス](docs/api-reference.ja.md) |
+| The docs site (EN / 日本語) | https://ryoochi0112.github.io/ontary/ |
+| Authoring an ontology | [Ontology design guide](docs/ontology-design.md) · [日本語](docs/ontology-design.ja.md) |
+| Names and errors | [API reference](docs/api-reference.md) · [error codes](docs/api-reference.md#error-codes) · [日本語](docs/api-reference.ja.md) |
 | Storage and tenancy | [Storage, tenancy, and schema](docs/storage.md) |
 | MCP serving | [MCP serving](docs/mcp-serving.md) |
 | Worked recipes | [Tickets reference app](examples/tickets/README.md) |
 | Compatibility and migration | [CHANGELOG.md](CHANGELOG.md) · [Compatibility](docs/compatibility.md) |
+| Cutting a release (maintainers) | [Releasing](docs/releasing.md) |
 
 ## License
 

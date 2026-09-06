@@ -1,0 +1,53 @@
+site_name: ontary
+site_description: The ontology SDK — author an ontology and get a governed runtime.
+site_url: https://ryoochi0112.github.io/ontary/
+repo_url: https://github.com/ryoochi0112/ontary
+repo_name: ryoochi0112/ontary
+edit_uri: blob/main/docs/
+docs_dir: docs
+strict: true
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.top
+    - content.code.copy
+    - search.highlight
+
+markdown_extensions:
+  - toc:
+      permalink: true
+      slugify: !!python/object/apply:pymdownx.slugs.slugify {kwds: {case: lower}}
+  - tables
+  - admonition
+  - pymdownx.superfences
+  - pymdownx.highlight
+
+plugins:
+  - search
+  - i18n:
+      docs_structure: suffix
+      fallback_to_default: true
+      reconfigure_material: true
+      languages:
+        - locale: en
+          default: true
+          name: English
+          build: true
+        - locale: ja
+          name: 日本語
+          build: true
+
+hooks:
+  - scripts/mkdocs_hooks.py
+
+nav:
+  - Home: index.md
+  - Ontology design: ontology-design.md
+  - API reference: api-reference.md
+  - Storage: storage.md
+  - MCP serving: mcp-serving.md
+  - Compatibility: compatibility.md
+  - Changelog: changelog.md
+  - Releasing: releasing.md

@@ -119,11 +119,17 @@ NEW_ENGLISH_DOCS = tuple(
         "mcp-serving.md",
     )
 )
+#: Every reader-facing docs page must be reachable from the README. The two
+#: one-line site shims (`docs/index.md`, `docs/changelog.md`) are excluded:
+#: they exist only so MkDocs can render README.md and CHANGELOG.md, and
+#: `tests/test_mkdocs_hooks.py` pins them instead.
 READER_DOCS = tuple(
     sorted(
         path
         for path in _DOCS.rglob("*")
-        if path.is_file() and path.suffix in {".html", ".md"}
+        if path.is_file()
+        and path.suffix in {".html", ".md"}
+        and not path.read_text().startswith("<!-- site-page:")
     )
 )
 EXAMPLES = Path(__file__).resolve().parent.parent / "examples"
@@ -417,8 +423,8 @@ def test_cookbook_recipes_execute_verbatim(recipe: str) -> None:
 
 
 def test_readme_is_within_line_budget() -> None:
-    """T12's README skeleton has a hard 250-line budget."""
-    assert len(_read_readme().splitlines()) <= 250
+    """OSS v0 README: hard 200-line budget (spec § 4.1)."""
+    assert len(_read_readme().splitlines()) <= 200
 
 
 def _parse_api_reference_error_rows(text: str) -> dict[str, str]:

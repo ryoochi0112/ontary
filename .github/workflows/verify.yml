@@ -55,14 +55,17 @@ jobs:
             tests/test_multi_tenancy.py tests/test_actions.py \
             tests/test_examples_tickets_e2e.py -q
 
-  # The check that had never existed (M6 step 3). `verify` above runs from the
-  # source tree with every extra installed -- precisely the environment an
-  # outside adopter does NOT have. Their first command is
-  # `pip install ontary`, and nothing verified that path until a manual
-  # clean-venv install turned up `ontary-mcp` dying on a bare
-  # `ModuleNotFoundError`. Deliberately NO extras and no dev dependencies here:
-  # installing pytest would defeat the point, which is why the smoke test is a
-  # plain script rather than a test module.
+  # The check that had never existed (M6 step 3) -- now the stranger test too
+  # (OSS v0 spec § 4.3). `verify` above runs from the source tree with every
+  # extra installed -- precisely the environment an outside adopter does NOT
+  # have. Their first command is `pip install ontary`, and nothing verified
+  # that path until a manual clean-venv install turned up `ontary-mcp` dying
+  # on a bare `ModuleNotFoundError`. The first venv below is deliberately
+  # no-extras and no dev dependencies, so `scripts/install_smoke.py` checks
+  # the bare `pip install ontary` path (which is why it is a plain script,
+  # not a test module). The second venv installs the `mcp` extra, so
+  # `scripts/stranger_smoke.py` can run the README quickstart and the
+  # tickets example exactly as a reader would (OSS v0 spec § 4.3).
   package:
     runs-on: ubuntu-latest
     steps:
@@ -77,8 +80,17 @@ jobs:
         run: |
           uv venv --python 3.12 /tmp/clean
           VIRTUAL_ENV=/tmp/clean uv pip install dist/*.whl
-      - name: Smoke-test the installed package
+      - name: Smoke-test the installed package (no extras)
         run: /tmp/clean/bin/python scripts/install_smoke.py
+      # The stranger test (OSS v0 spec § 4.3): the README's own install line,
+      # `pip install "ontary[mcp]"`, into a second empty venv, then the README
+      # quickstart and the tickets example exactly as a reader would run them.
+      - name: Install the wheel with the mcp extra into a second empty environment
+        run: |
+          uv venv --python 3.12 /tmp/stranger
+          VIRTUAL_ENV=/tmp/stranger uv pip install "$(ls dist/*.whl)[mcp]"
+      - name: Stranger test — README quickstart and tickets example from the wheel
+        run: /tmp/stranger/bin/python scripts/stranger_smoke.py
       - name: Upload the distributions
         uses: actions/upload-artifact@v7
         with:
