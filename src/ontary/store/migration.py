@@ -83,7 +83,11 @@ class SqliteSchemaMigrator:
         mid-create leaves the file exactly as it was found -- never a set of
         tables carrying no stamp, which the gate above would then refuse
         forever."""
-        self._conn.executescript(
-            f"BEGIN IMMEDIATE;\n{_SCHEMA_SQL}\n"
-            f"PRAGMA user_version = {SCHEMA_VERSION};\nCOMMIT;"
-        )
+        try:
+            self._conn.executescript(
+                f"BEGIN IMMEDIATE;\n{_SCHEMA_SQL}\n"
+                f"PRAGMA user_version = {SCHEMA_VERSION};\nCOMMIT;"
+            )
+        except Exception:
+            self._conn.rollback()
+            raise

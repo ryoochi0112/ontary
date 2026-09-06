@@ -107,10 +107,6 @@ and code `STORE_VERSION_UNSUPPORTED`, naming the engine and store versions. Movi
 store across schema versions is an explicit operator step: open it with the matching
 ontary version, or migrate the data into a fresh store.
 
-The SDK simplification does not bump the schema version. Existing store files stay
-on the compatible schema path; check [the compatibility policy](compatibility.md)
-before changing an ontology definition or moving a store between SDK versions.
-
 ## Operator erasure runbook
 
 For a data-subject erasure request, run `ontary erase pkg.module:ontology

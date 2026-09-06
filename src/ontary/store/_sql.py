@@ -131,7 +131,6 @@ class TableSpec:
     constraints: tuple[DialectText, ...] = ()
     prefix: DialectText = ""
     dialects: frozenset[Dialect] = frozenset(("sqlite", "postgres"))
-    section: str = "core"
     sqlite_order: int = 0
     postgres_order: int = 0
     postgres_column_order: tuple[str, ...] = ()
@@ -276,7 +275,6 @@ TABLE_SPECS: tuple[TableSpec, ...] = (
         ),
         dialects=frozenset(("postgres",)),
         prefix="\n",
-        section="meta",
         postgres_order=0,
     ),
     TableSpec(
@@ -394,7 +392,6 @@ TABLE_SPECS: tuple[TableSpec, ...] = (
             ColumnSpec("principal", "TEXT", "NULL", _AUDIT_PRINCIPAL_PREFIX),
         ),
         prefix="\n",
-        section="core",
         sqlite_order=2,
         postgres_order=3,
         postgres_column_order=(
@@ -458,7 +455,6 @@ TABLE_SPECS: tuple[TableSpec, ...] = (
             ),
         ),
         prefix=_OUTBOX_PREFIX,
-        section="effect_outbox",
         sqlite_order=8,
         postgres_order=4,
     ),
@@ -477,20 +473,9 @@ TABLE_SPECS: tuple[TableSpec, ...] = (
             ColumnSpec("versions", "TEXT", "NOT NULL DEFAULT '{}'"),
         ),
         prefix=_FINGERPRINT_PREFIX,
-        section="ontology_fingerprint",
         sqlite_order=11,
         postgres_order=5,
     ),
-)
-
-CORE_TABLE_SPECS: tuple[TableSpec, ...] = tuple(
-    table for table in TABLE_SPECS if table.section == "core"
-)
-EFFECT_OUTBOX_TABLE_SPECS: tuple[TableSpec, ...] = tuple(
-    table for table in TABLE_SPECS if table.section == "effect_outbox"
-)
-ONTOLOGY_FINGERPRINT_TABLE_SPECS: tuple[TableSpec, ...] = tuple(
-    table for table in TABLE_SPECS if table.section == "ontology_fingerprint"
 )
 
 
