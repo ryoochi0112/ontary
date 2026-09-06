@@ -1,0 +1,583 @@
+{
+  "aggregates": {
+    "ticketStats": {
+      "note": "This writer's seed puts two Tickets in queue_a and one in queue_b, against this ontology's `min_n=2`. `values` holds every queue whose call returned a mean; `refused` holds every queue whose call raised `VisibilityError` instead, keyed to the error `code` it raised (never a value -- there isn't one).",
+      "refused": {
+        "v0100-3": "MIN_N_VIOLATION"
+      },
+      "values": {
+        "v0100-2": 8.0
+      }
+    }
+  },
+  "audit": {
+    "as_written": [
+      {
+        "action": "EscalateTicket",
+        "actor": "v0100-4",
+        "capability_accesses": [],
+        "effects": [
+          {
+            "api_name": "NotifyTicketEscalation",
+            "effect_id": "v0100-11",
+            "error": null,
+            "outcome": "pending",
+            "payload": {
+              "reason": "SLA exceeded",
+              "ticket_id": "v0100-6"
+            }
+          }
+        ],
+        "invocation_id": "v0100-10",
+        "kind": "action",
+        "outcome": "ok",
+        "params": {
+          "reason": "SLA exceeded",
+          "ticket_id": "v0100-6"
+        },
+        "principal": null,
+        "role": "Agent",
+        "target_id": "v0100-6",
+        "target_type": "Ticket",
+        "ts": "2026-09-04T09:00:00Z",
+        "writes": [
+          {
+            "from_id": null,
+            "link_type": null,
+            "object_id": "v0100-6",
+            "object_type": "Ticket",
+            "op": "update",
+            "to_id": null
+          }
+        ]
+      },
+      {
+        "action": "EscalateTicket",
+        "actor": "v0100-4",
+        "capability_accesses": [],
+        "effects": [
+          {
+            "api_name": "NotifyTicketEscalation",
+            "effect_id": "v0100-11",
+            "error": null,
+            "outcome": "dispatched",
+            "payload": {
+              "reason": "SLA exceeded",
+              "ticket_id": "v0100-6"
+            }
+          }
+        ],
+        "invocation_id": "v0100-10",
+        "kind": "action",
+        "outcome": "effects_dispatched",
+        "params": {
+          "reason": "SLA exceeded",
+          "ticket_id": "v0100-6"
+        },
+        "principal": null,
+        "role": "Agent",
+        "target_id": "v0100-6",
+        "target_type": "Ticket",
+        "ts": "2026-09-04T09:00:00Z",
+        "writes": []
+      },
+      {
+        "action": "OpenEscalation",
+        "actor": "v0100-4",
+        "capability_accesses": [],
+        "effects": [],
+        "invocation_id": "v0100-12",
+        "kind": "action",
+        "outcome": "ok",
+        "params": {
+          "agent_id": "v0100-4",
+          "reason": "Repeated billing complaints",
+          "ticket_id": "v0100-7"
+        },
+        "principal": null,
+        "role": "Agent",
+        "target_id": "v0100-7",
+        "target_type": "Ticket",
+        "ts": "2026-09-04T09:00:00Z",
+        "writes": [
+          {
+            "from_id": null,
+            "link_type": null,
+            "object_id": "v0100-7",
+            "object_type": "Ticket",
+            "op": "update",
+            "to_id": null
+          },
+          {
+            "from_id": null,
+            "link_type": null,
+            "object_id": "v0100-13",
+            "object_type": "Escalation",
+            "op": "create",
+            "to_id": null
+          },
+          {
+            "from_id": "v0100-13",
+            "link_type": "escalationOnTicket",
+            "object_id": null,
+            "object_type": null,
+            "op": "link",
+            "to_id": "v0100-7"
+          },
+          {
+            "from_id": "v0100-13",
+            "link_type": "escalationAssignedTo",
+            "object_id": null,
+            "object_type": null,
+            "op": "link",
+            "to_id": "v0100-4"
+          }
+        ]
+      },
+      {
+        "action": "ResolveTicket",
+        "actor": "v0100-4",
+        "capability_accesses": [],
+        "effects": [],
+        "invocation_id": "v0100-14",
+        "kind": "action",
+        "outcome": "ok",
+        "params": {
+          "escalation_id": "v0100-13"
+        },
+        "principal": null,
+        "role": "Agent",
+        "target_id": "v0100-13",
+        "target_type": "Escalation",
+        "ts": "2026-09-04T09:00:00Z",
+        "writes": [
+          {
+            "from_id": null,
+            "link_type": null,
+            "object_id": "v0100-13",
+            "object_type": "Escalation",
+            "op": "update",
+            "to_id": null
+          },
+          {
+            "from_id": null,
+            "link_type": null,
+            "object_id": "v0100-7",
+            "object_type": "Ticket",
+            "op": "update",
+            "to_id": null
+          }
+        ]
+      },
+      {
+        "action": "ArchiveTicket",
+        "actor": "v0100-4",
+        "capability_accesses": [],
+        "effects": [],
+        "invocation_id": "v0100-15",
+        "kind": "action",
+        "outcome": "ok",
+        "params": {
+          "escalation_id": "v0100-13"
+        },
+        "principal": null,
+        "role": "Manager",
+        "target_id": "v0100-13",
+        "target_type": "Escalation",
+        "ts": "2026-09-04T09:00:00Z",
+        "writes": [
+          {
+            "from_id": "v0100-13",
+            "link_type": "escalationAssignedTo",
+            "object_id": null,
+            "object_type": null,
+            "op": "unlink",
+            "to_id": "v0100-4"
+          },
+          {
+            "from_id": null,
+            "link_type": null,
+            "object_id": "v0100-13",
+            "object_type": "Escalation",
+            "op": "retire",
+            "to_id": null
+          },
+          {
+            "from_id": "v0100-13",
+            "link_type": "escalationOnTicket",
+            "object_id": null,
+            "object_type": null,
+            "op": "unlink",
+            "to_id": "v0100-7"
+          }
+        ]
+      }
+    ],
+    "expected_after_upgrade": [
+      {
+        "action": "EscalateTicket",
+        "actor": "v0100-4",
+        "capability_accesses": [],
+        "effects": [
+          {
+            "api_name": "NotifyTicketEscalation",
+            "effect_id": "v0100-11",
+            "error": null,
+            "outcome": "pending",
+            "payload": {
+              "reason": "SLA exceeded",
+              "ticket_id": "v0100-6"
+            }
+          }
+        ],
+        "invocation_id": "v0100-10",
+        "kind": "action",
+        "outcome": "ok",
+        "params": {
+          "reason": "SLA exceeded",
+          "ticket_id": "v0100-6"
+        },
+        "principal": null,
+        "role": "Agent",
+        "target_id": "v0100-6",
+        "target_type": "Ticket",
+        "ts": "2026-09-04T09:00:00Z",
+        "writes": [
+          {
+            "from_id": null,
+            "link_type": null,
+            "object_id": "v0100-6",
+            "object_type": "Ticket",
+            "op": "update",
+            "to_id": null
+          }
+        ]
+      },
+      {
+        "action": "EscalateTicket",
+        "actor": "v0100-4",
+        "capability_accesses": [],
+        "effects": [
+          {
+            "api_name": "NotifyTicketEscalation",
+            "effect_id": "v0100-11",
+            "error": null,
+            "outcome": "dispatched",
+            "payload": {
+              "reason": "SLA exceeded",
+              "ticket_id": "v0100-6"
+            }
+          }
+        ],
+        "invocation_id": "v0100-10",
+        "kind": "action",
+        "outcome": "effects_dispatched",
+        "params": {
+          "reason": "SLA exceeded",
+          "ticket_id": "v0100-6"
+        },
+        "principal": null,
+        "role": "Agent",
+        "target_id": "v0100-6",
+        "target_type": "Ticket",
+        "ts": "2026-09-04T09:00:00Z",
+        "writes": []
+      },
+      {
+        "action": "OpenEscalation",
+        "actor": "v0100-4",
+        "capability_accesses": [],
+        "effects": [],
+        "invocation_id": "v0100-12",
+        "kind": "action",
+        "outcome": "ok",
+        "params": {
+          "agent_id": "v0100-4",
+          "reason": "Repeated billing complaints",
+          "ticket_id": "v0100-7"
+        },
+        "principal": null,
+        "role": "Agent",
+        "target_id": "v0100-7",
+        "target_type": "Ticket",
+        "ts": "2026-09-04T09:00:00Z",
+        "writes": [
+          {
+            "from_id": null,
+            "link_type": null,
+            "object_id": "v0100-7",
+            "object_type": "Ticket",
+            "op": "update",
+            "to_id": null
+          },
+          {
+            "from_id": null,
+            "link_type": null,
+            "object_id": "v0100-13",
+            "object_type": "Escalation",
+            "op": "create",
+            "to_id": null
+          },
+          {
+            "from_id": "v0100-13",
+            "link_type": "escalationOnTicket",
+            "object_id": null,
+            "object_type": null,
+            "op": "link",
+            "to_id": "v0100-7"
+          },
+          {
+            "from_id": "v0100-13",
+            "link_type": "escalationAssignedTo",
+            "object_id": null,
+            "object_type": null,
+            "op": "link",
+            "to_id": "v0100-4"
+          }
+        ]
+      },
+      {
+        "action": "ResolveTicket",
+        "actor": "v0100-4",
+        "capability_accesses": [],
+        "effects": [],
+        "invocation_id": "v0100-14",
+        "kind": "action",
+        "outcome": "ok",
+        "params": {
+          "escalation_id": "v0100-13"
+        },
+        "principal": null,
+        "role": "Agent",
+        "target_id": "v0100-13",
+        "target_type": "Escalation",
+        "ts": "2026-09-04T09:00:00Z",
+        "writes": [
+          {
+            "from_id": null,
+            "link_type": null,
+            "object_id": "v0100-13",
+            "object_type": "Escalation",
+            "op": "update",
+            "to_id": null
+          },
+          {
+            "from_id": null,
+            "link_type": null,
+            "object_id": "v0100-7",
+            "object_type": "Ticket",
+            "op": "update",
+            "to_id": null
+          }
+        ]
+      },
+      {
+        "action": "ArchiveTicket",
+        "actor": "v0100-4",
+        "capability_accesses": [],
+        "effects": [],
+        "invocation_id": "v0100-15",
+        "kind": "action",
+        "outcome": "ok",
+        "params": {
+          "escalation_id": "v0100-13"
+        },
+        "principal": null,
+        "role": "Manager",
+        "target_id": "v0100-13",
+        "target_type": "Escalation",
+        "ts": "2026-09-04T09:00:00Z",
+        "writes": [
+          {
+            "from_id": "v0100-13",
+            "link_type": "escalationAssignedTo",
+            "object_id": null,
+            "object_type": null,
+            "op": "unlink",
+            "to_id": "v0100-4"
+          },
+          {
+            "from_id": null,
+            "link_type": null,
+            "object_id": "v0100-13",
+            "object_type": "Escalation",
+            "op": "retire",
+            "to_id": null
+          },
+          {
+            "from_id": "v0100-13",
+            "link_type": "escalationOnTicket",
+            "object_id": null,
+            "object_type": null,
+            "op": "unlink",
+            "to_id": "v0100-7"
+          }
+        ]
+      }
+    ],
+    "note": "`as_written` IS `expected_after_upgrade` here (five entries: EscalateTicket's two -- `ok` then `effects_dispatched`, its one declared effect dispatching inline -- plus one entry each for OpenEscalation, ResolveTicket, and ArchiveTicket, none of which declare effects). Unlike v0.7.0/v0.8.0, no `AcceptVersionedOntologyChange` entry is appended when the current SDK reopens this fixture: this writer's own registry already IS that SDK's registry, so `check_ontology_fingerprint` finds no drift to classify."
+  },
+  "ids": {
+    "agent_1_id": "v0100-4",
+    "agent_2_id": "v0100-5",
+    "comment_id": "v0100-9",
+    "org_id": "v0100-1",
+    "queue_a_id": "v0100-2",
+    "queue_b_id": "v0100-3",
+    "ticket_1_id": "v0100-6",
+    "ticket_2_id": "v0100-7",
+    "ticket_3_id": "v0100-8"
+  },
+  "metadata": {
+    "generated_at": "2026-09-04T09:00:00Z",
+    "ontology_fingerprint": {
+      "as_written": {
+        "digest": "c27e85c6385d794098ce730594a7391d2dd6d8403b93e9b25711e5d898240d92",
+        "types": {
+          "action:ArchiveTicket": "1da106e2b56d8969a4109a9da525b8d06e80db4172346f3a31876ea8624755e2",
+          "action:EscalateTicket": "b78c472439957a13431bb6e1d153299671d4a024b7ba887b9054fa9147f8ba61",
+          "action:OpenEscalation": "3a9dea9096b308982db1b13720185fc231ddf624337ae5981f3fcf64cd148bd7",
+          "action:ResolveTicket": "160b693f6f111250435e4f56f0859aa537da3358f200394e7c96bbfbb6773034",
+          "effect:NotifyTicketEscalation": "632cc602ecc33de3de0c0b9e89489ff71bbd60248f0207f09f25bb5ecbb8f0cc",
+          "function:ticketStats": "416059e7a16dbb3c38161e0d19d7615752565610c8f8ce3ed22c2fd810fa8fe4",
+          "link:commentByAgent": "b289740c27eb19a3d144ee5def7bb1d0d8cc20eff34746c1550e859a4e5eb910",
+          "link:commentOnTicket": "8c15b70ab4cd34dab3805aab107e8d096fcaa3cd9fa05e0698e2b00264e8ed54",
+          "link:escalationAssignedTo": "2a3debac070606ab0f9adf39e9106131bbd137671aca8dabb13e7b8378da9cc6",
+          "link:escalationOnTicket": "e3ce9fa5e1ecf4025d7dc955b9848ff17171a131a2f27b4ebd5361c016964e9e",
+          "link:queueOfOrg": "f5cd564f25b3388fec02960d481830ad8f757c8acedc6be94db886c3a4ebb7df",
+          "link:ticketInQueue": "f12ec842da4ea41783f3a2f1c90da8da086f06fd96993ecc47c04ae8b6da8c06",
+          "object:Agent": "d346e4ce43f57f7b02587103f98873582caea820f99ae135f8c8307ae9e14398",
+          "object:Comment": "a8a999911712d98e1ac4db0172d356d7642f408be41560d1b18413954b8f70a6",
+          "object:Escalation": "e6c7d27c02f4e7d102eb4c39e58d06414f7b7fca62b49940dc4c67ebf7c54301",
+          "object:Org": "4472e03643f29b4b02cbd6e440a4327b2b5d9ebaaf8346b098558cd761dced6d",
+          "object:Queue": "6380ef060baa7c09692f372a7bdb85dca2b1896289b696f44d5a8aa07981b94f",
+          "object:Ticket": "fd20bba6978589881f816f053ffcdc338b92ece8ced1930e049da4433ccf891b"
+        },
+        "versions": {
+          "Agent": 1,
+          "Comment": 1,
+          "Escalation": 1,
+          "Org": 1,
+          "Queue": 1,
+          "Ticket": 2
+        }
+      },
+      "expected_after_upgrade": {
+        "digest": "c27e85c6385d794098ce730594a7391d2dd6d8403b93e9b25711e5d898240d92",
+        "types": {
+          "action:ArchiveTicket": "1da106e2b56d8969a4109a9da525b8d06e80db4172346f3a31876ea8624755e2",
+          "action:EscalateTicket": "b78c472439957a13431bb6e1d153299671d4a024b7ba887b9054fa9147f8ba61",
+          "action:OpenEscalation": "3a9dea9096b308982db1b13720185fc231ddf624337ae5981f3fcf64cd148bd7",
+          "action:ResolveTicket": "160b693f6f111250435e4f56f0859aa537da3358f200394e7c96bbfbb6773034",
+          "effect:NotifyTicketEscalation": "632cc602ecc33de3de0c0b9e89489ff71bbd60248f0207f09f25bb5ecbb8f0cc",
+          "function:ticketStats": "416059e7a16dbb3c38161e0d19d7615752565610c8f8ce3ed22c2fd810fa8fe4",
+          "link:commentByAgent": "b289740c27eb19a3d144ee5def7bb1d0d8cc20eff34746c1550e859a4e5eb910",
+          "link:commentOnTicket": "8c15b70ab4cd34dab3805aab107e8d096fcaa3cd9fa05e0698e2b00264e8ed54",
+          "link:escalationAssignedTo": "2a3debac070606ab0f9adf39e9106131bbd137671aca8dabb13e7b8378da9cc6",
+          "link:escalationOnTicket": "e3ce9fa5e1ecf4025d7dc955b9848ff17171a131a2f27b4ebd5361c016964e9e",
+          "link:queueOfOrg": "f5cd564f25b3388fec02960d481830ad8f757c8acedc6be94db886c3a4ebb7df",
+          "link:ticketInQueue": "f12ec842da4ea41783f3a2f1c90da8da086f06fd96993ecc47c04ae8b6da8c06",
+          "object:Agent": "d346e4ce43f57f7b02587103f98873582caea820f99ae135f8c8307ae9e14398",
+          "object:Comment": "a8a999911712d98e1ac4db0172d356d7642f408be41560d1b18413954b8f70a6",
+          "object:Escalation": "e6c7d27c02f4e7d102eb4c39e58d06414f7b7fca62b49940dc4c67ebf7c54301",
+          "object:Org": "4472e03643f29b4b02cbd6e440a4327b2b5d9ebaaf8346b098558cd761dced6d",
+          "object:Queue": "6380ef060baa7c09692f372a7bdb85dca2b1896289b696f44d5a8aa07981b94f",
+          "object:Ticket": "fd20bba6978589881f816f053ffcdc338b92ece8ced1930e049da4433ccf891b"
+        },
+        "versions": {
+          "Agent": 1,
+          "Comment": 1,
+          "Escalation": 1,
+          "Org": 1,
+          "Queue": 1,
+          "Ticket": 2
+        }
+      },
+      "note": "Unlike v0.7.0/v0.8.0, `as_written` and `expected_after_upgrade` are the SAME value here: this writer's own `examples.tickets` registry IS the registry that reads this fixture back (at least until the NEXT crossing), so there is no fingerprint drift for `check_ontology_fingerprint` (`ontary.store.protocol`) to classify -- `stored.digest == current.digest` returns early. This fixture becomes the OLDER one the next crossing's writer upcasts, the same way this crossing's writer upcasts v0.7.0/v0.8.0 today."
+    },
+    "ontary_version": "0.10.0",
+    "schema_version": 9,
+    "tag": "v0.10.0"
+  },
+  "outbox": [
+    {
+      "action": "EscalateTicket",
+      "actor_id": "v0100-4",
+      "api_name": "NotifyTicketEscalation",
+      "attempts": 1,
+      "effect_id": "v0100-11",
+      "emitted_at": "2026-09-04T09:00:00Z",
+      "invocation_id": "v0100-10",
+      "last_error": null,
+      "lease_until": null,
+      "next_attempt_at": "2026-09-04T09:00:00Z",
+      "payload": {
+        "reason": "SLA exceeded",
+        "ticket_id": "v0100-6"
+      },
+      "role": "Agent",
+      "seq": 0,
+      "state": "delivered",
+      "updated_at": "2026-09-04T09:00:00Z"
+    }
+  ],
+  "tickets": {
+    "as_written": {
+      "v0100-6": {
+        "age_hours": 4.0,
+        "channel": "email",
+        "escalated": true,
+        "id": "v0100-6",
+        "queue_id": "v0100-2",
+        "status": "open",
+        "subject": "Invoice mismatch"
+      },
+      "v0100-7": {
+        "age_hours": 12.0,
+        "channel": "email",
+        "escalated": false,
+        "id": "v0100-7",
+        "queue_id": "v0100-2",
+        "status": "open",
+        "subject": "Refund request"
+      },
+      "v0100-8": {
+        "age_hours": 1.0,
+        "channel": "email",
+        "id": "v0100-8",
+        "queue_id": "v0100-3",
+        "status": "open",
+        "subject": "Welcome call"
+      }
+    },
+    "expected_after_upgrade": {
+      "v0100-6": {
+        "age_hours": 4.0,
+        "channel": "email",
+        "escalated": true,
+        "id": "v0100-6",
+        "queue_id": "v0100-2",
+        "status": "open",
+        "subject": "Invoice mismatch"
+      },
+      "v0100-7": {
+        "age_hours": 12.0,
+        "channel": "email",
+        "escalated": false,
+        "id": "v0100-7",
+        "queue_id": "v0100-2",
+        "status": "open",
+        "subject": "Refund request"
+      },
+      "v0100-8": {
+        "age_hours": 1.0,
+        "channel": "email",
+        "id": "v0100-8",
+        "queue_id": "v0100-3",
+        "status": "open",
+        "subject": "Welcome call"
+      }
+    },
+    "note": "`as_written` IS `expected_after_upgrade` here: v0.10.0's own `Ticket` is already declared version 2 with `channel`, so this writer stores every Ticket at that shape directly -- there is no v1 row for the upcaster to transform, unlike v0.7.0/v0.8.0 (which store real v1 rows written by an OLDER registry). Every Ticket carries `channel: \"email\"`, matching what v0.7.0/v0.8.0's own upcast produces, so a reader comparing all three fixtures' post-upgrade Tickets sees the same value regardless of which crossing wrote it."
+  }
+}

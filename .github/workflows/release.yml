@@ -1,0 +1,64 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - name: Check tag matches project version
+        run: |
+          tag_version="${GITHUB_REF_NAME#v}"
+          project_version="$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          if [ "$tag_version" != "$project_version" ]; then
+            echo "Tag version $tag_version does not match project version $project_version"
+            exit 1
+          fi
+      - name: Install dependencies
+        run: uv sync --all-extras
+      - name: make verify
+        run: make verify
+      - name: Build sdist + wheel
+        run: uv build --out-dir dist
+      - name: Install the wheel into an empty environment
+        run: |
+          uv venv --python 3.12 /tmp/clean
+          VIRTUAL_ENV=/tmp/clean uv pip install dist/*.whl
+      - name: Smoke-test the installed package
+        run: /tmp/clean/bin/python scripts/install_smoke.py
+      - name: Upload the distributions
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    # The only job that can reach PyPI. It holds `id-token: write` so PyPI's
+    # trusted publishing can mint a short-lived token from the OIDC identity of
+    # THIS workflow on THIS repository (registered once on PyPI, see
+    # docs/releasing.md "One-time setup"). No long-lived API token is stored
+    # anywhere. It publishes exactly the bytes `gate` built and smoke-tested;
+    # it never rebuilds.
+    needs: gate
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Download the distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - name: Publish the distributions to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
