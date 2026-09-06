@@ -97,6 +97,7 @@ assert client.get(Ticket, ticket_id).escalated is True
 | MCP serving | [MCP serving](docs/mcp-serving.md) |
 | Worked recipes | [Tickets reference app](examples/tickets/README.md) |
 | Compatibility and migration | [CHANGELOG.md](CHANGELOG.md) · [Compatibility](docs/compatibility.md) |
+| Cutting a release (maintainers) | [Releasing](docs/releasing.md) |
 
 ## License
 

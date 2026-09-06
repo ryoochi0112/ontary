@@ -179,6 +179,9 @@ def test_documented_install_ref_matches_the_current_version() -> None:
         refs = [line for line in text.splitlines() if _INSTALL_REF in line]
         if not refs:
             continue
+        # Skip version checking for template/runbook files that use placeholders
+        if name in _EXCLUDE_FROM_VERSION_CHECK:
+            continue
         seen.add(name)
         for line in refs:
             assert version_tag in line, (
@@ -209,8 +212,9 @@ _DOC_SUFFIXES = (".md", ".html")
 #: Directories not ours to police -- dependency trees and tool caches. `.venv`
 #: alone would do today; the rest keep a future build/vendor directory from
 #: silently failing the walk. `site` is the MkDocs build output written by `make docs-build`.
+#: `.superpowers` is the task/workflow directory and not part of the package.
 _SKIP_DIRS = frozenset(
-    {".venv", ".git", ".mypy_cache", ".pytest_cache", "node_modules", "build", "dist", "site"}
+    {".venv", ".git", ".mypy_cache", ".pytest_cache", "node_modules", "build", "dist", "site", ".superpowers"}
 )
 
 #: Docs that must ALWAYS carry the install command. Without this, a canonical
@@ -221,6 +225,13 @@ _SKIP_DIRS = frozenset(
 _REQUIRED_REFS = (
     "README.md",
     "CHANGELOG.md",
+)
+
+#: Docs that contain placeholder text (e.g. runbooks with vX.Y.Z) and should be
+#: excluded from version number checking. These files may reference install refs
+#: in template form without being required to use the current version.
+_EXCLUDE_FROM_VERSION_CHECK = frozenset(
+    {"docs/releasing.md"}
 )
 
 #: A *released* section heading: `## [` followed by a digit. Deliberately not

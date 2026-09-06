@@ -49,3 +49,4 @@ nav:
   - MCP serving: mcp-serving.md
   - Compatibility: compatibility.md
   - Changelog: changelog.md
+  - Releasing: releasing.md
