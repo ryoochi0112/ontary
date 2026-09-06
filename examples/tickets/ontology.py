@@ -81,7 +81,6 @@ class Agent(OntologyObject):
 @_ontology.object(
     layer="L0",
     owned={"escalated": False},
-    version=2,
     scope=[
         DirectProperty(level="queue", property_name="queue_id"),
         ViaLink(link_api_name="ticketInQueue", direction="from", parent_type="Queue"),
@@ -95,11 +94,6 @@ class Ticket(OntologyObject):
     queue_id: str | None = prop(default=None, scope_level="queue")
     escalated: bool | None = prop(default=None)
     channel: str | None = prop(default=None, choices=["email", "chat", "phone"])
-
-
-@_ontology.upcaster(Ticket, from_version=1)
-def _ticket_v1_to_v2(payload: dict[str, Any]) -> dict[str, Any]:
-    return {**payload, "channel": "email"}
 
 
 @_ontology.object(

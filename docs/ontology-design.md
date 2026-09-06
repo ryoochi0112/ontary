@@ -67,11 +67,10 @@ types. New `ObjectTypeDef`, `LinkTypeDef`, `ActionTypeDef`, and `FunctionDef`
 declarations can extend a stable core. Existing API names, property semantics, link
 directions, and action outcomes are contracts for human applications and agents.
 
-When an existing object shape genuinely evolves, change the same type deliberately:
-the stored `OntologyFingerprint` detects undeclared drift, and
-`migrate_object_type` applies a declared version change and its upcasters. Do not
-pre-build speculative extension points, and do not silently reinterpret an old
-property to accommodate a new use case.
+When an existing object shape genuinely evolves, change the same type deliberately
+and keep its history in the store's own row history. Do not pre-build speculative
+extension points, and do not silently reinterpret an old property to accommodate a
+new use case.
 
 *Source: Palantir, "Ontology design: Best practices".*
 
@@ -351,8 +350,7 @@ across clones; "current state" becomes a convention instead of a query.
 (`valid_from`/`valid_to`, close-old-insert-new), so history is a storage concern,
 not a modeling problem. If a point-in-time value must be first-class, declare it
 explicitly as a snapshot type (e.g. `EngagementScoreSnapshot`) — the only sanctioned
-duplicate of a derivable fact. Schema evolution goes through
-`migrate_object_type` and type `version` plus upcasters, never a `V2` type.
+duplicate of a derivable fact. History is row history, never a `V2` type.
 
 *Source: Palantir, "Ontology design: Anti-patterns".*
 

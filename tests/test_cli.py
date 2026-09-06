@@ -35,7 +35,7 @@ def _error_ontology() -> Ontology:
     @ontology.object(
         layer="L0",
         api_name="Ticket",
-        version=2,
+        owned={"missing": "x"},
         scope=[SelfScope(level="org")],
     )
     class Ticket(OntologyObject):

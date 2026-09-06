@@ -78,15 +78,6 @@ scoped to it; primary keys are unique per tenant. PostgreSQL can add
 row-level security unless `rls=False`, but a database superuser can bypass RLS by
 PostgreSQL design. See [storage and tenancy](storage.md).
 
-### Ontology evolution
-
-The store fingerprints declared descriptor data and refuses to open under an
-unacknowledged `ONTOLOGY_DRIFT`. A compatible evolution increments the declared
-type version and supplies an upcaster chain; older rows are read as the current
-shape and may later be rewritten permanently. A shape change at the same version
-is still drift. [The compatibility policy](compatibility.md) gives the migration
-procedure and the consequences of changing a declared answer.
-
 ### Write-back and failure semantics
 
 Ontology-owned writes happen through governed actions. Source-backed state cannot be

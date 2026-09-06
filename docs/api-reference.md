@@ -99,10 +99,6 @@ preflight validation and lives in `ontary.connect`.
 
 `ERROR_CODES`, `ErrorCodeInfo`, `Kind`.
 
-### `ontary.fingerprint`
-
-`OntologyFingerprint`, `fingerprint_ontology`.
-
 ### `ontary.functions`
 
 `FunctionHandler`, `FunctionRegistry`.
@@ -118,12 +114,7 @@ preflight validation and lives in `ontary.connect`.
 ### `ontary.meta`
 
 `ActionParameterDef`, `ActionTypeDef`, `FunctionDef`, `LinkTypeDef`,
-`ObjectTypeDef`, `OntologyRegistry`, `PropertyDef`, `PropertyType`, `ScopeLevel`,
-`Upcaster`.
-
-### `ontary.migrate`
-
-`MigrationFailure`, `MigrationReport`, `migrate_object_type`, `upcast_object_type`.
+`ObjectTypeDef`, `OntologyRegistry`, `PropertyDef`, `PropertyType`, `ScopeLevel`.
 
 ### `ontary.ontology`
 
@@ -145,8 +136,7 @@ preflight validation and lives in `ontary.connect`.
 ### `ontary.store`
 
 `AuditEntry`, `DEFAULT_BATCH`, `DEFAULT_TENANT`, `Lineage`,
-`SCHEMA_VERSION`, `StoredObject`, `WriteRecord`, `accept_ontology_fingerprint`,
-`check_ontology_fingerprint`.
+`SCHEMA_VERSION`, `StoredObject`, `WriteRecord`.
 
 ### `ontary.testing`
 
@@ -160,10 +150,6 @@ compatible author-defined coded exceptions that expose a stable string `.code`.
 the same timezone-aware datetime on every call and rejects a naive start.
 `SequentialIds(prefix)` returns deterministic IDs `prefix-1`, `prefix-2`, and
 so on.
-
-### `ontary.upcast`
-
-`upcast_payload`.
 
 ---
 
@@ -1149,8 +1135,6 @@ own — a declared convention, not an enforced boundary, since a capability prov
 write outward inline), `reingest` (upsert-merge; owned properties survive; no
 deletion), `visibility_default` (deny-by-default — unresolved scope hides),
 `transaction_ownership` (runtime-owned — refuses caller-opened transactions),
-`ontology_evolution` (fingerprinted; drift is refused unless a declared type version
-bump's upcaster chain covers the stored version, or the drift is explicitly accepted),
 `idempotency` (none — retries are distinct audited attempts), `audit_scope`
 (tenant-scoped administrative view; actions always audited, functions audited iff they
 declare capabilities unless overridden per function, and always when a call releases a
@@ -1190,8 +1174,6 @@ table below is generated from it.
 | Code | Meaning |
 | --- | --- |
 | `CALLER_TRANSACTION_REFUSED` | Raised when `ActionExecutor.execute()` (or an ingest entry point, a later task) is called while the caller has already opened a `store.transaction()` block (declared-contracts §3 AC9). `transaction()` is reentrant, so a caller-owned outer transaction could roll back an action after the executor reported success and audited `ok`. The engine must own the transaction/audit boundary and refuses to nest inside the caller's. Deliberately NOT audited (spec §5): an audit row inside the caller's transaction could itself be rolled back, so the refusal is raised before any audit write. |
-| `UPCAST_FAILED` | Raised when a stored row cannot be read as the current declared version. The message distinguishes two causes because their fixes differ: the chain has no step for the carried version (normally a row written by a NEWER ontology than this declaration, i.e. a downgrade, since `ontology.validate()` rejects an incomplete chain), or an author's upcaster raised on this payload. A read failure is deliberately not a silent fallback to the raw payload, which would hand a consumer data in a shape the declaration says does not exist. |
-| `ONTOLOGY_DRIFT` | Raised at construction when the declared ontology is not the one this store's rows were written under (ontology-evolution AC3/AC4). It is refused BEFORE any query, for the same reason as the `STORE_VERSION_UNSUPPORTED` conflict: a store the engine cannot honestly serve must not answer a read half-correctly first. Drift is not hypothetical; the measured mild case is a row the typed reader refuses while the string reader returns it. The message names every changed type. The two explicit ways forward are to migrate rows (`ontary.migrate.migrate_object_type`, then `accept_ontology_fingerprint`) or accept drift at the call site with `ObjectStore(..., accept_ontology_drift=True)`, which proceeds and writes an audit entry. |
 | `CARDINALITY_VIOLATION` | A link creation would violate its LinkTypeDef cardinality. |
 | `OBJECT_ALREADY_RETIRED` | A retirement targeted an object whose current row is already closed. |
 | `STORE_VERSION_UNSUPPORTED` | Raised at store construction when the store's schema stamp is not this engine's `SCHEMA_VERSION` -- a SQLite file's `PRAGMA user_version`, or a Postgres database's `schema_meta` row. Neither backend carries a migration ladder: a store written by a different ontary schema shape is REFUSED, never migrated in place and never adopted. An unstamped store that already has an `objects` table is refused for the same reason -- stamping a shape this engine cannot read would be a lying stamp, and every later query would fail as a confusing uncoded SQL error instead. The message names BOTH the store's and the engine's versions, so an operator knows exactly what to upgrade; the way forward is a matching ontary version, or a fresh store the data is migrated into. |
@@ -1259,7 +1241,7 @@ table below is generated from it.
 | `MIN_N_VIOLATION` | An aggregate would be computed over fewer than min_n distinct contributors. |
 | `VISIBILITY_DENIED` | A single-object read/write targeted an object outside the consumer's scope. |
 
-*50 codes across 7 kinds.*
+*48 codes across 7 kinds.*
 
 ---
 

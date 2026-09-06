@@ -826,8 +826,8 @@ def test_read_last_returns_the_newest_row_live_or_retired(store: Store) -> None:
 def test_read_last_is_read_current_while_any_row_is_live(store: Store) -> None:
     """`read_last` is a SUPERSET of `read_current`, never a different pick.
 
-    The store does not enforce payload-pk uniqueness among current rows (see
-    `ontary.migrate`), so two inserts of the same primary key leave two LIVE
+    The store does not enforce payload-pk uniqueness among current rows, so
+    two inserts of the same primary key leave two LIVE
     rows and `read_current` answers with the oldest of them (`row_id ASC`).
     A `read_last` that simply took the newest row took the OTHER one -- and
     since the action target gate resolves scope from `read_last` while every
@@ -2636,26 +2636,6 @@ def test_audit_entries_round_trip_every_field(store: Store) -> None:
     got = store.audit_entries()[0]
     for field in AuditEntry.model_fields:
         assert getattr(got, field) == getattr(entry, field), field
-
-
-# -- type versions and upcasting (M9b) ---------------------------------------
-
-
-def test_a_row_records_the_declared_version_of_its_type(store: Store) -> None:
-    """Both backends stamp the write, so an older row can be recognized as one.
-
-    Asserted through the protocol rather than by inspecting a column, because the
-    in-memory backend has no columns -- which is exactly the kind of difference a
-    conformance suite exists to keep behavioral.
-    """
-    store.insert("Company", {"id": "c-1", "name": "Acme"}, Source(source_system="s"))
-
-    # Nothing in the `Store` protocol exposes the stored version directly (it is
-    # an implementation detail of the read path), so the observable contract is
-    # that a current-version row reads back byte-identically.
-    row = store.read_current("Company", "c-1")
-    assert row is not None
-    assert row.payload == {"id": "c-1", "name": "Acme"}
 
 
 def test_audit_importable_before_store_in_fresh_interpreter() -> None:

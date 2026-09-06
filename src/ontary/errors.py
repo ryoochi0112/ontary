@@ -287,36 +287,6 @@ ERROR_CODES: dict[str, ErrorCodeInfo] = {
         kind="precondition",
         description="A declared capability had no provider bound for this call.",
     ),
-    "UPCAST_FAILED": ErrorCodeInfo(
-        kind="conflict",
-        description=(
-            "Raised when a stored row cannot be read as the current declared "
-            "version. The message distinguishes two causes because their fixes "
-            "differ: the chain has no step for the carried version (normally a "
-            "row written by a NEWER ontology than this declaration, i.e. a "
-            "downgrade, since `ontology.validate()` rejects an incomplete chain), "
-            "or an author's upcaster raised on this payload. A read failure is "
-            "deliberately not a silent fallback to the raw payload, which would "
-            "hand a consumer data in a shape the declaration says does not exist."
-        ),
-    ),
-    "ONTOLOGY_DRIFT": ErrorCodeInfo(
-        kind="conflict",
-        description=(
-            "Raised at construction when the declared ontology is not the one "
-            "this store's rows were written under (ontology-evolution AC3/AC4). "
-            "It is refused BEFORE any query, for the same reason as "
-            "the `STORE_VERSION_UNSUPPORTED` conflict: a store the engine cannot honestly serve "
-            "must not answer a read half-correctly first. Drift is not hypothetical; "
-            "the measured mild case is a row the typed reader refuses while the "
-            "string reader returns it. The message names every changed type. The "
-            "two explicit ways forward are to migrate rows "
-            "(`ontary.migrate.migrate_object_type`, then "
-            "`accept_ontology_fingerprint`) or accept drift at the call site with "
-            "`ObjectStore(..., accept_ontology_drift=True)`, which proceeds and "
-            "writes an audit entry."
-        ),
-    ),
     "MIN_N_VIOLATION": ErrorCodeInfo(
         kind="visibility",
         description=(

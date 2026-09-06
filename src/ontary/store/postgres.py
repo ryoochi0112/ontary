@@ -49,7 +49,6 @@ from ontary.audit import (
     WriteRecord,
 )
 from ontary.errors import ConflictError
-from ontary.fingerprint import OntologyFingerprint
 from ontary.meta import Cardinality, OntologyRegistry
 from ontary.store import _sql
 from ontary.store._shared import (
@@ -68,7 +67,6 @@ from ontary.store._shared import (
     retire_object_refusal,
     unknown_page_token,
 )
-from ontary.store.protocol import check_ontology_fingerprint
 from ontary.store.schema import SCHEMA_VERSION
 from ontary.store.values import (
     DEFAULT_BATCH,
@@ -79,7 +77,6 @@ from ontary.store.values import (
     StoredObject,
     _utcnow_iso,
 )
-from ontary.upcast import upcast_payload
 
 __all__ = ["POSTGRES_EXTRA_HINT", "PostgresStore"]
 
@@ -155,9 +152,8 @@ CREATE POLICY tenant_isolation ON audit_log USING
 """
 """Applied once at schema creation, when `rls=True` (the default).
 
-Deliberately NOT applied to `schema_meta` or `ontology_fingerprint`: both are
-per-DEPLOYMENT rather than per-tenant (one process serves one declaration), and a
-policy on them would make the drift check invisible to every tenant but one.
+Deliberately NOT applied to `schema_meta`: it is per-DEPLOYMENT rather than
+per-tenant (one process serves one declaration).
 """
 
 
@@ -183,7 +179,6 @@ class PostgresStore:
         registry: OntologyRegistry,
         dsn: str,
         *,
-        accept_ontology_drift: bool = False,
         tenant: str = DEFAULT_TENANT,
         rls: bool = True,
     ) -> None:
@@ -216,7 +211,6 @@ class PostgresStore:
         with self._conn.cursor() as cur:
             cur.execute("SELECT set_config('ontary.tenant', %s, false)", (tenant,))
         self._conn.commit()
-        check_ontology_fingerprint(self, registry, accept_drift=accept_ontology_drift)
 
     # -- schema ----------------------------------------------------------
 
@@ -341,7 +335,7 @@ class PostgresStore:
         prepared = prepare_insert(
             self._registry, obj_type, payload, capturing=self._write_capture.active
         )
-        obj_def, payload, obj_id = prepared.obj_def, prepared.payload, prepared.obj_id
+        payload, obj_id = prepared.payload, prepared.obj_id
 
         # `json.dumps` here, not `_safe_json_dumps`: an unencodable payload must
         # fail the write on every backend (SQLite raises from its own
@@ -356,8 +350,8 @@ class PostgresStore:
                     INSERT INTO objects
                         (object_type, id, payload, valid_from, valid_to,
                          source_system, source_id, extracted_at, page_token,
-                         type_version, tenant)
-                    VALUES (%s, %s, %s, %s, NULL, %s, %s, %s, %s, %s, %s)
+                         tenant)
+                    VALUES (%s, %s, %s, %s, NULL, %s, %s, %s, %s, %s)
                     """,
                     (
                         obj_type,
@@ -368,7 +362,6 @@ class PostgresStore:
                         source.source_id,
                         source.extracted_at,
                         uuid.uuid4().hex,
-                        obj_def.version,
                         self._tenant,
                     ),
                 )
@@ -405,8 +398,8 @@ class PostgresStore:
                     INSERT INTO objects
                         (object_type, id, payload, valid_from, valid_to,
                          source_system, source_id, extracted_at, page_token,
-                         type_version, tenant)
-                    VALUES (%s, %s, %s, %s, NULL, %s, %s, %s, %s, %s, %s)
+                         tenant)
+                    VALUES (%s, %s, %s, %s, NULL, %s, %s, %s, %s, %s)
                     """,
                     (
                         obj_type,
@@ -417,7 +410,6 @@ class PostgresStore:
                         source.source_id,
                         source.extracted_at,
                         uuid.uuid4().hex,
-                        obj_def.version,
                         self._tenant,
                     ),
                 )
@@ -486,19 +478,9 @@ class PostgresStore:
             source_id,
             extracted_at,
             _page_token,
-            type_version,
         ) = row
-        # The read boundary, same as the other two backends: upcast an older row
-        # here so every surface above sees one shape (M9b).
-        upcast = upcast_payload(
-            self._registry,
-            object_type,
-            json.loads(payload),
-            type_version,
-            object_id=str(obj_id),
-        )
         return StoredObject(
-            payload=upcast,
+            payload=json.loads(payload),
             lineage=Lineage(
                 object_type=object_type,
                 object_id=str(obj_id),
@@ -752,38 +734,6 @@ class PostgresStore:
         return [
             decode_audit_entry(dict(zip(_sql.AUDIT_LOG_COLUMNS, row, strict=True))) for row in rows
         ]
-
-    # -- ontology fingerprint --------------------------------------------
-
-    def read_ontology_fingerprint(self) -> OntologyFingerprint | None:
-        rows = _sql.execute(
-            self._conn,
-            _sql.render(_sql.ONTOLOGY_FINGERPRINT_SELECT_TEMPLATE, "postgres"),
-            dialect="postgres",
-        ).rows
-        row = rows[0] if rows else None
-        if row is None:
-            return None
-        return OntologyFingerprint(
-            digest=row[0], types=json.loads(row[1]), versions=json.loads(row[2])
-        )
-
-    def write_ontology_fingerprint(
-        self, fingerprint: OntologyFingerprint, *, adopted: bool
-    ) -> None:
-        with self.transaction() as conn:
-            _sql.execute(
-                conn,
-                _sql.render(_sql.ONTOLOGY_FINGERPRINT_UPSERT_TEMPLATE, "postgres"),
-                (
-                    fingerprint.digest,
-                    json.dumps(fingerprint.types, sort_keys=True),
-                    _utcnow_iso(),
-                    int(adopted),
-                    json.dumps(fingerprint.versions, sort_keys=True),
-                ),
-                dialect="postgres",
-            )
 
     # -- lifecycle -------------------------------------------------------
 

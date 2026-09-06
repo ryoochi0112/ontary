@@ -30,7 +30,6 @@ OBJECT_COLUMNS: tuple[str, ...] = (
     "source_id",
     "extracted_at",
     "page_token",
-    "type_version",
 )
 
 AUDIT_LOG_COLUMNS: tuple[str, ...] = (
@@ -50,24 +49,8 @@ AUDIT_LOG_COLUMNS: tuple[str, ...] = (
     "principal",
 )
 
-ONTOLOGY_FINGERPRINT_COLUMNS: tuple[str, ...] = (
-    "id",
-    "digest",
-    "types",
-    "first_seen",
-    "adopted",
-    "versions",
-)
-ONTOLOGY_FINGERPRINT_READ_COLUMNS: tuple[str, ...] = (
-    ONTOLOGY_FINGERPRINT_COLUMNS[1],
-    ONTOLOGY_FINGERPRINT_COLUMNS[2],
-    ONTOLOGY_FINGERPRINT_COLUMNS[5],
-)
-
 _AUDIT_LOG_COLUMN_LIST = ", ".join(AUDIT_LOG_COLUMNS)
 _OBJECT_COLUMN_LIST = ", ".join(OBJECT_COLUMNS)
-_ONTOLOGY_FINGERPRINT_COLUMN_LIST = ", ".join(ONTOLOGY_FINGERPRINT_COLUMNS)
-_ONTOLOGY_FINGERPRINT_READ_COLUMN_LIST = ", ".join(ONTOLOGY_FINGERPRINT_READ_COLUMNS)
 LINKS_FROM_COLUMNS: tuple[str, ...] = ("to_id",)
 LINKS_TO_COLUMNS: tuple[str, ...] = ("from_id",)
 _LINKS_FROM_COLUMN_LIST = ", ".join(LINKS_FROM_COLUMNS)
@@ -125,14 +108,6 @@ _OBJECTS_PREFIX: DialectText = {
         "-- cover it (see that task).\n"
     ),
     "postgres": "\n",
-}
-_TYPE_VERSION_PREFIX: DialectText = {
-    "sqlite": (
-        "    -- Which version of the declared type this row's payload was written\n"
-        "    -- under (M9b). Read by `ontary.upcast.upcast_payload` on every read;\n"
-        "    -- written from the declaration on every insert/update.\n"
-    ),
-    "postgres": "",
 }
 _TENANT_COLUMN_PREFIX: DialectText = {
     "sqlite": (
@@ -195,18 +170,6 @@ _PAGE_TOKEN_INDEX_PREFIX: DialectText = {
     ),
     "postgres": "",
 }
-_FINGERPRINT_PREFIX: DialectText = {
-    "sqlite": (
-        "\n"
-        "-- Which ontology definition this store's rows were written under\n"
-        "-- (spec `ontology-evolution` AC2). One row, ever: `id = 1`.\n"
-        "-- Before this table, nothing recorded the SHAPE a row was written\n"
-        '-- under, so no reader could tell "this row predates the change"\n'
-        '-- from "this row is wrong" -- which is the only distinction that\n'
-        "-- makes a migration possible.\n"
-    ),
-    "postgres": "\n",
-}
 
 
 TABLE_SPECS: tuple[TableSpec, ...] = (
@@ -239,7 +202,6 @@ TABLE_SPECS: tuple[TableSpec, ...] = (
             ColumnSpec("source_id", "TEXT", "NULL"),
             ColumnSpec("extracted_at", "TEXT", "NULL"),
             ColumnSpec("page_token", "TEXT", "NOT NULL"),
-            ColumnSpec("type_version", "INTEGER", "NOT NULL DEFAULT 1", _TYPE_VERSION_PREFIX),
             ColumnSpec("tenant", "TEXT", "NOT NULL DEFAULT 'default'", _TENANT_COLUMN_PREFIX),
         ),
         indexes=(
@@ -354,24 +316,6 @@ TABLE_SPECS: tuple[TableSpec, ...] = (
             "principal",
         ),
     ),
-    TableSpec(
-        name="ontology_fingerprint",
-        columns=(
-            ColumnSpec(
-                "id",
-                "INTEGER",
-                {"sqlite": "PRIMARY KEY CHECK (id = 1)", "postgres": "PRIMARY KEY"},
-            ),
-            ColumnSpec("digest", "TEXT", "NOT NULL"),
-            ColumnSpec("types", "TEXT", "NOT NULL"),
-            ColumnSpec("first_seen", "TEXT", "NOT NULL"),
-            ColumnSpec("adopted", "INTEGER", "NOT NULL DEFAULT 0"),
-            ColumnSpec("versions", "TEXT", "NOT NULL DEFAULT '{}'"),
-        ),
-        prefix=_FINGERPRINT_PREFIX,
-        sqlite_order=11,
-        postgres_order=5,
-    ),
 )
 
 
@@ -452,7 +396,7 @@ LIMIT 1
 # the action target gate resolves scope from it while every consumer read
 # resolves scope from `read_current`, so the two disagreeing means the gate
 # authorizes against a scope no consumer read can see.  The store does not
-# enforce payload-pk uniqueness among current rows (see `ontary.migrate`), so
+# enforce payload-pk uniqueness among current rows, so
 # "newest row" alone was not enough -- two live rows made `row_id DESC` pick
 # the opposite row to `read_current`'s `row_id ASC`.  Hence: live rows first
 # and, among them, `read_current`'s own `row_id ASC` pick; only with nothing
@@ -519,23 +463,6 @@ SELECT {_AUDIT_LOG_COLUMN_LIST}
 FROM audit_log
 WHERE tenant = {{p}} ORDER BY seq ASC
 """
-
-ONTOLOGY_FINGERPRINT_SELECT_TEMPLATE = f"""
-SELECT {_ONTOLOGY_FINGERPRINT_READ_COLUMN_LIST} FROM ontology_fingerprint
-WHERE id = 1
-"""
-
-ONTOLOGY_FINGERPRINT_UPSERT_TEMPLATE = f"""
-INSERT INTO ontology_fingerprint
-    ({_ONTOLOGY_FINGERPRINT_COLUMN_LIST})
-VALUES (1, {{p}}, {{p}}, {{p}}, {{p}}, {{p}})
-ON CONFLICT (id) DO UPDATE SET
-    digest = excluded.digest,
-    types = excluded.types,
-    adopted = excluded.adopted,
-    versions = excluded.versions
-"""
-
 
 def _placeholder(dialect: Dialect) -> str:
     return "?" if dialect == "sqlite" else "%s"

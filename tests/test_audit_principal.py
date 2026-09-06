@@ -109,26 +109,18 @@ def _is_audit_entry_call(node: ast.AST) -> bool:
     return isinstance(fn, ast.Attribute) and fn.attr == "AuditEntry"
 
 
-# The ONLY sites where an `AuditEntry(...)` is built without a `Consumer`
-# available to stamp a `principal` from at all -- verified by hand against
-# every one of the 6 `AuditEntry(...)` call sites under `src/ontary` on
-# 2026-09-06 (`grep -rn "AuditEntry(" src/ontary`), not merely inherited
-# from a claim. Every other site passes `principal=` directly. Keyed on the
-# ENCLOSING FUNCTION NAME (not a line number) so it survives edits elsewhere
-# in the file; `test_allowlist_entries_all_still_match_a_real_site` asserts
-# every entry here is still actually matched by a real, unstamped call, so a
-# rename/deletion of the function fails loudly instead of rotting silently.
-_ALLOWLIST: dict[tuple[str, str], str] = {
-    ("migrate.py", "_audit_migration"): (
-        "engine-driven object-type migration (`migrate_object_type`) -- "
-        "no consumer initiates it, so there is nothing to stamp a "
-        "principal from"
-    ),
-    ("protocol.py", "check_ontology_fingerprint"): (
-        "engine-driven ontology-fingerprint check/migration (both its "
-        "audit sites) -- no consumer initiates it"
-    ),
-}
+# Sites where an `AuditEntry(...)` is built without a `Consumer` available to
+# stamp a `principal` from at all. EMPTY as of the OSS v0 cut: the two entries
+# it held named engine-driven machinery that has since been removed, so
+# every `AuditEntry(...)` call site under `src/ontary` now stamps `principal=`
+# and nothing is exempt. The mechanism is kept -- entries are keyed on the
+# ENCLOSING FUNCTION NAME (not a line number) so an exemption survives edits
+# elsewhere in the file, and `test_allowlist_entries_all_still_match_a_real_site`
+# asserts every entry is still matched by a real, unstamped call, so a
+# rename/deletion fails loudly instead of rotting silently. The guard's match
+# and rot-detection paths stay exercised through the injectable `allowlist`
+# argument below.
+_ALLOWLIST: dict[tuple[str, str], str] = {}
 
 
 def _audit_entry_calls_by_function(tree: ast.Module) -> list[tuple[ast.Call, str]]:
@@ -155,7 +147,9 @@ def _audit_entry_calls_by_function(tree: ast.Module) -> list[tuple[ast.Call, str
     return calls
 
 
-def _find_unstamped_audit_entry_sites(root: Path) -> tuple[list[str], set[tuple[str, str]]]:
+def _find_unstamped_audit_entry_sites(
+    root: Path, allowlist: dict[tuple[str, str], str] | None = None
+) -> tuple[list[str], set[tuple[str, str]]]:
     """FAIL CLOSED (spec §7/§9): every `AuditEntry(...)` call under `root`
     must pass `principal=`, unless its `(module filename, enclosing
     function)` is in `_ALLOWLIST`. Returns the offending sites (any
@@ -163,6 +157,7 @@ def _find_unstamped_audit_entry_sites(root: Path) -> tuple[list[str], set[tuple[
     actually matched by a real, unstamped call in this tree -- so a caller
     can separately detect a ROTTED allowlist entry (one naming a function
     that no longer exists, or no longer calls `AuditEntry` unstamped)."""
+    allowlist = _ALLOWLIST if allowlist is None else allowlist
     offenders: list[str] = []
     used: set[tuple[str, str]] = set()
     for path in sorted(root.rglob("*.py")):
@@ -172,7 +167,7 @@ def _find_unstamped_audit_entry_sites(root: Path) -> tuple[list[str], set[tuple[
             if "principal" in keywords:
                 continue
             key = (path.name, func_name)
-            if key in _ALLOWLIST:
+            if key in allowlist:
                 used.add(key)
                 continue
             try:
@@ -279,14 +274,16 @@ def test_structural_guard_passes_once_the_site_stamps_principal(tmp_path: Path) 
 
 
 def test_structural_guard_does_not_flag_an_allowlisted_site(tmp_path: Path) -> None:
-    """A call inside a real allowlisted `(module, function)` pair -- here
-    `migrate.py`'s `_audit_migration` -- is exempt from requiring
-    `principal=`, AND is recorded as a MATCH (not silently ignored), so the
-    rot-detection test below has something real to check against."""
-    (tmp_path / "migrate.py").write_text(
+    """A call inside an allowlisted `(module, function)` pair is exempt from
+    requiring `principal=`, AND is recorded as a MATCH (not silently
+    ignored), so the rot-detection test below has something real to check
+    against. `src/ontary` itself has no exempt site left, so the allowlist is
+    injected here -- the MECHANISM is what this pins, and it must keep
+    working the day a genuinely consumer-free site reappears."""
+    (tmp_path / "engine.py").write_text(
         "from ontary.store import AuditEntry\n"
         "\n"
-        "def _audit_migration(record):\n"
+        "def _audit_engine_write(record):\n"
         "    return AuditEntry(\n"
         "        actor='engine',\n"
         "        role='engine',\n"
@@ -297,21 +294,23 @@ def test_structural_guard_does_not_flag_an_allowlisted_site(tmp_path: Path) -> N
         encoding="utf-8",
     )
 
-    offenders, used = _find_unstamped_audit_entry_sites(tmp_path)
+    allowlist = {("engine.py", "_audit_engine_write"): "engine-driven, no consumer"}
+    offenders, used = _find_unstamped_audit_entry_sites(tmp_path, allowlist)
     assert offenders == []
-    assert ("migrate.py", "_audit_migration") in used
+    assert ("engine.py", "_audit_engine_write") in used
 
 
 def test_structural_guard_flags_a_rotted_allowlist_entry(tmp_path: Path) -> None:
     """The allowlist's rot-detection mechanism itself, exercised directly:
     on a tree containing NONE of the allowlisted sites (here, simply
-    empty), none of `_ALLOWLIST`'s entries can have been matched --
+    empty), none of the allowlist's entries can have been matched --
     mirroring what `test_allowlist_entries_all_still_match_a_real_site`
     would report as a failure if a real allowlisted site disappeared from
     `src/ontary`."""
-    _offenders, used = _find_unstamped_audit_entry_sites(tmp_path)
+    allowlist = {("engine.py", "_audit_engine_write"): "engine-driven, no consumer"}
+    _offenders, used = _find_unstamped_audit_entry_sites(tmp_path, allowlist)
     assert used == set()
-    assert set(_ALLOWLIST) - used == set(_ALLOWLIST)
+    assert set(allowlist) - used == set(allowlist)
 
 
 # -- #3/#4/#5: integration, through a real store ----------------------------

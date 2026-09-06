@@ -195,7 +195,6 @@ class PreparedInsert(NamedTuple):
     RAW value to SQL while the other two backends bind the string -- each
     backend keeps its exact current bytes by picking its field."""
 
-    obj_def: ObjectTypeDef
     payload: dict[str, Any]
     obj_id_raw: Any
     obj_id: str
@@ -258,9 +257,7 @@ def prepare_insert(
 
     payload = _normalize_payload_scalars(obj_def, payload)
 
-    return PreparedInsert(
-        obj_def=obj_def, payload=payload, obj_id_raw=obj_id, obj_id=str(obj_id)
-    )
+    return PreparedInsert(payload=payload, obj_id_raw=obj_id, obj_id=str(obj_id))
 
 
 def check_update_authority(

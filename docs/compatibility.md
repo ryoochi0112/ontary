@@ -47,7 +47,7 @@ worth reading:
 
 1. **A declared answer changes.** The strings on `Declarations` — `authority`,
    `capabilities`, `writeback`, `reingest`, `visibility_default`,
-   `transaction_ownership`, `ontology_evolution`, `idempotency`, `audit_scope`,
+   `transaction_ownership`, `idempotency`, `audit_scope`,
    `tenancy`, `identity`, `min_n` — are the runtime's contract with an auditor.
    Changing what one *says* means the behavior it describes changed, and the change
    belongs in the changelog with the obligation it puts on a caller stated there.
@@ -60,11 +60,6 @@ worth reading:
    matters most for governance, even though no caller's code stops compiling.
 5. **`SCHEMA_VERSION` increases.** See the next section — this one has an operational
    procedure attached, not just a note.
-6. **A change to the descriptor IR that alters the ontology fingerprint.** Since M9a, a
-   store refuses to open under a declaration it was not written under, so an SDK change
-   that adds a field to `ObjectTypeDef` (or otherwise moves the digest) makes every
-   existing store refuse until its fingerprint is accepted. Additive to the *code*,
-   operationally breaking for the *data*.
 
 Additive and therefore **not** breaking: a new export, a new optional parameter with a
 default that preserves current behavior, a new error code, a new audit field, a new
@@ -96,120 +91,9 @@ back the code.
 ## Changing your own ontology
 
 This policy covers the SDK and the store's physical schema. Your *ontology* — the object,
-link, and action types you declare — is versioned differently, and as of M9a it is no
-longer undefined.
-
-**A store remembers the ontology its rows were written under.** Every store records a
-fingerprint of the declared descriptor IR. Open it with a different declaration and it
-refuses at construction with `ONTOLOGY_DRIFT`, naming each type that changed:
-
-```
-ontary.errors.ConflictError: the declared ontology does not match the one this store's
-rows were written under: object 'Widget': declaration changed. Migrate the affected rows
-(ontary.migrate.migrate_object_type, then accept_ontology_fingerprint), or open the
-store with accept_ontology_drift=True to proceed and record that you did
-```
-
-Documentation-only fields (`description`, `display_name`, and a function's
-input/output descriptions) are excluded from the fingerprint: a check that fires on a
-docstring edit is a check people switch off.
-
-### Fingerprints and 0.7 property types
-
-The 0.7 type-system extension is fingerprint-neutral for an existing ontology: if an
-ontology uses none of the new property features, its `OntologyFingerprint` digest is
-byte-identical to the digest produced by 0.6.0. Upgrading the SDK alone therefore does
-not require `accept_ontology_drift`.
-
-`PropertyDef.choices` defaults to `None` and that default is omitted from the canonical
-fingerprint, so existing string properties remain byte-identical too. Declaring
-`prop(choices=["open", "closed"])` does change that ontology's own fingerprint because
-the allowed stored values are now part of its declared shape. Declaring a property with
-`type="date"` likewise changes that ontology's fingerprint, just as adding or retyping
-any declared property does. Date values are persisted as ISO `YYYY-MM-DD` strings and
-hydrate as `datetime.date`.
-
-Plan and acknowledge either declaration change through the ordinary version/upcaster
-workflow below. For an explicit drift acceptance, either open the store with
-`accept_ontology_drift=True` (which restamps and audits the new fingerprint), or call
-`accept_ontology_fingerprint(store, registry)` on an already-open store after any
-required row migration. An existing out-of-set string must be migrated before accepting
-a new `choices` constraint; otherwise reads reject that row with `INVALID_RECORD`.
-
-### Two ways to change a type
-
-**Version it (usually this one).** Bump the type's `version`, declare one upcaster per
-step, and old rows keep reading as the current shape:
-
-```python
-@ontology.object(layer="L0", version=2, scope=[...])
-class Widget(OntologyObject):
-    id: str = prop(primary_key=True)
-    label_v2: str | None = None
-
-@ontology.upcaster(Widget, from_version=1)
-def widget_v1_to_v2(payload: dict[str, Any]) -> dict[str, Any]:
-    payload["label_v2"] = payload.pop("label", None)
-    return payload
-```
-
-The store then opens **without any acknowledgement** — the rows are readable exactly as
-declared, so there is nothing for a human to accept. It is still recorded: a
-`kind="migration"` audit entry names what was covered.
-
-This is the governance property worth stating plainly: **you may evolve a type, but you
-must version it.** A changed declaration at the *same* version is still refused as drift,
-because nothing distinguishes it from an accident.
-
-Three things to know before you rely on it:
-
-- `ontology.validate()` refuses an **incomplete chain** — declare a step for every version
-  a row might be sitting at. One step per registration; a v1 → v3 jump is two functions,
-  because a jump is useless to the row that happens to be at v2.
-- The chain runs **on every read of an old row, forever**, and cannot be deleted while one
-  row still needs it. `upcast_object_type(store, registry, "Widget")` rewrites the rows
-  through the same declared chain and stamps them current, after which the read path does
-  nothing and the upcaster becomes deletable dead code.
-- An upcaster that raises fails the **read** with `UPCAST_FAILED`, naming the row, the step,
-  and the author's error. It never falls back to the raw payload: handing a consumer data in
-  a shape the declaration says does not exist is the failure this whole area is about.
-
-A **downgrade** — running code that declares an older version than the store was written at
-— is refused, for the same reason a newer `SCHEMA_VERSION` file is.
-
-### Rewriting instead, in order
-
-1. **Change the declaration** and run your tests. The store will refuse to open.
-2. **Migrate the rows.** `migrate_object_type(store, registry, "Widget", transform)` walks
-   every current row, applies your transform, validates each result against the *new*
-   declaration, and writes in batches. `dry_run=True` reports exactly what it would do,
-   failures included. One row whose transform raises does not abort the run — it lands in
-   `report.failures` with its object id.
-
-   Open the store with `accept_ontology_drift=True` for this step: you are deliberately
-   working on a store the check would otherwise refuse, and the acceptance is audited.
-3. **Accept the new shape** with `accept_ontology_fingerprint(store, registry)` once every
-   affected type is migrated. Deliberately separate from step 2 — "the rows are migrated"
-   and "this declaration is now the shape of record" are different claims, and a
-   migration usually touches one type at a time.
-
-Two properties of the tooling worth knowing before you rely on it: **your transform must
-be idempotent** (batches commit as they go, so the fix for a crash mid-run is to run it
-again), and a **dropped key is nulled rather than deleted** — `Store.update` merges, so
-the old *value* is gone but the key survives as `null`.
-
-### An additive change may need no migration at all
-
-Adding an optional property, or a required one whose rows already satisfy it, changes the
-fingerprint without invalidating any row. Acknowledge it and move on:
-
-```python
-store = ObjectStore(registry, path, accept_ontology_drift=True)
-```
-
-That is a call-site argument on purpose — not an environment variable, not a config key —
-and it appends a `kind="migration"` audit entry recording both digests and what changed.
-Someone taking the risk names it where the store is opened, and the log says they did.
+link, and action types you declare — is yours to version. The store records no
+declaration of its own and refuses nothing on a changed one, so a change that leaves
+existing rows violating the new declared shape is yours to migrate before you deploy it.
 
 ### Rows are also validated on the way in now
 
@@ -220,17 +104,6 @@ reader then refused to hydrate. **This is a breaking change** for any code that 
 writing rows violating its own declarations: those writes now raise `INVALID_RECORD`.
 Undeclared extra keys are still allowed — hydration ignores them, and real rows carry
 them.
-
-### What is still not covered
-
-Per-type versions and read-time upcasters (the spec's options B and C) are implemented.
-Declare the type's `version` and one `@ontology.upcaster(..., from_version=...)` for
-each step; reads apply the complete chain to old rows, and `upcast_object_type` can
-rewrite those rows permanently. What is still not covered is automatic background
-rewriting or a downgrade path: the chain must remain available while old rows exist,
-and a permanent rewrite is an explicit, idempotent maintenance operation. A deployment
-that needs a different version-retention or rollout policy must provide that policy
-around the SDK.
 
 ## Storage backends
 

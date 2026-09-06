@@ -107,6 +107,8 @@ REMOVED_SINCE_080_ERROR_CODES = frozenset(
         "EFFECT_NOT_DISPATCHABLE",
         "UNDECLARED_EFFECT",
         "EFFECT_NOT_SERIALIZABLE",
+        "UPCAST_FAILED",
+        "ONTOLOGY_DRIFT",
     }
 )
 NEW_ENGLISH_DOCS = tuple(
@@ -240,7 +242,6 @@ DEMOTED_NAMES_BY_MODULE = {
         "to_optional_datetime",
     },
     "ontary.errors": {"ERROR_CODES", "ErrorCodeInfo", "Kind"},
-    "ontary.fingerprint": {"OntologyFingerprint", "fingerprint_ontology"},
     "ontary.functions": {"FunctionHandler", "FunctionRegistry"},
     "ontary.ingest": {"IngestError", "IngestReport", "bulk_link", "bulk_upsert"},
     "ontary.mcp_server": {"ConsumerResolver", "build_multi_consumer_mcp_server"},
@@ -254,13 +255,6 @@ DEMOTED_NAMES_BY_MODULE = {
         "PropertyDef",
         "PropertyType",
         "ScopeLevel",
-        "Upcaster",
-    },
-    "ontary.migrate": {
-        "MigrationFailure",
-        "MigrationReport",
-        "migrate_object_type",
-        "upcast_object_type",
     },
     "ontary.ontology": {"OntologyDef"},
     "ontary.query": {"GuardedQuery"},
@@ -280,8 +274,6 @@ DEMOTED_NAMES_BY_MODULE = {
         "SCHEMA_VERSION",
         "StoredObject",
         "WriteRecord",
-        "accept_ontology_fingerprint",
-        "check_ontology_fingerprint",
     },
     "ontary.testing": {
         "FixedClock",
@@ -290,7 +282,6 @@ DEMOTED_NAMES_BY_MODULE = {
         "make_store",
         "raises_code",
     },
-    "ontary.upcast": {"upcast_payload"},
 }
 
 
@@ -418,7 +409,6 @@ def test_readme_quickstart_executes_verbatim() -> None:
 
 COOKBOOK_RECIPES = (
     "scoped-type",
-    "type-evolution",
     "serve-dev",
 )
 
@@ -445,8 +435,6 @@ def test_cookbook_recipes_execute_verbatim(recipe: str) -> None:
         if node.module == "ontary":
             imported = {alias.name for alias in node.names if alias.name != "*"}
             assert imported <= set(ontary.__all__)
-        elif node.module == "ontary.migrate":
-            assert {alias.name for alias in node.names} <= {"upcast_object_type"}
         elif node.module == "ontary.testing":
             assert {alias.name for alias in node.names} <= {
                 "FixedClock",
@@ -563,7 +551,6 @@ def test_authority_page_names_every_declarations_field() -> None:
         "reingest": "Re-ingest",
         "visibility_default": "Visibility default",
         "transaction_ownership": "Transaction ownership",
-        "ontology_evolution": "Ontology evolution",
         "idempotency": "Idempotency",
         "audit_scope": "Audit scope",
         "tenancy": "Tenancy",

@@ -46,7 +46,6 @@ from ontary.meta import (
     OntologyRegistry,
     PropertyDef,
     Sensitivity,
-    Upcaster,
 )
 from ontary.model import ActionParams as ActionParams
 from ontary.model import CapabilityHandle as CapabilityHandle
@@ -519,18 +518,10 @@ class Ontology:
         scope: Any = None,
         contributor: Any = None,
         row_visibility: Any = None,
-        version: int = 1,
     ) -> Callable[[type[_C]], type[_C]]:
         """Derives an `ObjectTypeDef` from `model_fields` and registers it.
         `scope`/`contributor`/`row_visibility` are stored per-class and
         assembled into the `ScopePolicy` lazily, by `.definition`.
-
-        `version` (M9b) declares which iteration of this type's shape the code
-        describes. Leave it at 1 until you change a declared property under data
-        that already exists; then bump it and declare an
-        `@ontology.upcaster(cls, from_version=...)` for each step. A changed shape
-        WITHOUT a bump is still refused as drift -- the bump is how an author says
-        the change was deliberate.
         """
 
         def decorator(cls: type[_C]) -> type[_C]:
@@ -553,7 +544,6 @@ class Ontology:
                 properties=props,
                 primary_key=primary_key,
                 owned=owned,
-                version=version,
             )
             self.registry.register_object_type(obj_def)
             cls._ontary_api_name = name
@@ -566,43 +556,6 @@ class Ontology:
                 "row_visibility": row_visibility,
             }
             return cls
-
-        return decorator
-
-    def upcaster(
-        self, cls: type[OntologyObject], *, from_version: int
-    ) -> Callable[[Upcaster], Upcaster]:
-        """Declare how to read a `from_version` row of `cls` as the next version.
-
-        ```python
-        @ontology.object(layer="L0", version=2, scope=[...])
-        class Widget(OntologyObject):
-            id: str = prop(primary_key=True)
-            label_v2: str | None = None
-
-        @ontology.upcaster(Widget, from_version=1)
-        def widget_v1_to_v2(payload: dict[str, Any]) -> dict[str, Any]:
-            payload["label_v2"] = payload.pop("label", None)
-            return payload
-        ```
-
-        The function is returned unchanged, so it stays directly callable and
-        directly testable -- an upcaster is the piece of an evolution most worth
-        unit-testing on its own, before any store is involved.
-
-        Registration is per STEP (`n` -> `n+1`); see
-        `OntologyRegistry.register_upcaster` for why a v1->v3 jump is refused.
-        `ontology.validate()` then checks the chain is complete, so a missing step
-        fails at declaration time rather than on the first read of the one row
-        that still needs it.
-        """
-
-        def decorator(fn: Upcaster) -> Upcaster:
-            self._check_not_frozen(f"upcaster for {cls.__name__!r}")
-            self.registry.register_upcaster(
-                self._registered_api_name(cls), from_version, fn
-            )
-            return fn
 
         return decorator
 

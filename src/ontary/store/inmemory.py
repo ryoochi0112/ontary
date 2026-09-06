@@ -31,7 +31,6 @@ from ontary.audit import (
     WriteRecord,
 )
 from ontary.errors import ConflictError
-from ontary.fingerprint import OntologyFingerprint
 from ontary.meta import Cardinality, OntologyRegistry
 from ontary.store._shared import (
     WriteCapture,
@@ -49,7 +48,7 @@ from ontary.store._shared import (
     retire_object_refusal,
     unknown_page_token,
 )
-from ontary.store.protocol import Store, check_ontology_fingerprint
+from ontary.store.protocol import Store
 from ontary.store.values import (
     DEFAULT_BATCH,
     DEFAULT_TENANT,
@@ -59,7 +58,6 @@ from ontary.store.values import (
     StoredObject,
     _utcnow_iso,
 )
-from ontary.upcast import upcast_payload
 
 
 class _ObjectRow(TypedDict):
@@ -74,7 +72,6 @@ class _ObjectRow(TypedDict):
     extracted_at: str | None
     row_id: int
     page_token: str
-    type_version: int
 
 
 class _LinkRow(TypedDict):
@@ -166,13 +163,6 @@ class InMemoryStore:
         # `read_page`'s only consumer-facing surface for it is the
         # out-of-band cursor string.
         self._next_row_id = 1
-        self._fingerprint: OntologyFingerprint | None = None
-        self._fingerprint_adopted = False
-        # Recorded at construction, exactly as `ObjectStore` does. An in-memory
-        # store is always born empty, so this always WRITES rather than
-        # comparing -- keeping the call anyway means the two backends share one
-        # code path instead of one of them quietly opting out of it.
-        check_ontology_fingerprint(self, registry)
 
     @contextmanager
     def transaction(self) -> Iterator[None]:
@@ -245,7 +235,7 @@ class InMemoryStore:
         prepared = prepare_insert(
             self._registry, obj_type, payload, capturing=self._write_capture.active
         )
-        obj_def, payload, obj_id = prepared.obj_def, prepared.payload, prepared.obj_id
+        payload, obj_id = prepared.payload, prepared.obj_id
 
         now = _utcnow_iso()
         with self.transaction():
@@ -266,7 +256,6 @@ class InMemoryStore:
                     "extracted_at": source.extracted_at,
                     "row_id": self._next_id(),
                     "page_token": uuid.uuid4().hex,
-                    "type_version": obj_def.version,
                 }
             )
         self._record_write(WriteRecord(op="create", object_type=obj_type, object_id=obj_id))
@@ -308,10 +297,6 @@ class InMemoryStore:
                     "extracted_at": source.extracted_at,
                     "row_id": self._next_id(),
                     "page_token": uuid.uuid4().hex,
-                    # A write always lands at the CURRENT declared version: the
-                    # merge above is a current-shape change over an already-upcast
-                    # payload, so the result is current by construction.
-                    "type_version": obj_def.version,
                 }
             )
         self._record_write(WriteRecord(op="update", object_type=obj_type, object_id=obj_id))
@@ -351,20 +336,11 @@ class InMemoryStore:
         return retired
 
     def _row_to_stored(self, row: _ObjectRow) -> StoredObject:
-        # Upcast at the read boundary, identical to `ObjectStore._row_to_stored`
-        # (M9b) -- the two backends must agree about what an older row reads as,
-        # or a test double lets through a shape production would reject.
         # `json.loads` here (mirroring `ObjectStore._row_to_stored`) is what
         # guarantees a fresh, unshared structure on every read: mutating the
         # returned payload (including nested containers) can never reach
         # back into `self._objects` or leak forward into a later read.
-        payload: dict[str, Any] = upcast_payload(
-            self._registry,
-            row["object_type"],
-            json.loads(row["payload"]),
-            row["type_version"],
-            object_id=str(row["id"]),
-        )
+        payload: dict[str, Any] = json.loads(row["payload"])
         return StoredObject(
             payload=payload,
             lineage=Lineage(
@@ -402,8 +378,8 @@ class InMemoryStore:
 
         A LIVE row wins over a newer closed one, and among live rows this
         returns `read_current`'s own pick (the first in append order). The
-        store does not enforce payload-pk uniqueness among current rows (see
-        `ontary.migrate`), so two inserts of one primary key leave two live
+        store does not enforce payload-pk uniqueness among current rows,
+        so two inserts of one primary key leave two live
         rows -- and a plain "last match" then answered with the opposite row
         to `read_current`. That matters because the action target gate
         resolves scope from `read_last` while every consumer read resolves it
@@ -676,27 +652,6 @@ class InMemoryStore:
         """
         with self._transaction_lock:
             return [entry.model_copy(deep=True) for entry in self._audit]
-
-    # -- ontology fingerprint --------------------------------------------
-
-    def read_ontology_fingerprint(self) -> OntologyFingerprint | None:
-        return self._fingerprint
-
-    def write_ontology_fingerprint(
-        self, fingerprint: OntologyFingerprint, *, adopted: bool
-    ) -> None:
-        """Kept in memory like everything else here.
-
-        Drift detection is nearly vacuous for this backend -- an `InMemoryStore`
-        is born empty, so its constructor always records rather than compares --
-        and it is implemented anyway, for two reasons: the conformance suite can
-        then assert the storage contract itself on both backends, and a test
-        double that silently lacked the machinery would let a caller "verify"
-        drift handling against a store that cannot drift.
-        """
-        self._fingerprint = fingerprint
-        self._fingerprint_adopted = adopted
-
 
 def _static_conformance_check(registry: OntologyRegistry) -> Store:
     """Never called at runtime -- exists purely so mypy (which runs

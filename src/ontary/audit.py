@@ -58,8 +58,8 @@ class AuditEntry(BaseModel):
     """A single append-only audit log entry."""
 
     # Runtime-bound action/function callers pass their shared clock explicitly;
-    # this default preserves the standalone `AuditEntry` behavior for store and
-    # migration callers that have no runtime seam.
+    # this default preserves the standalone `AuditEntry` behavior for store
+    # callers that have no runtime seam.
     ts: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     # What produced this entry. Actions and functions share one log -- that is
     # the point of an audit log -- but a reader has to be able to tell them
@@ -71,13 +71,7 @@ class AuditEntry(BaseModel):
     # audited was, in fact, an action -- unlike `invocation_id`, backfilling
     # this one asserts something true, so the column is NOT NULL with a
     # constant default.
-    kind: Literal["action", "function", "migration"] = "action"
-    # `migration` (M9a): a row rewrite or an accepted ontology drift -- written
-    # by the engine's own migration machinery, with no consumer and no governed
-    # action behind it. It gets its own kind rather than being filed as an
-    # `action` because the period when the data stopped matching the
-    # declarations is exactly the period an auditor most needs to find, and a
-    # migration indistinguishable from ordinary writes hides it.
+    kind: Literal["action", "function"] = "action"
     # One id per `execute()` call, stamped on EVERY entry that call writes.
     # Without it, entries from one call are matched by field values and append
     # order, so a caller that re-enters the SAME action with the SAME params

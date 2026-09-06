@@ -26,7 +26,6 @@ _EXPECTED_POSTGRES_DDL = (
     "    source_id TEXT NULL,\n"
     "    extracted_at TEXT NULL,\n"
     "    page_token TEXT NOT NULL,\n"
-    "    type_version INTEGER NOT NULL DEFAULT 1,\n"
     "    tenant TEXT NOT NULL DEFAULT 'default'\n"
     ");\n"
     "\n"
@@ -57,15 +56,6 @@ _EXPECTED_POSTGRES_DDL = (
     "    principal TEXT NULL\n"
     ");\n"
     "\n"
-    "CREATE TABLE IF NOT EXISTS ontology_fingerprint (\n"
-    "    id INTEGER PRIMARY KEY,\n"
-    "    digest TEXT NOT NULL,\n"
-    "    types TEXT NOT NULL,\n"
-    "    first_seen TEXT NOT NULL,\n"
-    "    adopted INTEGER NOT NULL DEFAULT 0,\n"
-    "    versions TEXT NOT NULL DEFAULT '{}'\n"
-    ");\n"
-    "\n"
     "CREATE INDEX IF NOT EXISTS idx_objects_type_id\n"
     "    ON objects (tenant, object_type, id);\n"
     "CREATE INDEX IF NOT EXISTS idx_objects_type_rowid\n"
@@ -83,7 +73,6 @@ def test_both_dialects_render_from_the_shared_table_specs() -> None:
         "objects",
         "links",
         "audit_log",
-        "ontology_fingerprint",
     }
 
 
@@ -126,10 +115,6 @@ _EXPECTED_SQLITE_DDL = (
     "    source_id TEXT NULL,\n"
     "    extracted_at TEXT NULL,\n"
     "    page_token TEXT NOT NULL,\n"
-    "    -- Which version of the declared type this row's payload was written\n"
-    "    -- under (M9b). Read by `ontary.upcast.upcast_payload` on every read;\n"
-    "    -- written from the declaration on every insert/update.\n"
-    "    type_version INTEGER NOT NULL DEFAULT 1,\n"
     "    -- Which tenant owns this row (M8b). NOT NULL with a default so the\n"
     "    -- single-tenant case needs no ceremony and a migrated row is never\n"
     "    -- ownerless: a NULL tenant would read as \"belongs to everybody\",\n"
@@ -205,21 +190,6 @@ _EXPECTED_SQLITE_DDL = (
     "-- rather than silently letting two rows share a cursor).\n"
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_objects_page_token\n"
     "    ON objects (page_token);\n"
-    "\n"
-    "-- Which ontology definition this store's rows were written under\n"
-    "-- (spec `ontology-evolution` AC2). One row, ever: `id = 1`.\n"
-    "-- Before this table, nothing recorded the SHAPE a row was written\n"
-    "-- under, so no reader could tell \"this row predates the change\"\n"
-    "-- from \"this row is wrong\" -- which is the only distinction that\n"
-    "-- makes a migration possible.\n"
-    "CREATE TABLE IF NOT EXISTS ontology_fingerprint (\n"
-    "    id INTEGER PRIMARY KEY CHECK (id = 1),\n"
-    "    digest TEXT NOT NULL,\n"
-    "    types TEXT NOT NULL,\n"
-    "    first_seen TEXT NOT NULL,\n"
-    "    adopted INTEGER NOT NULL DEFAULT 0,\n"
-    "    versions TEXT NOT NULL DEFAULT '{}'\n"
-    ");\n"
 )
 
 

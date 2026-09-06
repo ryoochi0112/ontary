@@ -20,7 +20,7 @@ def _ontology_with_two_independent_defects() -> Ontology:
     @ontology.object(
         layer="L0",
         api_name="Widget",
-        version=2,
+        owned={"missing": "x"},
         scope=[SelfScope(level="org")],
     )
     class Widget(OntologyObject):
@@ -47,7 +47,10 @@ def test_diagnose_reports_independent_defects_in_one_sweep() -> None:
     assert all(finding.severity == "error" for finding in findings)
     assert all(finding.code == "ONTOLOGY_INVALID" for finding in findings)
     messages = {finding.message for finding in findings}
-    assert any("no upcaster from version(s) [1]" in message for message in messages)
+    assert any(
+        "owned property 'missing' is not one of this type's properties" in message
+        for message in messages
+    )
     assert any("dangling target_type 'MissingType'" in message for message in messages)
 
 
@@ -89,7 +92,7 @@ def test_findings_round_trip_through_json_model_dump() -> None:
 def test_validate_keeps_the_existing_exception_and_message() -> None:
     ontology = Ontology("validate", scope_levels=["org"])
 
-    @ontology.object(layer="L0", api_name="Widget", version=2)
+    @ontology.object(layer="L0", api_name="Widget", owned={"missing": "x"})
     class Widget(OntologyObject):
         id: str = prop(primary_key=True)
 
@@ -98,10 +101,8 @@ def test_validate_keeps_the_existing_exception_and_message() -> None:
 
     assert exc_info.value.code == "ONTOLOGY_INVALID"
     assert str(exc_info.value) == (
-        "ObjectTypeDef 'Widget' is declared version 2 but has no upcaster "
-        "from version(s) [1] -- a row stored at any of those versions could "
-        "not be read. Declare one upcaster per step, or migrate the rows and "
-        "drop the version bump"
+        "ObjectTypeDef 'Widget': owned property 'missing' is not one of "
+        "this type's properties"
     )
 
 

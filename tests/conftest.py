@@ -221,7 +221,6 @@ def make_store() -> StoreFactory:
         *,
         dsn: str | None = None,
         backend: Literal["sqlite", "postgres"] = "sqlite",
-        accept_ontology_drift: bool = False,
         tenant: str = DEFAULT_TENANT,
         busy_timeout: float = 5.0,
         rls: bool = True,
@@ -233,14 +232,12 @@ def make_store() -> StoreFactory:
             return PostgresStore(
                 registry,
                 store_path,
-                accept_ontology_drift=accept_ontology_drift,
                 tenant=tenant,
                 rls=rls,
             )
         return ObjectStore(
             registry,
             store_path,
-            accept_ontology_drift=accept_ontology_drift,
             tenant=tenant,
             busy_timeout=busy_timeout,
         )

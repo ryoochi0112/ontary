@@ -63,24 +63,6 @@ class Declarations(BaseModel):
     transaction_ownership: str = (
         "runtime-owned — refuses caller-opened transactions"
     )
-    ontology_evolution: str = (
-        "fingerprinted; a store refuses to open under a declaration it was not "
-        "written under (ONTOLOGY_DRIFT) unless the change is a declared type "
-        "version bump whose upcaster chain covers the stored version, or the "
-        "drift is explicitly accepted -- both audited; an older row is upcast "
-        "lazily at the store read boundary, so every surface sees one shape, and "
-        "upcast_object_type rewrites it permanently; documentation-only fields "
-        "are excluded from the fingerprint"
-    )
-    """Added by M9a, rewritten by M9b when versioned changes stopped needing an
-    acknowledgement. Its counterpart in `docs/compatibility.md` is the procedure;
-    this is the runtime-readable claim, so a consumer can ask the engine rather
-    than trust a document -- which is the whole point of `Declarations`.
-
-    "never upcast on read" was true for one milestone and is now false, which is
-    exactly the kind of sentence `docs/compatibility.md` calls a breaking change
-    even when no signature moved."""
-
     idempotency: str = "none — retries are distinct audited attempts"
     audit_scope: str = (
         "tenant-scoped administrative view; actions always audited, functions "

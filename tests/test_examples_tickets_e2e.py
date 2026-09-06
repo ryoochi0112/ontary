@@ -43,12 +43,7 @@ from examples.tickets.ontology import (
 )
 from examples.tickets.run_mcp import build_multi_consumer_server
 from ontary import (
-    ActionContext,
     ActionError,
-    ActionParams,
-    BoundQuery,
-    Cardinality,
-    DirectProperty,
     Finding,
     ObjectStore,
     OntaryError,
@@ -57,14 +52,11 @@ from ontary import (
     Page,
     PermissionDenied,
     PreconditionFailed,
-    SelfScope,
     Sensitivity,
     Source,
     TypedPage,
     ValidationFailed,
-    ViaLink,
     prop,
-    target,
 )
 from ontary.client import OntologyClient
 from ontary.connect import oid, run_pipeline
@@ -137,103 +129,6 @@ _RAW_CLOSED = {
 }
 
 
-def _build_pre_t1_ontology() -> Ontology:
-    """Reproduce the declarations that stamped stores before Ticket v2."""
-    ontology = Ontology(name="tickets", scope_levels=["queue", "org"], min_n=2)
-
-    @ontology.object(layer="L0", scope=[SelfScope(level="org")])
-    class Org(OntologyObject):
-        id: str = prop(primary_key=True)
-        name: str
-
-    @ontology.object(
-        layer="L0",
-        scope=[
-            SelfScope(level="queue"),
-            ViaLink(link_api_name="queueOfOrg", direction="from", parent_type="Org"),
-        ],
-    )
-    class Queue(OntologyObject):
-        id: str = prop(primary_key=True)
-        name: str
-
-    @ontology.object(layer="L0", scope="unscoped")
-    class Agent(OntologyObject):
-        id: str = prop(primary_key=True)
-        display_name: str
-        email: str | None = prop(
-            default=None,
-            sensitivity=Sensitivity(human_visible=False),
-        )
-
-    @ontology.object(
-        layer="L0",
-        owned={"escalated": False},
-        scope=[
-            DirectProperty(level="queue", property_name="queue_id"),
-            ViaLink(link_api_name="ticketInQueue", direction="from", parent_type="Queue"),
-        ],
-    )
-    class Ticket(OntologyObject):
-        id: str = prop(primary_key=True)
-        subject: str
-        age_hours: float
-        status: str | None = None
-        queue_id: str | None = prop(default=None, scope_level="queue")
-        escalated: bool | None = prop(default=None)
-
-    @ontology.object(
-        layer="L0",
-        scope=[ViaLink(link_api_name="commentOnTicket", direction="from", parent_type="Ticket")],
-    )
-    class Comment(OntologyObject):
-        id: str = prop(primary_key=True)
-        text: str
-
-    ontology.link("queueOfOrg", Queue, Org, Cardinality.MANY_TO_ONE)
-    ontology.link("ticketInQueue", Ticket, Queue, Cardinality.MANY_TO_ONE)
-    ontology.link("commentOnTicket", Comment, Ticket, Cardinality.MANY_TO_ONE)
-    ontology.link(
-        "commentByAgent",
-        Comment,
-        Agent,
-        Cardinality.MANY_TO_ONE,
-        identity_revealing=True,
-    )
-
-    class EscalateTicketParams(ActionParams):
-        ticket_id: str = target(Ticket)
-        reason: str | None = None
-
-    @ontology.action(
-        EscalateTicketParams,
-        target=Ticket,
-        roles=["Agent", "Manager"],
-        display_name="Escalate Ticket",
-        description="Escalates a Ticket as urgent.",
-        api_name="EscalateTicket",
-    )
-    def _escalate_ticket(ctx: ActionContext, params: EscalateTicketParams) -> dict[str, str]:
-        if ctx.read_current("Ticket", params.ticket_id) is None:
-            raise ActionError("no such ticket", code="PRECONDITION_FAILED")
-        ctx.update("Ticket", params.ticket_id, {"escalated": True})
-        return {"ticket_id": params.ticket_id}
-
-    @ontology.function(
-        description="Mean ticket age (hours) for a queue.",
-        input_description="A queue_id.",
-        output_description="A mean age_hours value.",
-        api_name="ticketStats",
-    )
-    def _ticket_stats(query: BoundQuery, params: dict[str, Any]) -> float:
-        value = query.aggregate("Ticket", "age_hours", where={"queue_id": params["queue_id"]})
-        assert isinstance(value, float)
-        return value
-
-    ontology.validate()
-    return ontology
-
-
 def test_ingest_escalate_reingest_survives_via_governed_path() -> None:
     ontology, store = build_ontology()
     connector = TicketsCSVLikeSource(extracted_at=datetime(2026, 7, 23, tzinfo=timezone.utc))
@@ -293,27 +188,6 @@ def test_ingest_escalate_reingest_survives_via_governed_path() -> None:
     assert final_ticket is not None
     assert final_ticket.payload["status"] == "closed"
     assert final_ticket.payload["escalated"] is True
-
-
-def test_pre_t1_store_opens_silently_and_upcasts_ticket_v1(tmp_path: Path) -> None:
-    store_path = tmp_path / "pre-t1.sqlite"
-    old_ontology = _build_pre_t1_ontology()
-    old_store = ObjectStore(old_ontology.registry, store_path)
-    ticket_id = old_store.insert(
-        "Ticket",
-        {"subject": "Legacy email", "age_hours": 2.0, "status": "open"},
-        Source(source_system="pre-t1"),
-    )
-    old_row = old_store.read_current("Ticket", ticket_id)
-    assert old_row is not None
-    assert "channel" not in old_row.payload
-    del old_store
-
-    ontology, _ = build_ontology()
-    reopened = ObjectStore(ontology.registry, store_path)
-    upgraded = reopened.read_current("Ticket", ticket_id)
-    assert upgraded is not None
-    assert upgraded.payload["channel"] == "email"
 
 
 def test_tickets_store_isolates_both_tenants_on_one_file(tmp_path: Path) -> None:

@@ -10,7 +10,7 @@ any one domain.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from enum import Enum
 from typing import Any, Literal
 
@@ -111,16 +111,6 @@ class ObjectTypeDef(BaseModel):
     # Undeclared == source-backed, matching the reference pattern.
     owned: bool | dict[str, Any] = False
 
-    version: int = Field(default=1, ge=1)
-    """The declared shape's version (M9b). Bumping it is how an author says "this
-    type changed on purpose", which is what lets the drift check distinguish a
-    deliberate evolution from an accidental one: a changed declaration WITHOUT a
-    bump is still refused, and a bump with an upcaster chain covering the stored
-    versions opens without an acknowledgement.
-
-    Part of the fingerprint, necessarily -- a version bump that did not move the
-    digest would be a version nobody could detect."""
-
     @model_validator(mode="after")
     def _primary_key_exists(self) -> "ObjectTypeDef":
         names = {p.name for p in self.properties}
@@ -202,15 +192,6 @@ def declared_shape_violation(
         if mismatch is not None:
             return f"property {key!r} {mismatch}"
     return None
-
-
-Upcaster = Callable[[dict[str, Any]], dict[str, Any]]
-"""Reads one stored payload at version N and returns it at version N+1.
-
-Author code, unsandboxed, like every other extension point here. It receives a
-COPY of the stored payload, so mutating the argument is harmless; the return value
-is what the engine uses.
-"""
 
 
 class LinkTypeDef(BaseModel):
@@ -328,11 +309,6 @@ class OntologyRegistry:
         self._action_types: dict[str, ActionTypeDef] = {}
         self._functions: dict[str, FunctionDef] = {}
         self._capabilities: dict[str, CapabilityDef] = {}
-        # (object api_name, from_version) -> upcaster. Keyed by the version the
-        # function reads FROM, because that is what a stored row carries: given
-        # `type_version = 1`, the engine needs "the function that turns a v1
-        # payload into a v2 one" without searching.
-        self._upcasters: dict[tuple[str, int], Upcaster] = {}
 
     def register_object_type(self, obj: ObjectTypeDef) -> None:
         if obj.api_name in self._object_types:
@@ -394,40 +370,6 @@ class OntologyRegistry:
     def capabilities(self) -> dict[str, CapabilityDef]:
         return dict(self._capabilities)
 
-    def register_upcaster(
-        self, api_name: str, from_version: int, fn: "Upcaster"
-    ) -> None:
-        """Register the function that reads a `from_version` payload of
-        `api_name` and returns a `from_version + 1` one (M9b).
-
-        One step per registration, never a jump: an author who moved a type from
-        v1 to v3 declares two functions. That is deliberate -- a chain of small
-        steps can be applied to a row at ANY stored version, whereas a single
-        v1->v3 function is useless to the row that happens to be at v2, and
-        nothing would have told the author until that row was read.
-        """
-        if from_version < 1:
-            raise ValidationFailed(
-                f"upcaster for {api_name!r}: from_version must be >= 1, "
-                f"got {from_version}",
-                code="ONTOLOGY_INVALID",
-            )
-        key = (api_name, from_version)
-        if key in self._upcasters:
-            raise ValidationFailed(
-                f"duplicate upcaster for object type {api_name!r} "
-                f"from version {from_version}",
-                code="ONTOLOGY_INVALID",
-            )
-        self._upcasters[key] = fn
-
-    def upcaster(self, api_name: str, from_version: int) -> "Upcaster | None":
-        return self._upcasters.get((api_name, from_version))
-
-    @property
-    def upcasters(self) -> dict[tuple[str, int], "Upcaster"]:
-        return dict(self._upcasters)
-
     def get_object_type(self, api_name: str) -> ObjectTypeDef:
         try:
             return self._object_types[api_name]
@@ -476,60 +418,21 @@ class OntologyRegistry:
     def validate(self) -> None:
         """Raise a validation-kind error on dangling references.
 
-        Five sequential error-collecting passes (split into one method each;
+        Four sequential error-collecting passes (split into one method each;
         pass order -- and therefore message order in the joined error -- is
         part of the observable behavior and unchanged):
-        - upcaster chains are complete and never point past the declared version
         - owned property defaults exist, are not the pk, and match the type
         - LinkTypeDef.from_type / to_type reference registered object types
         - ActionTypeDef target/capability/parameter references resolve
         - FunctionDef capabilities reference registered capability declarations
         """
         errors: list[str] = []
-        self._validate_upcasters(errors)
         self._validate_owned_property_defaults(errors)
         self._validate_link_references(errors)
         self._validate_action_references(errors)
         self._validate_function_references(errors)
         if errors:
             raise ValidationFailed("; ".join(errors), code="ONTOLOGY_INVALID")
-
-    def _validate_upcasters(self, errors: list[str]) -> None:
-        """Upcaster chains must be COMPLETE and must not point past the
-        declared version (M9b). A gap is the defect that only shows up when
-        the one row still at the missing version is read -- possibly months
-        later, in production, on the read path -- so it is refused at
-        declaration time instead."""
-        for (api_name, from_version) in sorted(self._upcasters):
-            obj = self._object_types.get(api_name)
-            if obj is None:
-                errors.append(
-                    f"upcaster for unregistered object type {api_name!r} "
-                    f"(from version {from_version})"
-                )
-                continue
-            if from_version >= obj.version:
-                errors.append(
-                    f"upcaster for {api_name!r} reads from version "
-                    f"{from_version}, which is not older than the declared "
-                    f"version {obj.version} -- it could never apply to a "
-                    "stored row"
-                )
-        for obj in self._object_types.values():
-            if obj.version > 1:
-                missing = [
-                    v
-                    for v in range(1, obj.version)
-                    if (obj.api_name, v) not in self._upcasters
-                ]
-                if missing:
-                    errors.append(
-                        f"ObjectTypeDef {obj.api_name!r} is declared version "
-                        f"{obj.version} but has no upcaster from version(s) "
-                        f"{missing} -- a row stored at any of those versions "
-                        "could not be read. Declare one upcaster per step, or "
-                        "migrate the rows and drop the version bump"
-                    )
 
     def _validate_owned_property_defaults(self, errors: list[str]) -> None:
         for obj in self._object_types.values():

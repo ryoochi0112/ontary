@@ -152,68 +152,6 @@ def _linked_source_type(definition: "OntologyDef", object_type: str) -> str:
     return "source"
 
 
-def _registry_upcaster_findings(
-    definition: "OntologyDef"
-) -> tuple[Finding, ...]:
-    registry = definition.registry
-    object_types = registry.object_types
-    findings: list[Finding] = []
-
-    for (api_name, from_version) in sorted(registry.upcasters):
-        obj = object_types.get(api_name)
-        location = f"OntologyRegistry.upcasters[{api_name!r}, {from_version}]"
-        if obj is None:
-            findings.append(
-                _error(
-                    "ONTOLOGY_INVALID",
-                    location,
-                    f"upcaster for unregistered object type {api_name!r} "
-                    f"(from version {from_version})",
-                    "Register the object type before declaring its upcaster, "
-                    "or remove the orphaned upcaster.",
-                )
-            )
-            continue
-        if from_version >= obj.version:
-            findings.append(
-                _error(
-                    "ONTOLOGY_INVALID",
-                    location,
-                    f"upcaster for {api_name!r} reads from version "
-                    f"{from_version}, which is not older than the declared "
-                    f"version {obj.version} -- it could never apply to a "
-                    "stored row",
-                    "Declare the step from an older stored version, or remove "
-                    "this upcaster.",
-                )
-            )
-
-    for api_name in sorted(object_types):
-        obj = object_types[api_name]
-        if obj.version <= 1:
-            continue
-        missing = [
-            version
-            for version in range(1, obj.version)
-            if (api_name, version) not in registry.upcasters
-        ]
-        if missing:
-            findings.append(
-                _error(
-                    "ONTOLOGY_INVALID",
-                    f"ObjectTypeDef[{api_name!r}].version",
-                    f"ObjectTypeDef {api_name!r} is declared version "
-                    f"{obj.version} but has no upcaster from version(s) "
-                    f"{missing} -- a row stored at any of those versions "
-                    "could not be read. Declare one upcaster per step, or "
-                    "migrate the rows and drop the version bump",
-                    "Declare one upcaster for every missing version step, or "
-                    "migrate those rows and remove the version bump.",
-                )
-            )
-    return tuple(findings)
-
-
 def _registry_owned_default_findings(
     definition: "OntologyDef"
 ) -> tuple[Finding, ...]:
@@ -688,7 +626,7 @@ def _forbidden_type_name_findings(
                 f"object {api_name}",
                 "object type name looks like a version, history, or snapshot "
                 "clone",
-                "Keep one object type and use versioning/upcasters; declare a "
+                "Keep one object type and let row history carry the past; declare a "
                 "snapshot explicitly when a point-in-time value is first-class.",
             )
         )
@@ -788,7 +726,6 @@ def _min_n_unset_findings(
 
 
 RULES: tuple[DiagnosticRule, ...] = (
-    _registry_upcaster_findings,
     _registry_owned_default_findings,
     _registry_link_findings,
     _registry_action_findings,

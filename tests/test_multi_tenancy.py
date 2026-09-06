@@ -439,8 +439,8 @@ def test_a_write_cannot_forge_another_tenants_row(
                 with store._conn.cursor() as cur:
                     cur.execute(
                         "INSERT INTO objects (object_type, id, payload, valid_from, "
-                        "source_system, page_token, type_version, tenant) "
-                        "VALUES ('W', 'forged', '{}', 'now', 's', 'tok', 1, 'globex')"
+                        "source_system, page_token, tenant) "
+                        "VALUES ('W', 'forged', '{}', 'now', 's', 'tok', 'globex')"
                     )
             store._conn.rollback()
         finally:

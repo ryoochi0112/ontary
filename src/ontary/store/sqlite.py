@@ -27,7 +27,6 @@ from ontary.audit import (
     WriteRecord,
 )
 from ontary.errors import ConflictError
-from ontary.fingerprint import OntologyFingerprint
 from ontary.meta import Cardinality, OntologyRegistry
 from ontary.store import _sql
 from ontary.store._shared import (
@@ -47,7 +46,6 @@ from ontary.store._shared import (
     unknown_page_token,
 )
 from ontary.store.migration import SqliteSchemaMigrator
-from ontary.store.protocol import check_ontology_fingerprint
 from ontary.store.values import (
     DEFAULT_BATCH,
     DEFAULT_TENANT,
@@ -57,7 +55,6 @@ from ontary.store.values import (
     StoredObject,
     _utcnow_iso,
 )
-from ontary.upcast import upcast_payload
 
 
 def _is_busy_error(exc: sqlite3.OperationalError) -> bool:
@@ -88,31 +85,15 @@ class ObjectStore(SqliteSchemaMigrator):
         registry: OntologyRegistry,
         path: str = ":memory:",
         *,
-        accept_ontology_drift: bool = False,
         tenant: str = DEFAULT_TENANT,
         busy_timeout: float = 5.0,
     ) -> None:
-        """`accept_ontology_drift=True` opens a store whose recorded ontology
-        fingerprint does not match `registry`, re-stamps it, and appends an
-        audit entry recording the change (spec AC5).
-
-        A call-site argument on purpose -- not an environment variable, not a
-        config key. Someone taking this risk names it where the store is opened,
-        and the audit log records that they did. It is also the honest escape
-        hatch for a legitimate case: an additive change to a type whose existing
-        rows genuinely satisfy the new shape needs no migration, only an
-        acknowledgement.
-
-        `tenant` scopes EVERY read and write this store performs (M8b). Two
+        """`tenant` scopes EVERY read and write this store performs (M8b). Two
         stores on the same file with different tenants cannot see each other's
         objects, links, or audit entries. It is a constructor
         argument rather than a per-call one on purpose: a tenant passed per call
         is a tenant somebody eventually forgets to pass, and the failure mode of
         that mistake is a cross-tenant read.
-
-        Note what this is NOT: the ontology fingerprint stays per STORE, not per
-        tenant, because one process serves one declaration. Per-tenant migration
-        timing would need its own design.
 
         `busy_timeout` is the number of seconds SQLite waits for a locked table
         before refusing the operation. The default matches `sqlite3.connect`.
@@ -126,7 +107,6 @@ class ObjectStore(SqliteSchemaMigrator):
         self._txn_depth = 0
         self._write_capture = WriteCapture()
         self._init_schema()
-        check_ontology_fingerprint(self, registry, accept_drift=accept_ontology_drift)
 
     @contextmanager
     def transaction(self) -> Iterator[sqlite3.Connection]:
@@ -223,7 +203,7 @@ class ObjectStore(SqliteSchemaMigrator):
         prepared = prepare_insert(
             self._registry, obj_type, payload, capturing=self._write_capture.active
         )
-        obj_def, payload, obj_id = prepared.obj_def, prepared.payload, prepared.obj_id_raw
+        payload, obj_id = prepared.payload, prepared.obj_id_raw
 
         now = _utcnow_iso()
         with self.transaction() as conn:
@@ -232,8 +212,8 @@ class ObjectStore(SqliteSchemaMigrator):
                 INSERT INTO objects
                     (object_type, id, payload, valid_from, valid_to,
                      source_system, source_id, extracted_at, page_token,
-                     type_version, tenant)
-                VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)
+                     tenant)
+                VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)
                 """,
                 (
                     obj_type,
@@ -244,7 +224,6 @@ class ObjectStore(SqliteSchemaMigrator):
                     source.source_id,
                     source.extracted_at,
                     uuid.uuid4().hex,
-                    obj_def.version,
                     self._tenant,
                 ),
             )
@@ -282,8 +261,8 @@ class ObjectStore(SqliteSchemaMigrator):
                 INSERT INTO objects
                     (object_type, id, payload, valid_from, valid_to,
                      source_system, source_id, extracted_at, page_token,
-                     type_version, tenant)
-                VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)
+                     tenant)
+                VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)
                 """,
                 (
                     obj_type,
@@ -294,11 +273,6 @@ class ObjectStore(SqliteSchemaMigrator):
                     source.source_id,
                     source.extracted_at,
                     uuid.uuid4().hex,
-                    # A write always lands at the CURRENT declared version --
-                    # `update` merges a current-shape change over an
-                    # already-upcast payload (see `_row_to_stored`), so the
-                    # result is current by construction.
-                    obj_def.version,
                     self._tenant,
                 ),
             )
@@ -358,17 +332,6 @@ class ObjectStore(SqliteSchemaMigrator):
 
     def _row_to_stored(self, row: sqlite3.Row) -> StoredObject:
         payload: dict[str, Any] = json.loads(row["payload"])
-        # THE read boundary (M9b). Every path above this -- typed client, string
-        # and MCP surfaces, guarded query, aggregates, scope resolution -- goes
-        # through `_row_to_stored`, so upcasting here is what makes "one row, one
-        # reality" true for all of them at once.
-        payload = upcast_payload(
-            self._registry,
-            row["object_type"],
-            payload,
-            row["type_version"],
-            object_id=str(row["id"]),
-        )
         return StoredObject(
             payload=payload,
             lineage=Lineage(
@@ -653,44 +616,6 @@ class ObjectStore(SqliteSchemaMigrator):
                 ),
                 dialect="sqlite",
             )
-
-    # -- ontology fingerprint --------------------------------------------
-
-    def read_ontology_fingerprint(self) -> OntologyFingerprint | None:
-        rows = _sql.execute(
-            self._conn,
-            _sql.render(_sql.ONTOLOGY_FINGERPRINT_SELECT_TEMPLATE, "sqlite"),
-            dialect="sqlite",
-        ).rows
-        row = rows[0] if rows else None
-        if row is None:
-            return None
-        return OntologyFingerprint(
-            digest=row["digest"],
-            types=json.loads(row["types"]),
-            versions=json.loads(row["versions"]),
-        )
-
-    def write_ontology_fingerprint(
-        self, fingerprint: OntologyFingerprint, *, adopted: bool
-    ) -> None:
-        with self.transaction() as conn:
-            _sql.execute(
-                conn,
-                _sql.render(_sql.ONTOLOGY_FINGERPRINT_UPSERT_TEMPLATE, "sqlite"),
-                (
-                    fingerprint.digest,
-                    json.dumps(fingerprint.types, sort_keys=True),
-                    _utcnow_iso(),
-                    int(adopted),
-                    json.dumps(fingerprint.versions, sort_keys=True),
-                ),
-                dialect="sqlite",
-            )
-        # `first_seen` is NOT updated by the upsert above: it records when this
-        # store first had a fingerprint at all, which stays true across a later
-        # re-stamp. An accepted drift changes the shape of record, not the date
-        # the store started keeping one.
 
     def audit_entries(self) -> list[AuditEntry]:
         cur = self._conn.execute(

@@ -8,7 +8,7 @@ for all of them. The pieces now live in:
 - `ontary.store.errors` -- the store exception types
 - `ontary.store.values` -- `Source`/`Lineage`/`StoredObject`/`PagedRow`,
   `DEFAULT_TENANT`/`DEFAULT_BATCH`
-- `ontary.store.protocol` -- the `Store` protocol + fingerprint gates
+- `ontary.store.protocol` -- the `Store` protocol
 - `ontary.store.schema` -- `SCHEMA_VERSION` and the SQLite DDL
 - `ontary.store.migration` -- the SQLite schema-migration engine
 - `ontary.store.sqlite` -- the SQLite `ObjectStore` backend
@@ -29,12 +29,6 @@ from ontary.audit import WriteRecord as WriteRecord
 from ontary.store.inmemory import InMemoryStore as InMemoryStore
 from ontary.store.postgres import PostgresStore as PostgresStore
 from ontary.store.protocol import Store as Store
-from ontary.store.protocol import (
-    accept_ontology_fingerprint as accept_ontology_fingerprint,
-)
-from ontary.store.protocol import (
-    check_ontology_fingerprint as check_ontology_fingerprint,
-)
 from ontary.store.schema import SCHEMA_VERSION as SCHEMA_VERSION
 from ontary.store.sqlite import ObjectStore as ObjectStore
 from ontary.store.values import DEFAULT_BATCH as DEFAULT_BATCH

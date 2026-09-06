@@ -26,6 +26,7 @@ under `### Removed`; the next release (0.11.0) is the first to ship without them
 - ontary.explain (DecisionTrace, explain_read, explain_list, explain_scan) and the `ontary explain` CLI.
 - ontary.erase, Store.erase_object_content, Store.object_erasure_state, EraseResult, the `ontary erase` CLI, and codes OBJECT_ERASURE_NOT_FOUND, OBJECT_ALREADY_ERASED.
 - Effects and the durable outbox: EffectDispatcher, EffectHandle, EffectMeta, EffectPayload, OutboxRecord, RetryPolicy, DrainReport, Ontology.effect, Ontology.action(effects=), ActionContext.emit, OntologyRuntime.drain_effects, OntologyClient.drain_effects, OntologyClient.outbox, ontary.testing.capture_effects, AuditEntry.effects, the effect_outbox table, and codes EFFECT_NOT_DISPATCHABLE, UNDECLARED_EFFECT, EFFECT_NOT_SERIALIZABLE.
+- Ontology fingerprints and drift detection (ontary.fingerprint, Store.read/write_ontology_fingerprint, accept_ontology_drift=, code ONTOLOGY_DRIFT); declared type versions and upcasters (Ontology.object(version=), Ontology.upcaster, ontary.upcast, code UPCAST_FAILED); ontary.migrate (migrate_object_type, upcast_object_type).
 
 ### Changed
 
