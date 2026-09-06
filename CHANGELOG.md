@@ -32,6 +32,9 @@ you**.
   are published, and a cache shared with PR runs is a poisoning surface.
 - `renovate.json` removed. The Renovate app had never been installed on the
   repository, so the config was inert; Dependabot replaces it.
+- The ruff rule set is declared explicitly (`select = ["E4", "E7", "E9", "F", "I",
+  "B", "C901"]`) instead of extending the implicit default. ruff 0.16.0 widened
+  the defaults from 59 to 413 rules; the explicit list keeps the pre-0.16 gate.
 
 ## [0.11.0] — 2026-09-06
 
