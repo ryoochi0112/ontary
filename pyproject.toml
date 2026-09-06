@@ -1,0 +1,117 @@
+[project]
+name = "ontary"
+version = "0.7.0"
+description = "Domain-agnostic ontology SDK — declare a Foundry-style ontology (typed objects, links, actions, functions) and get a governed runtime"
+readme = "README.md"
+requires-python = ">=3.12"
+keywords = ["ontology", "governance", "audit", "mcp", "pydantic", "sdk"]
+# MIT, decided 2026-07-26. Copyright Atrae, Inc. -- authored as employee work,
+# so the company holds it, not the individual author.
+#
+# The `Private :: Do Not Upload` classifier that used to sit in the list below
+# is GONE, and its removal is the substance of this change: the wheel is now
+# publishable. Nothing publishes it yet (no release workflow, no index named),
+# but the interlock existed only because the redistribution terms were
+# undecided, and keeping a tripwire past the decision it was waiting on just
+# trains people to route around tripwires.
+license = "MIT"
+license-files = ["LICENSE"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Application Frameworks",
+    "Typing :: Typed",
+]
+dependencies = [
+    "pydantic>=2.7",
+]
+
+[project.urls]
+Repository = "https://github.com/ryoochi0112/ontary"
+Changelog = "https://github.com/ryoochi0112/ontary/blob/main/CHANGELOG.md"
+Documentation = "https://github.com/ryoochi0112/ontary/blob/main/docs/api-reference.md"
+Compatibility = "https://github.com/ryoochi0112/ontary/blob/main/docs/compatibility.md"
+License = "https://github.com/ryoochi0112/ontary/blob/main/LICENSE"
+
+[project.optional-dependencies]
+mcp = [
+    # Empirically established floor -- not a guess, and not just the
+    # installed 1.28.1 pinned blindly. `FastMCP(stateless_http=)` and
+    # `FastMCP(token_verifier=)` land by 1.13.0, but `AccessToken.subject`
+    # (read at the principal-stamping line in mcp_server.py) has no
+    # `subject` field through 1.27.1 -- pydantic silently drops the
+    # unknown `subject=` kwarg at construction, and reading `.subject`
+    # back raises `AttributeError` -- first fixed at 1.27.2. Confirmed by
+    # installing each candidate `mcp` release into an isolated venv and
+    # running `tests/test_mcp_multi_consumer.py`'s full suite against it:
+    # 6 tests fail on 1.27.1; the whole suite passes on 1.27.2.
+    # The <2 ceiling protects the `mcp.server.fastmcp` and auth-module
+    # layouts imported lazily by mcp_server.py; 2.x does not preserve that
+    # integration surface.
+    "mcp>=1.27.2,<2",
+]
+dlt = [
+    "dlt>=1.0,<2.0",
+    "duckdb>=1.0,<2.0",
+]
+postgres = [
+    # psycopg 3. `[binary]` so an adopter does not need libpq headers to install
+    # it; a deployment that prefers the system libpq can depend on plain
+    # `psycopg` instead.
+    "psycopg[binary]>=3.1,<4",
+]
+bq = [
+    "ontary[dlt]",
+    "dlt[bigquery]>=1.0,<2.0",
+]
+dev = [
+    "pytest>=8",
+    "ruff>=0.5",
+    "mypy>=1.10",
+    "ontary[mcp]",
+    "ontary[dlt]",
+    "ontary[bq]",
+    "ontary[postgres]",
+]
+
+[project.scripts]
+ontary = "ontary.cli:main"
+ontary-mcp = "ontary.mcp_server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ontary"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+extend-select = ["I", "B", "C901"]
+
+[tool.ruff.lint.mccabe]
+# Ceiling set post-refactor (the former hotspots are decomposed).
+max-complexity = 16
+
+[tool.ruff.lint.per-file-ignores]
+# B017: blind `pytest.raises(Exception)` is deliberate where only "it refuses"
+# is the contract; B018: bare `ontology.definition` triggers the freeze side
+# effect on purpose.
+"tests/*" = ["B017", "B018"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+mypy_path = "src"
+# The Makefile's `make typecheck` passes explicit paths (src, examples, and
+# tests/test_typing_surface.py); `packages` covers plain `uv run mypy` too.
+packages = ["ontary"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src", "."]
