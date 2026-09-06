@@ -52,7 +52,7 @@ jobs:
           ONTARY_TEST_POSTGRES_DSN: postgresql://postgres:postgres@localhost:5432/postgres
         run: |
           uv run pytest tests/test_store_conformance.py tests/test_store_postgres.py \
-            tests/test_multi_tenancy.py tests/test_erase.py tests/test_actions.py \
+            tests/test_multi_tenancy.py tests/test_actions.py \
             tests/test_examples_tickets_e2e.py -q
 
   # The check that had never existed (M6 step 3). `verify` above runs from the

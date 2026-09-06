@@ -45,6 +45,20 @@ def test_older_stamp_is_refused(
     assert exc.value.code == "STORE_VERSION_UNSUPPORTED"
 
 
+def test_newer_stamp_is_refused(
+    tmp_path: Path, make_registry: RegistryFactory
+) -> None:
+    path = tmp_path / "new.sqlite"
+    conn = sqlite3.connect(path)
+    conn.execute("CREATE TABLE objects (id TEXT)")
+    conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION + 1}")
+    conn.commit()
+    conn.close()
+    with pytest.raises(ConflictError) as exc:
+        ObjectStore(make_registry("T"), str(path))
+    assert exc.value.code == "STORE_VERSION_UNSUPPORTED"
+
+
 def test_unstamped_file_with_tables_is_refused(
     tmp_path: Path, make_registry: RegistryFactory
 ) -> None:

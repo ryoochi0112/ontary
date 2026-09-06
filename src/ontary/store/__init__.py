@@ -10,7 +10,8 @@ for all of them. The pieces now live in:
   `DEFAULT_TENANT`/`DEFAULT_BATCH`
 - `ontary.store.protocol` -- the `Store` protocol
 - `ontary.store.schema` -- `SCHEMA_VERSION` and the SQLite DDL
-- `ontary.store.migration` -- the SQLite schema-migration engine
+- `ontary.store.migration` -- the SQLite schema gate (create at
+  `SCHEMA_VERSION`, or refuse; there is no in-place migration)
 - `ontary.store.sqlite` -- the SQLite `ObjectStore` backend
 - `ontary.store.inmemory` -- the dict-backed `InMemoryStore` backend
 - `ontary.store.postgres` -- the `PostgresStore` backend (psycopg imported

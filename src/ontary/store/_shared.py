@@ -112,6 +112,10 @@ def decode_audit_entry(row: AuditRowLike) -> AuditEntry:
             for access in json.loads(row["capability_accesses"])
         ],
         invocation_id=row["invocation_id"],
+        # `kind` goes straight into the `AuditEntry` Literal without validation.
+        # That is safe only because the schema gate refuses every store a prior
+        # release could have written, so no row here predates the current Literal;
+        # any future adopt/migrate path MUST validate `kind` before this call.
         kind=row["kind"],
         principal=row["principal"],
     )

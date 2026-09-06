@@ -88,8 +88,6 @@ _ANNOTATION_MAP: dict[Any, PropertyType] = {
 }
 
 
-
-
 def prop(
     *,
     primary_key: bool = False,
@@ -249,7 +247,6 @@ def _derive_properties(cls: type["OntologyObject"]) -> tuple[list[PropertyDef], 
     return props, primary_keys[0]
 
 
-
 _T = TypeVar("_T", bound=OntologyObject)
 _P = TypeVar("_P", bound=ActionParams)
 
@@ -297,7 +294,6 @@ def ref(cls: type["OntologyObject"], **field_kwargs: Any) -> Any:
     `str`-annotation requirement as `target()`/`scope_ref()`.
     """
     return _marker(cls, None, **field_kwargs)
-
 
 
 def _api_name_for_registered(

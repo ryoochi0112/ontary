@@ -142,7 +142,8 @@ it — see [Scope policy](../../docs/api-reference.md#scope-policy).
 
 - [`tests/test_examples_tickets_e2e.py`](../../tests/test_examples_tickets_e2e.py)
   exercises the app end to end: tenant isolation, `ontary.testing` adoption,
-  the multi-consumer MCP example with two queue-scoped identities, all five
-  CLI commands, and a clean `diagnose()` result.
+  the multi-consumer MCP example with two queue-scoped identities, all three
+  CLI commands (`validate`, `serve`, `version`), and a clean `diagnose()`
+  result.
 - [`tests/test_examples_smoke.py`](../../tests/test_examples_smoke.py) smoke-
   tests the example scripts.
