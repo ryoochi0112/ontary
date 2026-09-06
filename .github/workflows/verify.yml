@@ -5,14 +5,33 @@ on:
   push:
     branches: [main]
 
+permissions:
+  contents: read
+
+# A new push to a PR branch supersedes the run in flight. On main a run is
+# never cancelled mid-flight.
+concurrency:
+  group: verify-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  # One leg per interpreter the classifiers claim. `postgres` and `package`
+  # below stay on 3.12: they test a backend and the distribution, not the
+  # interpreter. mypy's typing target stays `python_version = "3.12"`.
   verify:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.12", "3.13"]
     steps:
-      - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          python-version: "3.12"
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          python-version: ${{ matrix.python }}
           enable-cache: true
       - name: Install dependencies
         run: uv sync --all-extras
@@ -27,6 +46,7 @@ jobs:
   # would be exactly the "nothing ever tested this" hole M6 found in packaging.
   postgres:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     services:
       postgres:
         image: postgres:16
@@ -40,8 +60,10 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     steps:
-      - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           python-version: "3.12"
           enable-cache: true
@@ -68,9 +90,12 @@ jobs:
   # tickets example exactly as a reader would (OSS v0 spec § 4.3).
   package:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           python-version: "3.12"
           enable-cache: true
@@ -92,7 +117,29 @@ jobs:
       - name: Stranger test — README quickstart and tickets example from the wheel
         run: /tmp/stranger/bin/python scripts/stranger_smoke.py
       - name: Upload the distributions
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: dist
           path: dist/
+
+  # Lints the workflows themselves: an unpinned `uses:`, a checkout that keeps
+  # its credentials, a template-injection pattern, a publish job with a shared
+  # cache. zizmor is pinned because a new audit in a new release would
+  # otherwise turn an unrelated PR red. `GH_TOKEN` lets the online audits
+  # (known-vulnerable-actions, impostor-commit) run; `contents: read` is enough.
+  workflows:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          python-version: "3.12"
+          # No project cache: uvx fetches zizmor into its own env; nothing to reuse.
+          enable-cache: false
+      - name: Lint the workflows with zizmor
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: uvx zizmor==1.30.0 .github/

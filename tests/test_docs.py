@@ -270,7 +270,7 @@ def test_new_english_pages_are_reachable_and_cross_linked() -> None:
 
 def test_readme_and_new_pages_have_no_broken_relative_markdown_links() -> None:
     link_pattern = re.compile(r"(?<!!)\[[^\]]+\]\(([^)\s]+)")
-    sources = (README, *NEW_ENGLISH_DOCS)
+    sources = (README, README.parent / "SECURITY.md", *NEW_ENGLISH_DOCS)
     for source in sources:
         for target in link_pattern.findall(source.read_text()):
             if target.startswith(("http://", "https://", "mailto:")):

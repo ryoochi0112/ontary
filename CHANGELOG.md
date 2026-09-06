@@ -11,6 +11,28 @@ you**.
 
 ## [Unreleased]
 
+### Added
+
+- CI tests on Python 3.13 as well as 3.12, matching the classifiers.
+- `codeql.yml`: CodeQL for Python on every PR, on `main`, and weekly.
+- A `workflows` job in `verify.yml` lints the workflows with zizmor, so an
+  unpinned action or a checkout that keeps its credentials fails the PR.
+- `SECURITY.md`: supported versions, private vulnerability reporting, and what
+  counts as a vulnerability in the engine.
+- Dependabot (`.github/dependabot.yml`) for `uv` and GitHub Actions, weekly,
+  grouped, with a 7-day cooldown, never automerged.
+
+### Changed
+
+- Every workflow action is pinned to a commit SHA; every workflow declares
+  `permissions: contents: read` at the top, a timeout on every job, and
+  `persist-credentials: false` on checkout. `verify` cancels a superseded run
+  on a PR branch only.
+- The release gate no longer uses the uv cache: the job builds the bytes that
+  are published, and a cache shared with PR runs is a poisoning surface.
+- `renovate.json` removed. The Renovate app had never been installed on the
+  repository, so the config was inert; Dependabot replaces it.
+
 ## [0.11.0] — 2026-09-06
 
 ```bash
