@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from contextlib import AbstractContextManager
 from datetime import datetime, timedelta
-from typing import Any, NamedTuple, Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from ontary.audit import AuditEntry, WriteRecord
 from ontary.errors import ConflictError
@@ -22,14 +22,6 @@ from ontary.fingerprint import (
 from ontary.meta import OntologyRegistry
 from ontary.outbox import OutboxRecord, OutboxState
 from ontary.store.values import DEFAULT_BATCH, PagedRow, Source, StoredObject
-
-
-class EraseResult(NamedTuple):
-    """Content rows changed by one backend-local erasure transaction."""
-
-    object_rows_purged: int
-    audit_entries_purged: int
-    outbox_rows_purged: int
 
 
 @runtime_checkable
@@ -72,27 +64,6 @@ class Store(Protocol):
     def retire_object(self, object_type: str, obj_id: str) -> StoredObject:
         """Close the current row for `(object_type, obj_id)` without inserting
         a replacement, returning the row with its closing `valid_to`."""
-        ...
-
-    def erase_object_content(self, object_type: str, obj_id: str) -> EraseResult:
-        """Close a live object, then tombstone its content everywhere.
-
-        The returned counts include only rows whose non-empty content was
-        replaced. All object, audit, and outbox rows remain structurally intact.
-        """
-        ...
-
-    def object_erasure_state(
-        self, object_type: str, obj_id: str
-    ) -> tuple[bool, bool]:
-        """Return ``(has_rows, has_live_or_non_empty_content)`` for an object.
-
-        This operator-only probe lets erasure distinguish an id with no stored
-        object rows from an id with stored rows before starting the destructive
-        verb. The second flag reports whether any stored object row is live or
-        has non-empty content; erase orchestration determines no-op status from
-        the destructive verb's returned counts.
-        """
         ...
 
     def create_link(self, link_type: str, from_id: str, to_id: str) -> None:

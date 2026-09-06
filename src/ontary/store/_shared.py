@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime
 from typing import Any, NamedTuple, Protocol
@@ -129,134 +129,6 @@ def decode_audit_entry(row: AuditRowLike) -> AuditEntry:
         kind=row["kind"],
         principal=row["principal"],
     )
-
-
-def json_references_object(value: Any, object_type: str, obj_id: str) -> bool:
-    """Whether JSON content contains an explicit reference to one object.
-
-    Payloads and action params have no schema-level foreign key, so erasure
-    recognizes conventional ``id``/``*_id``/``*_ids`` fields. A type stated by
-    the mapping qualifies its bare ``id`` and explicit generic pairs such as
-    ``object_type``/``object_id``. Other foreign-key fields must name the
-    referenced type and may contain either one id or a list of ids. A present
-    paired type suppresses a reference only when it differs case-insensitively.
-    """
-    if isinstance(value, list):
-        return any(json_references_object(item, object_type, obj_id) for item in value)
-    if not isinstance(value, dict):
-        return False
-
-    stated_types = {
-        item
-        for key in ("object_type", "target_type")
-        if isinstance((item := value.get(key)), str)
-    }
-    bare_id = value.get("id")
-    if bare_id is not None and str(bare_id) == obj_id and (
-        not stated_types
-        or any(
-            stated_type.casefold() == object_type.casefold()
-            for stated_type in stated_types
-        )
-    ):
-        return True
-
-    normalized_object_type = "".join(
-        character.casefold() for character in object_type if character.isalnum()
-    )
-    generic_reference_keys = {"object_id", "object_ids", "target_id", "target_ids"}
-    for key, item in value.items():
-        suffix = "_ids" if key.endswith("_ids") else "_id"
-        if not key.endswith(suffix):
-            continue
-        stem = key.removesuffix(suffix)
-        paired_type_key = f"{stem}_type"
-        paired_type = value.get(paired_type_key)
-        if (
-            paired_type_key in value
-            and isinstance(paired_type, str)
-            and paired_type.casefold() != object_type.casefold()
-        ):
-            continue
-        if key not in generic_reference_keys:
-            stem_parts = stem.split("_")
-            names_object_type = any(
-                "".join(stem_parts[index:]).casefold() == normalized_object_type
-                for index in range(len(stem_parts))
-            )
-            if not names_object_type:
-                continue
-        candidates = item if isinstance(item, list) else [item]
-        if any(
-            candidate is not None and str(candidate) == obj_id
-            for candidate in candidates
-        ):
-            return True
-    return any(
-        json_references_object(item, object_type, obj_id) for item in value.values()
-    )
-
-
-def write_references_object(
-    write: Mapping[str, Any],
-    object_type: str,
-    obj_id: str,
-    registry: OntologyRegistry,
-    object_row_exists: Callable[[str, str], bool],
-) -> bool:
-    """Whether one recorded write names the object being erased.
-
-    An object write is decided by its own `(object_type, object_id)` pair. A
-    LINK write records only `(link_type, from_id, to_id)`, so the endpoint's
-    type has to be inferred -- and the link DECLARATION is the only thing
-    that states one.
-
-    That declaration is not proof. `create_link` validates neither endpoint
-    existence nor endpoint type, so a matching id whose declared endpoint
-    type differs may still be this very object. Reading the declaration as
-    proof let an erasure walk past the audit and outbox rows that write
-    produced, leaving the content the erasure exists to destroy. Reading it
-    as nothing brings back the opposite defect: erasing a Department called
-    `shared-9` destroyed the evidence of a Team that happened to share the
-    id.
-
-    So the declared type excuses an id only when it can: when an object of
-    that declared type really does carry it (`object_row_exists`, history
-    included). With no such object, nothing else can own the endpoint and
-    the write is a reference. Erasure resolves the remaining ambiguity --
-    both objects exist -- in favour of the declaration, which is the only
-    evidence there is.
-
-    Pure but store-aware: the row lookup arrives as a callable so this stays
-    the single cross-backend copy of the RULE while each backend keeps its
-    own row access (module docstring). `write` is the decoded MAPPING rather
-    than a `WriteRecord` so a historical row whose `op` predates the current
-    `Literal` still gets read, exactly as the per-backend copies did.
-    """
-    if write.get("object_type") == object_type and write.get("object_id") == obj_id:
-        return True
-    link_type = write.get("link_type")
-    if link_type is None:
-        return False
-    try:
-        link_def = registry.get_link_type(link_type)
-    except ValidationFailed:
-        # The link type was removed after the write; nothing declares a type
-        # for either endpoint, so a matching id is the only evidence there is.
-        declared: tuple[str | None, str | None] = (None, None)
-    else:
-        declared = (link_def.from_type, link_def.to_type)
-
-    for endpoint_id, declared_type in zip(
-        (write.get("from_id"), write.get("to_id")), declared, strict=True
-    ):
-        if endpoint_id != obj_id:
-            continue
-        if declared_type is None or declared_type == object_type:
-            return True
-        if not object_row_exists(declared_type, obj_id):
-            return True
-    return False
 
 
 # -- write-path contract helpers (B4) ---------------------------------------

@@ -2,7 +2,7 @@
 
 The compact T12 README links each reader-facing docs page, carries one
 executable quickstart, and deliberately leaves detailed contracts to their
-canonical pages. The cookbook's five recipes are executable too. API-reference
+canonical pages. The cookbook's recipes are executable too. API-reference
 tables, declarations, error codes, and the curated `ontary.__all__` remain
 independently pinned.
 """
@@ -80,9 +80,7 @@ EXPECTED_PRE_080_ERROR_CODES = frozenset(
 )
 EXPECTED_080_NEW_ERROR_CODES = frozenset(
     {
-        "OBJECT_ERASURE_NOT_FOUND",
         "OBJECT_RETIRE_NOT_FOUND",
-        "OBJECT_ALREADY_ERASED",
         "OBJECT_ALREADY_RETIRED",
         "LINK_NOT_FOUND",
         "STALE_CURSOR",
@@ -230,14 +228,6 @@ DEMOTED_NAMES_BY_MODULE = {
         "to_optional_datetime",
     },
     "ontary.errors": {"ERROR_CODES", "ErrorCodeInfo", "Kind"},
-    "ontary.explain": {
-        "DecisionTrace",
-        "MinNTrace",
-        "RedactionTrace",
-        "ScanReport",
-        "ScopePathStep",
-        "ScopeRuleTrace",
-    },
     "ontary.fingerprint": {"OntologyFingerprint", "fingerprint_ontology"},
     "ontary.functions": {"FunctionHandler", "FunctionRegistry"},
     "ontary.ingest": {"IngestError", "IngestReport", "bulk_link", "bulk_upsert"},
@@ -423,7 +413,6 @@ COOKBOOK_RECIPES = (
     "scoped-type",
     "testing-action",
     "type-evolution",
-    "explain-hidden-row",
     "serve-dev",
 )
 
@@ -450,8 +439,6 @@ def test_cookbook_recipes_execute_verbatim(recipe: str) -> None:
         if node.module == "ontary":
             imported = {alias.name for alias in node.names if alias.name != "*"}
             assert imported <= set(ontary.__all__)
-        elif node.module == "ontary.explain":
-            assert {alias.name for alias in node.names} <= {"DecisionTrace"}
         elif node.module == "ontary.migrate":
             assert {alias.name for alias in node.names} <= {"upcast_object_type"}
         elif node.module == "ontary.testing":

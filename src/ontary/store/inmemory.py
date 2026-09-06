@@ -45,16 +45,14 @@ from ontary.store._shared import (
     check_update_authority,
     decode_audit_entry,
     encode_audit_entry,
-    json_references_object,
     live_link_not_found,
     merge_update,
     prepare_insert,
     resolve_link_type,
     retire_object_refusal,
     unknown_page_token,
-    write_references_object,
 )
-from ontary.store.protocol import EraseResult, Store, check_ontology_fingerprint
+from ontary.store.protocol import Store, check_ontology_fingerprint
 from ontary.store.values import (
     DEFAULT_BATCH,
     DEFAULT_TENANT,
@@ -366,131 +364,6 @@ class InMemoryStore:
             WriteRecord(op="retire", object_type=object_type, object_id=obj_id)
         )
         return retired
-
-    def erase_object_content(self, object_type: str, obj_id: str) -> EraseResult:
-        """Tombstone one object's content in one snapshot-backed transaction."""
-        self._registry.get_object_type(object_type)
-        object_rows_purged = 0
-        audit_entries_purged = 0
-        outbox_rows_purged = 0
-
-        def object_row_exists(row_type: str, row_id: str) -> bool:
-            return any(
-                row["tenant"] == self._tenant
-                and row["object_type"] == row_type
-                and row["id"] == row_id
-                for row in self._objects
-            )
-
-        def references_erased_object(write: WriteRecord) -> bool:
-            return write_references_object(
-                write.model_dump(),
-                object_type,
-                obj_id,
-                self._registry,
-                object_row_exists,
-            )
-
-        with self.transaction():
-            if any(
-                row["tenant"] == self._tenant
-                and row["object_type"] == object_type
-                and row["id"] == obj_id
-                and row["valid_to"] is None
-                for row in self._objects
-            ):
-                # Join this outer transaction and retain retire_object's exact
-                # close timestamp/refusal behavior.
-                self.retire_object(object_type, obj_id)
-
-            for index, object_row in enumerate(self._objects):
-                if (
-                    object_row["tenant"] == self._tenant
-                    and object_row["object_type"] == object_type
-                    and object_row["id"] == obj_id
-                    and json.loads(object_row["payload"])
-                ):
-                    self._objects[index] = {**object_row, "payload": "{}"}
-                    object_rows_purged += 1
-
-            matching_invocations: set[str] = set()
-            for index, audit_entry in enumerate(self._audit):
-                if audit_entry.kind == "erasure":
-                    continue
-                effects = [
-                    effect.model_dump(mode="json") for effect in audit_entry.effects
-                ]
-                references_object = (
-                    audit_entry.target_type == object_type
-                    and audit_entry.target_id == obj_id
-                ) or json_references_object(
-                    audit_entry.params, object_type, obj_id
-                ) or json_references_object(
-                    effects, object_type, obj_id
-                ) or any(
-                    references_erased_object(write) for write in audit_entry.writes
-                )
-                if not references_object:
-                    continue
-                if audit_entry.invocation_id is not None:
-                    matching_invocations.add(audit_entry.invocation_id)
-                effects_have_content = any(
-                    effect.payload or effect.error is not None
-                    for effect in audit_entry.effects
-                )
-                if audit_entry.params or effects_have_content:
-                    self._audit[index] = audit_entry.model_copy(
-                        update={
-                            "params": {},
-                            "effects": [
-                                effect.model_copy(
-                                    update={"payload": {}, "error": None}
-                                )
-                                for effect in audit_entry.effects
-                            ],
-                        }
-                    )
-                    audit_entries_purged += 1
-
-            for index, outbox_row in enumerate(self._outbox):
-                references_object = (
-                    outbox_row.invocation_id in matching_invocations
-                    or json_references_object(
-                        outbox_row.payload, object_type, obj_id
-                    )
-                )
-                if references_object and (
-                    outbox_row.payload or outbox_row.last_error is not None
-                ):
-                    self._outbox[index] = outbox_row.model_copy(
-                        update={"payload": {}, "last_error": None}
-                    )
-                    outbox_rows_purged += 1
-
-        return EraseResult(
-            object_rows_purged=object_rows_purged,
-            audit_entries_purged=audit_entries_purged,
-            outbox_rows_purged=outbox_rows_purged,
-        )
-
-    def object_erasure_state(
-        self, object_type: str, obj_id: str
-    ) -> tuple[bool, bool]:
-        """Return whether object rows and erasable object content exist."""
-        self._registry.get_object_type(object_type)
-        with self._transaction_lock:
-            rows = [
-                row
-                for row in self._objects
-                if row["tenant"] == self._tenant
-                and row["object_type"] == object_type
-                and row["id"] == obj_id
-            ]
-            has_content = any(
-                row["valid_to"] is None or bool(json.loads(row["payload"]))
-                for row in rows
-            )
-            return bool(rows), has_content
 
     def _row_to_stored(self, row: _ObjectRow) -> StoredObject:
         # Upcast at the read boundary, identical to `ObjectStore._row_to_stored`

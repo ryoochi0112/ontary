@@ -23,7 +23,6 @@
 - [セキュリティ](#セキュリティ)
 - [ストア](#ストア)
 - [バルク取り込み](#バルク取り込み)
-- [`ontary.erase`](#ontaryerase)
 - [`ontary.connect`](#ontaryconnect)
 - [MCP サーバー](#mcp-サーバー)
 - [記述子による宣言](#記述子による宣言)
@@ -99,12 +98,6 @@ Python 3.12+。コアパッケージの依存は `pydantic` のみ。エクス�
 
 `ERROR_CODES`、`ErrorCodeInfo`、`Kind`。
 
-### `ontary.explain`
-
-オペレーター向けトレースモデル: `DecisionTrace`、`ScopeRuleTrace`、
-`ScopePathStep`、`RedactionTrace`、`MinNTrace`、`ScanReport`。これらは canonical
-submodule から import し、`ontary` フロントドアからは export しません。
-
 ### `ontary.fingerprint`
 
 `OntologyFingerprint`、`fingerprint_ontology`。
@@ -116,21 +109,6 @@ submodule から import し、`ontary` フロントドアからは export しま
 ### `ontary.ingest`
 
 `IngestError`、`IngestReport`、`bulk_link`、`bulk_upsert`。
-
-### `ontary.erase`
-
-`EraseReport`、`erase_object`。
-
-オペレーターだけが使う Python の runbook API です。`(object_type, id)` で 1 つの
-オブジェクトを消去しますが、`ontary.__all__` には意図的に含まれません。
-`OntologyClient`、`ActionContext`、MCP からは到達できません。呼び出し元は
-`operator=...` で実行者を指定します。消去は live なオブジェクト行を閉じ、対象の
-全オブジェクト行、該当する監査パラメータ、Effect outbox のペイロードから内容を
-取り除きます。構造と系譜は tombstone 行として残り、監査エントリも追加されます。
-完了済みの消去を、新たに一致する内容がない状態で繰り返すと
-`OBJECT_ALREADY_ERASED` の no-op レポートが返ります。遅れて到着した内容がある
-場合は purge をもう一度実行し、実際の消去を報告します。未知のオブジェクト ID には
-`OBJECT_ERASURE_NOT_FOUND` が送出されます。
 
 ### `ontary.mcp_server`
 
@@ -362,32 +340,6 @@ Action 実行器、バインド済みハンドラ — をちょうど 1 回だ�
 
 - **`.for_consumer(consumer, *, capabilities=None, effects=None) -> OntologyClient`** —
   安価なビュー。1 プロセスで多数のコンシューマーを捌いても、再配線は起きません。
-- **`.explain_read(consumer, obj_type, id) -> DecisionTrace`** — 1 件の
-  guarded read について、評価した全スコープルールと解決経路、sensitivity
-  redaction、最終 verdict（`visible` / `redacted` / `denied` / `not_found`）、
-  および実際の read が送出するエラーコード（ある場合）を説明します。
-- **`.explain_list(consumer, obj_type, where=None) -> list[DecisionTrace]`** —
-  拒否された行も含め、raw の一致行ごとに 1 トレースを返します。各トレースには、
-  選択された可視 population の集計関連 min-N 結果も含まれます。これは診断情報であり、
-  通常の list に min-N gate を追加するものではありません。
-
-> **オペレーター信頼境界の警告。** Explain は隠された行の存在を明かします。
-> raw store を保持するのと同じ信頼レベルにだけアクセスを許可してください。
-> `OntologyClient` には意図的に存在せず、MCP tool として登録されることもありません。
-
-frozen な結果モデルは canonical submodule から import します。
-
-```python
-from ontary.explain import DecisionTrace
-```
-
-`DecisionTrace.rules` は、ルール種別、要求レベル、match 結果、解決済み scope id、
-および object type/id の hop からなる `scope_path`（ViaLink edge は link 名と方向を
-記録）を持つ `ScopeRuleTrace` エントリです。`redactions` は削除されたフィールドと
-consumer kind を示します。単一 read の `min_n` は `not_applicable`、説明対象 list
-selection では `passed` / `failed` です。この surface 全体が operator-only なので、
-count も含めます。
-
 ### `OntologyClient(ontology, store, consumer, *, capabilities=None, effects=None)`
 
 ちょうど 1 つの `(ontology, store, consumer)` に束縛されます。直接構築しても動作し、
@@ -849,8 +801,6 @@ read_last(obj_type, obj_id) -> StoredObject | None
 read_all(obj_type) -> list[StoredObject]
 read_page(obj_type, after_key=None, batch=500) -> list[PagedRow]
 retire_object(object_type, obj_id) -> StoredObject
-erase_object_content(object_type, obj_id) -> EraseResult
-object_erasure_state(object_type, obj_id) -> tuple[bool, bool]
 create_link(link_type, from_id, to_id) -> None
 close_link(link_type, from_id, to_id) -> bool
 links_from(link_type, from_id) -> list[str]
@@ -873,9 +823,9 @@ retire されたオブジェクトも、属していたスコープを持ち続�
 はリンクを閉じるため、gate はオブジェクトの最後の行と、その行が閉じた時点で
 持っていたリンクからスコープを解決します。
 
-consumer の read は、あえてこれを使いません。retire 済み（または erase 済み）の行の
-スコープを解決すると、その子オブジェクトが再び可視集合に入ります。すると母集団が
-`min_n` を超え、erase 対象自身の行を含む集計値が返ってしまいます。`read_last` から
+consumer の read は、あえてこれを使いません。retire 済みの行のスコープを解決すると、
+その子オブジェクトが再び可視集合に入ります。すると母集団が `min_n` を超え、
+retire 対象自身の行を含む集計値が返ってしまいます。`read_last` から
 retire 済みの行を除外したり、`_asof` から閉じたリンクを除外したりするバックエンドを
 書くと、retire されたオブジェクトの正当な所有者が拒否されます。
 
@@ -918,24 +868,19 @@ raise は 2 か所にあります。1 つは、スコープを担うパラメー
 連鎖は解決できたが、この consumer がその外にいる場合。これはこの gate が変えていない従来
 どおりの拒否です。あるいは、その時刻に連鎖が解決できない場合で、既定の deny が働きます。
 この断面が扱うのは後者だけです。宣言されているルールの種類は 4 つで、それぞれが自身の hop で
-retire と erase に出会います。
+retire に出会います。
 
-- `SelfScope` はオブジェクト自身の id を返します。retire も erase もこの id を奪いません。
-- `DirectProperty` はスコープキーを payload から読みます。`erase_object_content` は設計
-  どおり、そのルールが読む payload を空にします。履歴を見る read でも復元できません。
-  この gate が読むのは有効な行ではなく最新行のため、retire は payload を変えません。
-  したがって、**この hop 自身の read** を失わせる lifecycle の事象は erase だけです。target 自身が
-  `DirectProperty` の場合はもちろん、**祖先**の hop が `DirectProperty` の場合も同じです。
-  後者では、erase が保持したリンクを持つ `ViaLink` の target まで拒否されます。
-  スコープキーが消えることは erase の目的であり、gate の穴ではありません。
-- `ViaLink` は `links` テーブルをたどります。erase はこれを保持するため、この hop に erase
-  の影響はありません。たどり着いた親のどれも順に解決できないとき、この hop は何も解決しません。
+- `SelfScope` はオブジェクト自身の id を返します。retire はこの id を奪いません。
+- `DirectProperty` はスコープキーを payload から読みます。この gate が読むのは有効な行では
+  なく最新行のため、retire は payload を変えません。
+- `ViaLink` は `links` テーブルをたどります。たどり着いた親のどれも順に解決できないとき、
+  この hop は何も解決しません。
   target が閉じるより前に retire された親もその一つです。その時刻に辺そのものは読める
   ことがありますが、親の行が採用されないため、この gate が尋ねる 1 つの時刻にその親は
   答えられません。target より後に retire された
   親は、同じ cascade の tick で閉じたものも含めて、いまも target のために解決します。
 - `CustomResolver` は生の `Store` を受け取る作者のコードで、engine はその中に立ち入り
-  ません。したがって、retire 済み・erase 済みのオブジェクトが何に解決するかは、この断面
+  ません。したがって、retire 済みのオブジェクトが何に解決するかは、この断面
   ではなく resolver 自身の責任です。素直な実装は `read_current` を読みますが、これは
   retire 済みのオブジェクトには `None` を返すため、そう書かれた resolver は拒否します。
   retire 後も precondition の拒否が必要な型は、2 つ目のルールを宣言してください。スコープ
@@ -982,9 +927,7 @@ SQLite の write lock を保持します。競合する writer がその handler
 
 `retire_object` は置き換え行を挿入せず、オブジェクトの current row を閉じます。リンクの
 cascade は行いません。`close_link` は 3 つの ID が一致する 1 本の live link を閉じます。
-`erase_object_content` はバックエンド内で完結するオペレーター消去プリミティブです。
-live なオブジェクトを閉じたうえで、オブジェクト、監査、outbox の行から内容を消去し、
-構造上の tombstone を残します。3 つのバックエンドがすべてこれらの verb を実装します。
+3 つのバックエンドがすべてこれらの verb を実装します。
 `ActionContext.retire` の cascade は、ストアのオブジェクト retirement primitive
 の上位にあります。
 
@@ -1292,7 +1235,6 @@ MCP サーバーでは、この実行時ではなくトランスポートによ�
 | `UPCAST_FAILED` | Raised when a stored row cannot be read as the current declared version. The message distinguishes two causes because their fixes differ: the chain has no step for the carried version (normally a row written by a NEWER ontology than this declaration, i.e. a downgrade, since `ontology.validate()` rejects an incomplete chain), or an author's upcaster raised on this payload. A read failure is deliberately not a silent fallback to the raw payload, which would hand a consumer data in a shape the declaration says does not exist. |
 | `ONTOLOGY_DRIFT` | Raised at construction when the declared ontology is not the one this store's rows were written under (ontology-evolution AC3/AC4). It is refused BEFORE any query, for the same reason as the `STORE_VERSION_UNSUPPORTED` conflict: a store the engine cannot honestly serve must not answer a read half-correctly first. Drift is not hypothetical; the measured mild case is a row the typed reader refuses while the string reader returns it. The message names every changed type. The two explicit ways forward are to migrate rows (`ontary.migrate.migrate_object_type`, then `accept_ontology_fingerprint`) or accept drift at the call site with `ObjectStore(..., accept_ontology_drift=True)`, which proceeds and writes an audit entry. |
 | `CARDINALITY_VIOLATION` | A link creation would violate its LinkTypeDef cardinality. |
-| `OBJECT_ALREADY_ERASED` | An operator erasure targeted an object whose content was already erased; when no newly matched content is found, it returns a coded no-op report rather than raising. |
 | `OBJECT_ALREADY_RETIRED` | A retirement targeted an object whose current row is already closed. |
 | `STORE_VERSION_UNSUPPORTED` | Raised at store construction when the store's schema stamp is not this engine's `SCHEMA_VERSION` -- a SQLite file's `PRAGMA user_version`, or a Postgres database's `schema_meta` row. Neither backend carries a migration ladder: a store written by a different ontary schema shape is REFUSED, never migrated in place and never adopted. An unstamped store that already has an `objects` table is refused for the same reason -- stamping a shape this engine cannot read would be a lying stamp, and every later query would fail as a confusing uncoded SQL error instead. The message names BOTH the store's and the engine's versions, so an operator knows exactly what to upgrade; the way forward is a matching ontary version, or a fresh store the data is migrated into. |
 | `STORE_BUSY` | A SQLite transaction could not acquire or retain its database lock within ObjectStore's configured busy timeout; retry after the competing writer finishes or increase busy_timeout. This is a conflict, not a precondition: retrying is the remedy, and the kind travels on the MCP wire so callers can branch on retryability. |
@@ -1342,7 +1284,6 @@ MCP サーバーでは、この実行時ではなくトランスポートによ�
 | `MISSING_MAPPED_FIELD` | A map_batch record's property_map referenced a canonical field entirely absent from that record (not merely None). |
 | `NON_NUMERIC_AGGREGATE` | `GuardedQuery.aggregate`'s `value_field` is declared a non-numeric `PropertyType` (anything other than `int`/`float`, such as str/json/datetime/bool). It is checked against the declared type before rows are iterated or coerced, so values that merely look numeric cannot bypass the type contract (spec `m35-sdk-refactor` §6 AC7). |
 | `OBJECT_NOT_FOUND` | An update targeted a non-existent object. |
-| `OBJECT_ERASURE_NOT_FOUND` | An operator erasure targeted an object with no stored row. |
 | `OBJECT_RETIRE_NOT_FOUND` | A retirement targeted an object with no stored row. |
 | `ONTOLOGY_INVALID` | `OntologyRegistry.validate()` rejected a declaration because its cross-references were invalid. |
 | `SCOPE_POLICY_ERROR` | A ScopePolicy declaration is unusable: a rule references an undeclared object type, link type, or scope level; a type declares an empty contributor rule list; or a type is listed in unscoped_types while also declaring scope rules. |
@@ -1363,7 +1304,7 @@ MCP サーバーでは、この実行時ではなくトランスポートによ�
 | `MIN_N_VIOLATION` | An aggregate would be computed over fewer than min_n distinct contributors. |
 | `VISIBILITY_DENIED` | A single-object read/write targeted an object outside the consumer's scope. |
 
-*全 55 コード / 7 種別。*
+*全 53 コード / 7 種別。*
 
 ---
 

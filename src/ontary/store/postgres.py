@@ -69,16 +69,14 @@ from ontary.store._shared import (
     check_update_authority,
     decode_audit_entry,
     encode_audit_entry,
-    json_references_object,
     live_link_not_found,
     merge_update,
     prepare_insert,
     resolve_link_type,
     retire_object_refusal,
     unknown_page_token,
-    write_references_object,
 )
-from ontary.store.protocol import EraseResult, check_ontology_fingerprint
+from ontary.store.protocol import check_ontology_fingerprint
 from ontary.store.schema import SCHEMA_VERSION
 from ontary.store.values import (
     DEFAULT_BATCH,
@@ -486,182 +484,6 @@ class PostgresStore:
             WriteRecord(op="retire", object_type=object_type, object_id=obj_id)
         )
         return retired
-
-    def erase_object_content(self, object_type: str, obj_id: str) -> EraseResult:
-        """Tombstone one object's content in one Postgres transaction."""
-        self._registry.get_object_type(object_type)
-        object_rows_purged = 0
-        audit_entries_purged = 0
-        outbox_rows_purged = 0
-
-        def object_row_exists(row_type: str, row_id: str) -> bool:
-            with self._conn.cursor() as probe:
-                probe.execute(
-                    """
-                    SELECT 1 FROM objects
-                    WHERE object_type = %s AND id = %s AND tenant = %s
-                    LIMIT 1
-                    """,
-                    (row_type, row_id, self._tenant),
-                )
-                return probe.fetchone() is not None
-
-        def references_erased_object(write: dict[str, Any]) -> bool:
-            return write_references_object(
-                write, object_type, obj_id, self._registry, object_row_exists
-            )
-
-        with self.transaction() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT 1 FROM objects
-                    WHERE object_type = %s AND id = %s AND valid_to IS NULL
-                      AND tenant = %s
-                    LIMIT 1
-                    """,
-                    (object_type, obj_id, self._tenant),
-                )
-                if cur.fetchone() is not None:
-                    # Nested calls share this transaction and keep the public
-                    # close operation as the single owner of retirement rules.
-                    self.retire_object(object_type, obj_id)
-
-                cur.execute(
-                    """
-                    SELECT row_id, payload FROM objects
-                    WHERE object_type = %s AND id = %s AND tenant = %s
-                    """,
-                    (object_type, obj_id, self._tenant),
-                )
-                for row_id, encoded_payload in cur.fetchall():
-                    if json.loads(encoded_payload):
-                        cur.execute(
-                            """
-                            UPDATE objects SET payload = %s
-                            WHERE row_id = %s AND tenant = %s
-                            """,
-                            ("{}", row_id, self._tenant),
-                        )
-                        object_rows_purged += 1
-
-                matching_invocations: set[str] = set()
-                cur.execute(
-                    """
-                    SELECT seq, kind, target_type, target_id, params, effects,
-                           writes, invocation_id
-                    FROM audit_log WHERE tenant = %s ORDER BY seq ASC
-                    """,
-                    (self._tenant,),
-                )
-                for (
-                    seq,
-                    kind,
-                    target_type,
-                    target_id,
-                    encoded_params,
-                    encoded_effects,
-                    encoded_writes,
-                    invocation_id,
-                ) in cur.fetchall():
-                    if kind == "erasure":
-                        continue
-                    params = json.loads(encoded_params)
-                    effects = json.loads(encoded_effects)
-                    writes = json.loads(encoded_writes)
-                    references_object = (
-                        target_type == object_type and target_id == obj_id
-                    ) or json_references_object(
-                        params, object_type, obj_id
-                    ) or json_references_object(
-                        effects, object_type, obj_id
-                    ) or any(
-                        references_erased_object(write) for write in writes
-                    )
-                    if not references_object:
-                        continue
-                    if invocation_id is not None:
-                        matching_invocations.add(str(invocation_id))
-                    effects_have_content = any(
-                        effect["payload"] or effect.get("error") is not None
-                        for effect in effects
-                    )
-                    if params or effects_have_content:
-                        scrubbed_effects = [
-                            {**effect, "payload": {}, "error": None}
-                            for effect in effects
-                        ]
-                        cur.execute(
-                            """
-                            UPDATE audit_log SET params = %s, effects = %s
-                            WHERE seq = %s AND tenant = %s
-                            """,
-                            (
-                                "{}",
-                                json.dumps(scrubbed_effects),
-                                seq,
-                                self._tenant,
-                            ),
-                        )
-                        audit_entries_purged += 1
-
-                cur.execute(
-                    """
-                    SELECT effect_id, invocation_id, payload, last_error
-                    FROM effect_outbox WHERE tenant = %s
-                    ORDER BY emitted_at ASC, seq ASC
-                    """,
-                    (self._tenant,),
-                )
-                for (
-                    effect_id,
-                    invocation_id,
-                    encoded_payload,
-                    last_error,
-                ) in cur.fetchall():
-                    payload = json.loads(encoded_payload)
-                    references_object = (
-                        invocation_id in matching_invocations
-                        or json_references_object(payload, object_type, obj_id)
-                    )
-                    if references_object and (
-                        payload or last_error is not None
-                    ):
-                        cur.execute(
-                            """
-                            UPDATE effect_outbox
-                            SET payload = %s, last_error = NULL
-                            WHERE effect_id = %s AND tenant = %s
-                            """,
-                            ("{}", effect_id, self._tenant),
-                        )
-                        outbox_rows_purged += 1
-
-        return EraseResult(
-            object_rows_purged=object_rows_purged,
-            audit_entries_purged=audit_entries_purged,
-            outbox_rows_purged=outbox_rows_purged,
-        )
-
-    def object_erasure_state(
-        self, object_type: str, obj_id: str
-    ) -> tuple[bool, bool]:
-        """Return whether object rows and erasable object content exist."""
-        self._registry.get_object_type(object_type)
-        with self._conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT valid_to, payload FROM objects
-                WHERE object_type = %s AND id = %s AND tenant = %s
-                """,
-                (object_type, obj_id, self._tenant),
-            )
-            rows = cur.fetchall()
-            has_content = any(
-                valid_to is None or bool(json.loads(payload))
-                for valid_to, payload in rows
-            )
-            return bool(rows), has_content
 
     _OBJECT_COLUMNS = ", ".join(_sql.OBJECT_COLUMNS)
 

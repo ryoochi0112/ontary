@@ -2372,7 +2372,7 @@ def test_the_declared_link_order_decides_which_operator_the_gate_admits(
     backend. `_apply_rule` takes the first parent whose chain resolves. Until
     this pin, NOTHING joined those two facts. Measured on the reconstructed
     PRE-T4 tree, whose control over `tests/test_actions.py` + `test_scope.py`
-    + `test_erase.py` + `test_multi_tenancy.py` is 180 passed / 4 skipped:
+    + `test_multi_tenancy.py` is 180 passed / 4 skipped:
     inverting the tie-break on all three backends left that set **unchanged
     at 180 passed / 4 skipped**, entirely green. The published sentence "which
     operator this gate admits" therefore rested on composing two pins rather
@@ -2845,10 +2845,9 @@ def test_retired_target_is_denied_when_the_canonical_instance_died_before_it() -
     parent (`scope.py`'s `_live_at`), so one retired BEFORE the contractor's
     own row closed cannot answer for it.
 
-    Nothing is erased and the contractor's own `DirectProperty` hop is
-    intact, so neither of those bullets covers this denial: it is the
-    kind-agnostic claim the canonical states after them, and this is its
-    measurement.
+    The contractor's own `DirectProperty` hop is intact, so neither of those
+    bullets covers this denial: it is the kind-agnostic claim the canonical
+    states after them, and this is its measurement.
 
     Two contractors of identical shape make the assertion mean something --
     the ONLY difference is whether the canonical `Team` closed before or
@@ -2968,10 +2967,6 @@ def _resolver_climbing_the_last_rows(
     instant into it, the hops THIS function takes are outside the as-of
     frame. That is the boundary the published prose draws, and the pin below
     measures it.
-
-    It reads no payload of an ERASED object, so it stays clear of the
-    recorded finding that the natural retirement-aware body raises an uncoded
-    `KeyError` when erasure blanks the payload out from under it.
     """
     row = store.read_last(obj_type, obj_id)
     if row is None:
@@ -3343,10 +3338,9 @@ def test_the_asof_frame_stops_at_a_resolvers_reads_and_resumes_at_its_answer() -
 def _payload_ancestor_client() -> tuple[Ontology, ObjectStore]:
     """A hierarchy whose ANCESTOR carries the scope key on its payload.
 
-    `_company_hierarchy_client`'s `Team` reaches `Company` by `ViaLink`, and
-    erasure preserves the `links` table -- so erasing that ancestor cannot
-    cost anything and the erasure axis is unreachable through it. Here the
-    ancestor hop is `DirectProperty`, which is the one shape erasure blanks.
+    `_company_hierarchy_client`'s `Team` reaches `Company` by `ViaLink`, so
+    the ancestor hop never reads a payload at all. Here the ancestor hop is
+    `DirectProperty`, which reads the ancestor's own scope key off its row.
     """
     ontology = Ontology(
         name="lifecycle-payload-ancestor", scope_levels=["team", "company"], min_n=1
@@ -3477,33 +3471,25 @@ be shown, and that is two situations rather than one: the chain resolved
 and this consumer is outside it, which is the ordinary denial this gate
 does not change; or the chain did not resolve at that instant, and
 deny-by-default denies. Only the second belongs to this frame. Four rule
-kinds are declared, and each meets retirement and erasure at its OWN hop:
+kinds are declared, and each meets retirement at its OWN hop:
 
-- `SelfScope` answers with the object's own id, which neither retirement
-  nor erasure takes away.
-- `DirectProperty` reads the scope key off the payload, and
-  `erase_object_content` blanks by design what that rule reads, which no
-  history-aware read can recover. Retirement leaves the payload alone,
-  because this gate reads the newest row rather than the live one, so
-  erasure is the only lifecycle event this hop's OWN READ loses to. That
-  is the target itself when the target is `DirectProperty`-scoped; it is
-  equally an ANCESTOR whose own hop is `DirectProperty`, which denies a
-  `ViaLink`-scoped target whose link erasure preserved. Erasure destroying
-  the scope key is the point of erasure, not a gap in the gate.
-- `ViaLink` climbs the `links` table, which erasure preserves, so erasure
-  costs this hop nothing. It resolves to nothing when none of the parents it
-  reaches resolves in turn — among them a parent already retired BEFORE the
-  target closed: its edge may still be readable at that instant, but its own
-  row is not admitted, so it cannot answer at the one instant this gate asks
-  about. One retired after the target —
-  including in the same cascade tick — still answers for it.
+- `SelfScope` answers with the object's own id, which retirement does not
+  take away.
+- `DirectProperty` reads the scope key off the payload, which retirement
+  leaves alone: this gate reads the newest row rather than the live one.
+- `ViaLink` climbs the `links` table. It resolves to nothing when none of
+  the parents it reaches resolves in turn — among them a parent already
+  retired BEFORE the target closed: its edge may still be readable at that
+  instant, but its own row is not admitted, so it cannot answer at the one
+  instant this gate asks about. One retired after the target — including in
+  the same cascade tick — still answers for it.
 - `CustomResolver` is author code handed the raw `Store`, and the engine
-  does not reach inside it, so what a retired or erased object resolves to
-  is the resolver's own business rather than this frame's. The natural
-  body reads `read_current`, which is `None` for a retired object, so a
-  resolver written that way denies. A type that needs the precondition
-  refusal after retirement declares a second rule — a `DirectProperty` on
-  a scope-key column, which survives retirement.
+  does not reach inside it, so what a retired object resolves to is the
+  resolver's own business rather than this frame's. The natural body reads
+  `read_current`, which is `None` for a retired object, so a resolver
+  written that way denies. A type that needs the precondition refusal after
+  retirement declares a second rule — a `DirectProperty` on a scope-key
+  column, which survives retirement.
 
 Each bullet is about one hop, never about one target, and the four are not
 the whole chain. `ScopePolicy.rules` maps each type to an ORDERED
@@ -3536,24 +3522,19 @@ raise は 2 か所にあります。1 つは、スコープを担うパラメー
 連鎖は解決できたが、この consumer がその外にいる場合。これはこの gate が変えていない従来
 どおりの拒否です。あるいは、その時刻に連鎖が解決できない場合で、既定の deny が働きます。
 この断面が扱うのは後者だけです。宣言されているルールの種類は 4 つで、それぞれが自身の hop で
-retire と erase に出会います。
+retire に出会います。
 
-- `SelfScope` はオブジェクト自身の id を返します。retire も erase もこの id を奪いません。
-- `DirectProperty` はスコープキーを payload から読みます。`erase_object_content` は設計
-  どおり、そのルールが読む payload を空にします。履歴を見る read でも復元できません。
-  この gate が読むのは有効な行ではなく最新行のため、retire は payload を変えません。
-  したがって、**この hop 自身の read** を失わせる lifecycle の事象は erase だけです。target 自身が
-  `DirectProperty` の場合はもちろん、**祖先**の hop が `DirectProperty` の場合も同じです。
-  後者では、erase が保持したリンクを持つ `ViaLink` の target まで拒否されます。
-  スコープキーが消えることは erase の目的であり、gate の穴ではありません。
-- `ViaLink` は `links` テーブルをたどります。erase はこれを保持するため、この hop に erase
-  の影響はありません。たどり着いた親のどれも順に解決できないとき、この hop は何も解決しません。
+- `SelfScope` はオブジェクト自身の id を返します。retire はこの id を奪いません。
+- `DirectProperty` はスコープキーを payload から読みます。この gate が読むのは有効な行では
+  なく最新行のため、retire は payload を変えません。
+- `ViaLink` は `links` テーブルをたどります。たどり着いた親のどれも順に解決できないとき、
+  この hop は何も解決しません。
   target が閉じるより前に retire された親もその一つです。その時刻に辺そのものは読める
   ことがありますが、親の行が採用されないため、この gate が尋ねる 1 つの時刻にその親は
   答えられません。target より後に retire された
   親は、同じ cascade の tick で閉じたものも含めて、いまも target のために解決します。
 - `CustomResolver` は生の `Store` を受け取る作者のコードで、engine はその中に立ち入り
-  ません。したがって、retire 済み・erase 済みのオブジェクトが何に解決するかは、この断面
+  ません。したがって、retire 済みのオブジェクトが何に解決するかは、この断面
   ではなく resolver 自身の責任です。素直な実装は `read_current` を読みますが、これは
   retire 済みのオブジェクトには `None` を返すため、そう書かれた resolver は拒否します。
   retire 後も precondition の拒否が必要な型は、2 つ目のルールを宣言してください。スコープ
@@ -3650,12 +3631,12 @@ _SCOPE_PROSE_ANCHORS: dict[tuple[str, str], tuple[str, ...]] = {
         "ただし読むのは最新行です",
     ),
     ("scope-denied-consequences", "en"): (
-        "climbs the `links` table, which erasure preserves",
-        "Erasure destroying the scope key is the point of erasure",
+        "each meets retirement at its OWN hop",
+        "reads the scope key off the payload, which retirement",
     ),
     ("scope-denied-consequences", "ja"): (
         "`SelfScope` はオブジェクト自身の id を返します",
-        "スコープキーが消えることは erase の目的",
+        "retire はこの id を奪いません",
     ),
 }
 
@@ -3750,7 +3731,7 @@ _SCOPE_INTERSTITIAL_DIGESTS: dict[str, str] = {
         "5ed033e51ded3f0452a18f42bcd328f18018bfbd0150325e71cc565386ed71a2"
     ),
     "src/ontary/scope.py": (
-        "8ab3725468189aa27d584d2d044fbbcf6e72c37445b46fa142e0b4ca4e642dea"
+        "1815e8090f708f2cc259303e8855616c1feefae233d5ded1784b60a65dc404c5"
     ),
 }
 
@@ -3935,10 +3916,10 @@ _SCOPE_PROSE_DIGESTS: dict[tuple[str, str], str] = {
         "bec39565c433fcaf0c186a22b5a2d04a8b7a462a2e9109e7b43c5a17790939b2"
     ),
     ("scope-denied-consequences", "en"): (
-        "10e783f14f4011e58c502087c880df0493980a52938785ed8fb66feba0b0749a"
+        "cf29ba4f4b745c88010ae9a599d60b9bcb87365b37b72993bac9f39d4f187dea"
     ),
     ("scope-denied-consequences", "ja"): (
-        "500c9f373c02235f24a71cd2f6fe651850fe51c5489393dc30804ebc970af80b"
+        "eda59ca6de0ea3dd6ca30133248f024a930c7173ff04a4362eb1deb077dd2047"
     ),
 }
 
@@ -3993,7 +3974,7 @@ def test_the_published_consequences_name_every_declared_scope_rule_kind() -> Non
     """The prose's member list is read out of `ScopeRule`, like the matrix's.
 
     T4 regrouped the published consequences by RULE KIND -- one bullet per
-    kind, saying what retirement and erasure do to that hop -- because the
+    kind, saying what retirement does to that hop -- because the
     old grouping (one bullet per lifecycle event) forced quantifiers the
     measurement does not support. A list per kind is only honest while it is
     the WHOLE kind list, and "a hand-written subset of a declared set" is the
@@ -4246,140 +4227,12 @@ def test_ancestor_payload_staleness_is_measured_and_documented_the_same_way() ->
     )
 
 
-def test_erasing_an_ancestor_denies_a_vialink_target_that_resolved_through_it() -> None:
-    """Erasure costs the shape that READS THE PAYLOAD -- at any hop, not just
-    the target's.
-
-    The lifecycle matrix below now varies WHICH object is erased and covers
-    all four rule kinds on every backend -- and it still cannot falsify this
-    case, for a sharper reason (L18): its ancestor `Team` is
-    `SelfScope`-scoped by construction, so no ancestor in that matrix ever
-    READS A PAYLOAD and only the target's hop can be made to pay for
-    erasure. This pin is the one that gives the ANCESTOR its own rule shape,
-    and its absence is how
-    "`ViaLink` climbs the `links` table, which erasure preserves, so both
-    still reach `OBJECT_ALREADY_RETIRED` after an erasure" shipped in
-    `CHANGELOG.md` and both `api-reference` files while this case did the
-    opposite.
-
-    The target here is `ViaLink`-scoped and its link survives erasure exactly
-    as promised. What does not survive is the ANCESTOR's own hop: `Team`
-    reaches `Company` by `DirectProperty`, `erase_object_content` blanks the
-    payload that rule reads, and the chain resolves `company -> None`. So the
-    worker's rightful owner is denied `SCOPE_DENIED` even though nothing about
-    the worker or its link was erased.
-
-    It fails closed, so nothing is disclosed -- but it denies the owner, which
-    is the outcome the prose promises erasure will not cause for this shape.
-    """
-    ontology, store = _payload_ancestor_client()
-    store.insert("Company", {"id": "co-1"}, SRC)
-    store.insert("Team", {"id": "team-1", "company": "co-1"}, SRC)
-    store.insert("Worker", {"id": "worker-1"}, SRC)
-    store.create_link("onTeam", "worker-1", "team-1")
-
-    operator = _company_operator(ontology, store, "co-1")
-    assert operator.execute("OffboardWorker", {"worker_id": "worker-1"}) == {
-        "worker_id": "worker-1"
-    }
-
-    # Retired but nothing erased: the owner reaches the handler's own refusal.
-    # Without this half the assertion below would also pass for a gate that
-    # denied every retired target.
-    with raises_code(ConflictError, "OBJECT_ALREADY_RETIRED"):
-        operator.execute("OffboardWorker", {"worker_id": "worker-1"})
-
-    store.erase_object_content("Team", "team-1")
-
-    # The link is untouched -- the `ViaLink` half of the promise holds.
-    worker = store.read_last("Worker", "worker-1")
-    assert worker is not None
-    assert worker.lineage.valid_to is not None
-    assert store.links_from_asof("onTeam", "worker-1", worker.lineage.valid_to) == [
-        "team-1"
-    ]
-
-    # The ancestor's own DirectProperty hop is what erasure took.
-    with raises_code(PermissionDenied, "SCOPE_DENIED"):
-        operator.execute("OffboardWorker", {"worker_id": "worker-1"})
-
-    # DOCUMENTED (ledger T3.4): before this round the erasure claim had no
-    # doc assertion at all -- this pin measured the engine and said nothing
-    # about the prose, which is how the ANCESTOR case shipped stated the
-    # opposite way round. WHOLE sentences are asserted, never a phrase of one:
-    # the round-7 wording ("so both still reach `OBJECT_ALREADY_RETIRED` after
-    # an erasure") and an inverted ancestor hop ("which still admits a
-    # `ViaLink`-scoped target") both keep every phrase a fragment check would
-    # look for, and both red here -- unless the same sweep also rewrites these
-    # needles, which is why the canonical is digest-pinned as well. Do not
-    # update these literals to match a reworded canonical; re-derive them from
-    # this measurement, which is what T4 did when the canonical was regrouped
-    # by rule kind and the two claims below landed in two different bullets.
-    #
-    # The first is the ANCESTOR half measured above. The second is the
-    # `ViaLink` half of the same paragraph -- the promise that erasure costs
-    # THAT hop nothing, which the assertions above also measure (the link
-    # survives, and the denial comes from the ancestor's own hop). Round 7
-    # shipped those two claims fused into one false sentence, so they are
-    # pinned separately rather than as one span.
-    assert (
-        _normalize_prose(
-            """That is the target itself when the target is
-            `DirectProperty`-scoped; it is equally an ANCESTOR whose own hop
-            is `DirectProperty`, which denies a `ViaLink`-scoped target whose
-            link erasure preserved."""
-        )
-        in _SCOPE_PROSE_CANON[("scope-denied-consequences", "en")]
-    )
-    assert (
-        _normalize_prose(
-            """`ViaLink` climbs the `links` table, which erasure preserves, so
-            erasure costs this hop nothing."""
-        )
-        in _SCOPE_PROSE_CANON[("scope-denied-consequences", "en")]
-    )
-    # The pre-T4 span carried a THIRD clause -- "`SelfScope` answers with the
-    # object's id" -- which the regroup moved into its own bullet. Asserted
-    # here too, so splitting the span subsumes what the span covered (L31)
-    # rather than quietly dropping a claim.
-    assert (
-        _normalize_prose(
-            """`SelfScope` answers with the object's own id, which neither
-            retirement nor erasure takes away."""
-        )
-        in _SCOPE_PROSE_CANON[("scope-denied-consequences", "en")]
-    )
-    assert (
-        _squeeze(
-            """target 自身が `DirectProperty` の場合はもちろん、**祖先**の hop が
-            `DirectProperty` の場合も同じです。後者では、erase が保持したリンクを
-            持つ `ViaLink` の target まで拒否されます。"""
-        )
-        in _squeeze(_SCOPE_PROSE_CANON[("scope-denied-consequences", "ja")])
-    )
-    assert (
-        _squeeze(
-            """`ViaLink` は `links` テーブルをたどります。erase はこれを保持する
-            ため、この hop に erase の影響はありません。"""
-        )
-        in _squeeze(_SCOPE_PROSE_CANON[("scope-denied-consequences", "ja")])
-    )
-    assert (
-        _squeeze(
-            """`SelfScope` はオブジェクト自身の id を返します。retire も erase も
-            この id を奪いません。"""
-        )
-        in _squeeze(_SCOPE_PROSE_CANON[("scope-denied-consequences", "ja")])
-    )
-
-
 # --- The lifecycle matrix, derived from the declared rule-kind set ---------
 #
 # `scope.py`'s `ScopeRule` union IS the set of shapes an author may declare.
 # Every lifecycle pin above enumerates a hand-written subset of it, and every
 # round of this branch closed the gap by adding the one member that was
-# missing -- which is how `CustomResolver` reached this round with retirement
-# coverage but no erasure coverage at all.
+# missing.
 #
 # So the case table below is checked against the union itself rather than
 # against a reviewer's memory: declare a fifth kind and
@@ -4404,8 +4257,8 @@ class _KindCase(NamedTuple):
 # gate that resolved differently per backend -- which is exactly the class of
 # defect T1 found in the link ORDER BY.
 #
-# `test_erase.py` and `test_store_conformance.py` each keep their own copy of
-# this factory set with their own schema prefix; conftest's `make_store` is a
+# `test_store_conformance.py` keeps its own copy of
+# this factory set with its own schema prefix; conftest's `make_store` is a
 # fixture and cannot be used at module scope for `params=`. This follows that
 # established shape rather than refactoring two large files from inside a
 # test-instrument task.
@@ -4456,67 +4309,51 @@ _LIFECYCLE_KIND_CASES: dict[Any, _KindCase] = {
 }
 
 _LIFECYCLE_SUBJECTS = ("target", "ancestor")
-_LIFECYCLE_OPS = ("retired", "erased")
+_LIFECYCLE_OPS = ("retired",)
 
 # The MEASURED outcome of every cell, taken on all three backends before any
 # of it was written down. Each value is what the owning operator gets when it
 # re-runs the action after the lifecycle event: the handler's own refusal
 # means the gate ADMITTED it, `SCOPE_DENIED` means the gate turned it away.
 #
-# Three cells are worth reading twice, because none of them is obvious:
+# Two cells are worth reading twice, because neither is obvious:
 #
-#   * `DirectProperty` / target / erased is the ONLY denial among the three
-#     declarative shapes. Erasure blanks the payload, and that shape is the
-#     only one that reads the payload -- `SelfScope` answers with the id and
-#     `ViaLink` climbs the `links` table, which erasure preserves.
-#   * every `ancestor` cell is ADMITTED, but only TWO of the eight are
+#   * every `ancestor` cell is ADMITTED, but only ONE of the four is
 #     EVIDENCE about the ancestor, and the column must not be read as though
-#     all eight were. `ViaLink` is the only kind that resolves the ancestor
+#     all four were. `ViaLink` is the only kind that resolves the ancestor
 #     object at all: traced on entry to `_resolve_level`, `Team/team-1`
-#     appears only in the two `ViaLink`/`ancestor` cells. `SelfScope`
+#     appears only in the `ViaLink`/`ancestor` cell. `SelfScope`
 #     answers from the target's own id and `DirectProperty` from its payload
-#     column, so neither ever reads the `Team` ROW -- their four `ancestor`
+#     column, so neither ever reads the `Team` ROW -- their `ancestor`
 #     cells re-record the TARGET-hop outcome under another name and are
 #     structurally unobservable on this axis, exactly as `CustomResolver`'s
-#     two are (next bullet). For the two cells that DO observe it: the
+#     is (next bullet). For the cell that DOES observe it: the
 #     ancestor is read as-of the instant the target closed, it was live
 #     then, and retiring it afterwards cannot reach back.
 #     Measured rather than argued -- a liveness defect confined to the
-#     ancestor reds exactly those 4 rows (`ViaLink`/`ancestor` x {sqlite,
-#     in_memory}) and none of the other 12. Note what that means for a
-#     mutation that reds the whole column: every cell here retires the
-#     TARGET first, so breaking `_live_at` outright reds 22 rows of which 10
-#     are `target` rows -- it reds through the target hop and does NOT
-#     isolate this axis (L18: THIS assertion must red). Both counts here are
+#     ancestor reds exactly the `ViaLink`/`ancestor` rows and none of the
+#     others. Note what that means for a mutation that reds the whole
+#     column: every cell here retires the TARGET first, so breaking
+#     `_live_at` outright reds through the target hop as well and does NOT
+#     isolate this axis (L18: THIS assertion must red). These counts are
 #     OFFLINE ones, taken with no `ONTARY_TEST_POSTGRES_DSN`: the Postgres
-#     backend adds a third row per cell, so the same mutation reds more
-#     under arm 2. The conclusion is the row SHAPE, not the total.
-#     Do NOT read this column as "erasing an ancestor never denies". See
-#     `test_erasing_an_ancestor_denies_a_vialink_target_that_resolved_through_it`
-#     above, which builds the case this fixture structurally cannot.
-#   * all four `CustomResolver` cells DENY, and the ancestor pair denies for
+#     backend adds a third row per cell. The conclusion is the row SHAPE,
+#     not the total.
+#   * both `CustomResolver` cells DENY, and the ancestor one denies for
 #     a reason that has nothing to do with the ancestor -- see the
 #     name-one-input note on the matrix test.
 _LIFECYCLE_MATRIX: dict[tuple[str, str, str], tuple[type[Any], str]] = {
     ("SelfScope", "target", "retired"): (ConflictError, "OBJECT_ALREADY_RETIRED"),
-    ("SelfScope", "target", "erased"): (ConflictError, "OBJECT_ALREADY_RETIRED"),
     ("SelfScope", "ancestor", "retired"): (ConflictError, "OBJECT_ALREADY_RETIRED"),
-    ("SelfScope", "ancestor", "erased"): (ConflictError, "OBJECT_ALREADY_RETIRED"),
     ("DirectProperty", "target", "retired"): (ConflictError, "OBJECT_ALREADY_RETIRED"),
-    ("DirectProperty", "target", "erased"): (PermissionDenied, "SCOPE_DENIED"),
     ("DirectProperty", "ancestor", "retired"): (
         ConflictError,
         "OBJECT_ALREADY_RETIRED",
     ),
-    ("DirectProperty", "ancestor", "erased"): (ConflictError, "OBJECT_ALREADY_RETIRED"),
     ("ViaLink", "target", "retired"): (ConflictError, "OBJECT_ALREADY_RETIRED"),
-    ("ViaLink", "target", "erased"): (ConflictError, "OBJECT_ALREADY_RETIRED"),
     ("ViaLink", "ancestor", "retired"): (ConflictError, "OBJECT_ALREADY_RETIRED"),
-    ("ViaLink", "ancestor", "erased"): (ConflictError, "OBJECT_ALREADY_RETIRED"),
     ("CustomResolver", "target", "retired"): (PermissionDenied, "SCOPE_DENIED"),
-    ("CustomResolver", "target", "erased"): (PermissionDenied, "SCOPE_DENIED"),
     ("CustomResolver", "ancestor", "retired"): (PermissionDenied, "SCOPE_DENIED"),
-    ("CustomResolver", "ancestor", "erased"): (PermissionDenied, "SCOPE_DENIED"),
 }
 
 
@@ -4568,26 +4405,16 @@ def test_lifecycle_outcome_is_the_measured_one_on_every_backend(
     `CustomResolver` whose body survives its target's retirement. Every
     `CustomResolver` cell here denies at the TARGET hop, because the shipped
     body reads `read_current` and the target is retired in every cell -- so
-    the two `ancestor` cells are masked and this fixture cannot observe the
-    ancestor axis for that kind at all. Measured separately: a body reading
-    `read_last` instead reaches the handler for three of the four cells and
-    raises an UNCODED `KeyError` out of `execute` for the fourth (erased
-    target -- the payload key is gone). That escape is a real finding about
-    author-supplied resolvers, recorded rather than fixed here, because
-    changing it is a spec decision and not a test's to make.
+    the `ancestor` cell is masked and this fixture cannot observe the
+    ancestor axis for that kind at all.
 
     And a SECOND input it cannot construct, which matters more because the
     matrix looks like it covers the case: an ANCESTOR whose own hop reads
     the payload. `_scoped_lifecycle_client` declares `Team` as
     `SelfScope`-scoped and that is not parametrized, so every ancestor in
-    this matrix answers from its own id and erasure cannot cost it anything.
-    The case where it does is built by
-    `test_erasing_an_ancestor_denies_a_vialink_target_that_resolved_through_it`
-    above -- a `DirectProperty` ancestor whose blanked payload denies the
-    target's rightful owner `SCOPE_DENIED`. So the `ancestor`/`erased`
-    column here says "admitted" about ONE ancestor shape, not about
-    ancestors; prose quantified over "every ancestor" is not supported by
-    this table and is contradicted by that pin.
+    this matrix answers from its own id. So the `ancestor` column here says
+    "admitted" about ONE ancestor shape, not about ancestors; prose
+    quantified over "every ancestor" is not supported by this table.
     """
     rule, scope_id, linked = _LIFECYCLE_KIND_CASES[kind]
     expected = _LIFECYCLE_MATRIX.get((kind.__name__, subject, op))
@@ -4612,12 +4439,8 @@ def test_lifecycle_outcome_is_the_measured_one_on_every_backend(
         "worker_id": "worker-1"
     }
 
-    if subject == "target" and op == "erased":
-        store.erase_object_content("Worker", "worker-1")
-    elif subject == "ancestor" and op == "retired":
+    if subject == "ancestor":
         store.retire_object("Team", "team-1")
-    elif subject == "ancestor" and op == "erased":
-        store.erase_object_content("Team", "team-1")
 
     with raises_code(error_cls, code):
         client.execute("OffboardWorker", {"worker_id": "worker-1"})

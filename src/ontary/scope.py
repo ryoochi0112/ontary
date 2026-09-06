@@ -80,7 +80,6 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ontary.errors import ValidationFailed
-from ontary.explain import ScopePathStep, ScopeRuleTrace, _TraceCollector
 from ontary.meta import OntologyRegistry
 from ontary.security import Consumer
 from ontary.store import Store, StoredObject
@@ -504,8 +503,6 @@ def _resolve_level(
     obj_id: str,
     level: str,
     visited: set[tuple[str, str, str]],
-    trace: _TraceCollector | None = None,
-    scope_path: tuple[ScopePathStep, ...] | None = None,
     asof: str | None = None,
     *,
     cache: _ScopeReadCache | None = None,
@@ -519,10 +516,10 @@ def _resolve_level(
     # only its own -- "what scope did this object belong to at the instant
     # its row closed", asked so a retired target reaches the handler's
     # `OBJECT_ALREADY_RETIRED` instead of a scope denial. A consumer read
-    # must not ask it: resolving a retired -- or ERASED -- row's scope puts
-    # its children back in the visible set, which carries a population past
-    # min_n and releases an aggregate computed over the erased subject's own
-    # rows. `resolve_owning_scope` is the only place it is ever set.
+    # must not ask it: resolving a retired row's scope puts its children back
+    # in the visible set, which carries a population past min_n and releases
+    # an aggregate computed over the retired subject's own rows.
+    # `resolve_owning_scope` is the only place it is ever set.
     if asof is None:
         obj = (
             store.read_current(obj_type, obj_id)
@@ -542,9 +539,6 @@ def _resolve_level(
     if obj is None:
         return None
 
-    if trace is not None and scope_path is None:
-        scope_path = (ScopePathStep(object_type=obj_type, object_id=obj_id),)
-
     for rule in policy.rules.get(obj_type, []):
         result = _apply_rule(
             policy,
@@ -555,8 +549,6 @@ def _resolve_level(
             level,
             rule,
             visited,
-            trace,
-            scope_path,
             asof,
             cache=cache,
         )
@@ -570,8 +562,6 @@ def _resolve_level(
         obj_id,
         level,
         visited,
-        trace,
-        scope_path,
         asof,
         cache=cache,
     )
@@ -586,8 +576,6 @@ def _apply_rule(
     level: str,
     rule: ScopeRule,
     visited: set[tuple[str, str, str]],
-    trace: _TraceCollector | None,
-    scope_path: tuple[ScopePathStep, ...] | None,
     asof: str | None = None,
     *,
     cache: _ScopeReadCache | None = None,
@@ -595,19 +583,11 @@ def _apply_rule(
     """One rule's answer for `level`, or `None` to fall through to the next
     rule (the dispatch ladder `_resolve_level`'s loop used to inline)."""
     if isinstance(rule, SelfScope):
-        result = str(obj_id) if rule.level == level else None
-        _record_rule(
-            trace, rule, obj_type, obj_id, level, result, scope_path
-        )
-        return result
+        return str(obj_id) if rule.level == level else None
 
     if isinstance(rule, DirectProperty):
         value = obj.payload.get(rule.property_name) if rule.level == level else None
-        result = str(value) if value is not None else None
-        _record_rule(
-            trace, rule, obj_type, obj_id, level, result, scope_path
-        )
-        return result
+        return str(value) if value is not None else None
 
     if isinstance(rule, ViaLink):
         # A retired object has no live links: `ActionContext.retire`
@@ -652,16 +632,6 @@ def _apply_rule(
         # row order: which parent comes first is which scope owns the object,
         # so it is part of the gate's answer rather than a detail of the read.
         for parent_id in parents:
-            parent_path = None
-            if trace is not None:
-                parent_path = (scope_path or ()) + (
-                    ScopePathStep(
-                        object_type=rule.parent_type,
-                        object_id=parent_id,
-                        via_link=rule.link_api_name,
-                        direction=rule.direction,
-                    ),
-                )
             result = _resolve_level(
                 policy,
                 store,
@@ -669,8 +639,6 @@ def _apply_rule(
                 parent_id,
                 level,
                 visited,
-                trace,
-                parent_path,
                 # The SAME instant, not the parent's own and not "now". The
                 # parent is admitted only if it was still live at `asof`
                 # (`_live_at`), which is what keeps a retired parent from
@@ -686,31 +654,7 @@ def _apply_rule(
                 cache=cache,
             )
             if result is not None:
-                _record_rule(
-                    trace,
-                    rule,
-                    obj_type,
-                    obj_id,
-                    level,
-                    result,
-                    (
-                        trace.last_resolved_path
-                        if trace is not None
-                        else parent_path
-                    ),
-                    tuple(parents) if trace is not None else (),
-                )
                 return result
-        _record_rule(
-            trace,
-            rule,
-            obj_type,
-            obj_id,
-            level,
-            None,
-            scope_path,
-            tuple(parents) if trace is not None else (),
-        )
         return None
 
     if isinstance(rule, CustomResolver):
@@ -725,64 +669,9 @@ def _apply_rule(
         # precondition refusal after retirement declares a second rule -- a
         # `DirectProperty` on a scope-key column survives it. Documented in
         # `docs/api-reference.md` and pinned in `tests/test_actions.py`.
-        result = rule.fn(store, obj_type, obj_id) if rule.level == level else None
-        _record_rule(
-            trace, rule, obj_type, obj_id, level, result, scope_path
-        )
-        return result
+        return rule.fn(store, obj_type, obj_id) if rule.level == level else None
 
     return None
-
-
-def _record_rule(
-    trace: _TraceCollector | None,
-    rule: ScopeRule,
-    obj_type: str,
-    obj_id: str,
-    requested_level: str | None,
-    result: str | None,
-    scope_path: tuple[ScopePathStep, ...] | None,
-    candidate_parent_ids: tuple[str, ...] = (),
-    *,
-    resolution_kind: Literal["scope", "contributor"] = "scope",
-) -> None:
-    if trace is None:
-        return
-    if isinstance(rule, SelfScope):
-        rule_kind: Literal[
-            "SelfScope", "DirectProperty", "ViaLink", "CustomResolver"
-        ] = "SelfScope"
-    elif isinstance(rule, DirectProperty):
-        rule_kind = "DirectProperty"
-    elif isinstance(rule, ViaLink):
-        rule_kind = "ViaLink"
-    else:
-        rule_kind = "CustomResolver"
-    recorded_path = scope_path or (
-        ScopePathStep(object_type=obj_type, object_id=obj_id),
-    )
-    trace.record_rule(
-        ScopeRuleTrace(
-            resolution_kind=resolution_kind,
-            rule_kind=rule_kind,
-            object_type=obj_type,
-            object_id=obj_id,
-            requested_level=requested_level,
-            matched=result is not None,
-            resolved_scope_id=result,
-            scope_path=recorded_path,
-            rule_level=getattr(rule, "level", None),
-            property_name=(
-                rule.property_name if isinstance(rule, DirectProperty) else None
-            ),
-            link_api_name=(
-                rule.link_api_name if isinstance(rule, ViaLink) else None
-            ),
-            direction=rule.direction if isinstance(rule, ViaLink) else None,
-            parent_type=rule.parent_type if isinstance(rule, ViaLink) else None,
-            candidate_parent_ids=candidate_parent_ids,
-        )
-    )
 
 
 def _climb_hierarchy(
@@ -792,8 +681,6 @@ def _climb_hierarchy(
     obj_id: str,
     level: str,
     visited: set[tuple[str, str, str]],
-    trace: _TraceCollector | None,
-    scope_path: tuple[ScopePathStep, ...] | None,
     asof: str | None = None,
     *,
     cache: _ScopeReadCache | None = None,
@@ -819,8 +706,6 @@ def _climb_hierarchy(
             obj_id,
             narrower_level,
             visited,
-            trace,
-            scope_path,
             asof,
             cache=cache,
         )
@@ -836,13 +721,6 @@ def _climb_hierarchy(
             narrow_id,
             level,
             visited,
-            trace,
-            (
-                scope_path
-                if trace is None
-                else (scope_path or ())
-                + (ScopePathStep(object_type=canonical_type, object_id=narrow_id),)
-            ),
             # A DIFFERENT object -- the canonical instance for the narrower
             # level -- and it is admitted on the same point-in-time terms as
             # the `ViaLink` parent hop, for the same reason: a canonical
@@ -874,7 +752,6 @@ def resolve_owning_scope(
     store: Store,
     obj_type: str,
     obj_id: str,
-    trace: _TraceCollector | None = None,
     *,
     include_retired: bool = False,
     cache: _ScopeReadCache | None = None,
@@ -919,9 +796,8 @@ def resolve_owning_scope(
     It exists for exactly one caller -- `ActionExecutor`'s target gate, which
     must tell "outside your scope" apart from "already retired" -- and must
     stay off for consumer
-    reads: a retired or erased row that still resolves puts its children back
-    in a reader's visible set, turning a min-N refusal into a released
-    aggregate.
+    reads: a retired row that still resolves puts its children back in a
+    reader's visible set, turning a min-N refusal into a released aggregate.
 
     Point-in-time rather than merely "retired rows allowed", because the two
     fail in opposite directions and both are authorization defects. Resolving
@@ -937,51 +813,43 @@ def resolve_owning_scope(
     handler's own refusal (`OBJECT_ALREADY_RETIRED`). `SCOPE_DENIED` does not
     mean one thing: it is raised at two places. One is a defense-in-depth
     refusal of a scope-bearing parameter that is not a `str` — parameter
-    validation rejects that first, so it is a floor under type confusion rather
-    than a path in normal use. The other fires wherever coverage cannot be
-    shown, and that is two situations rather than one: the chain resolved and
-    this consumer is outside it, which is the ordinary denial this gate does
-    not change; or the chain did not resolve at that instant, and
+    validation rejects that first, so it is a floor under type confusion
+    rather than a path in normal use. The other fires wherever coverage cannot
+    be shown, and that is two situations rather than one: the chain resolved
+    and this consumer is outside it, which is the ordinary denial this gate
+    does not change; or the chain did not resolve at that instant, and
     deny-by-default denies. Only the second belongs to this frame. Four rule
-    kinds are declared, and each meets retirement and erasure at its OWN hop:
+    kinds are declared, and each meets retirement at its OWN hop:
 
-    - `SelfScope` answers with the object's own id, which neither retirement
-      nor erasure takes away.
-    - `DirectProperty` reads the scope key off the payload, and
-      `erase_object_content` blanks by design what that rule reads, which no
-      history-aware read can recover. Retirement leaves the payload alone,
-      because this gate reads the newest row rather than the live one, so
-      erasure is the only lifecycle event this hop's OWN READ loses to. That is
-      the target itself when the target is `DirectProperty`-scoped; it is
-      equally an ANCESTOR whose own hop is `DirectProperty`, which denies a
-      `ViaLink`-scoped target whose link erasure preserved. Erasure destroying
-      the scope key is the point of erasure, not a gap in the gate.
-    - `ViaLink` climbs the `links` table, which erasure preserves, so erasure
-      costs this hop nothing. It resolves to nothing when none of the parents
-      it reaches resolves in turn — among them a parent already retired BEFORE
-      the target closed: its edge may still be readable at that instant, but
-      its own row is not admitted, so it cannot answer at the one instant this
-      gate asks about. One retired after the target — including in the same
-      cascade tick — still answers for it.
+    - `SelfScope` answers with the object's own id, which retirement does not
+      take away.
+    - `DirectProperty` reads the scope key off the payload, which retirement
+      leaves alone: this gate reads the newest row rather than the live one.
+    - `ViaLink` climbs the `links` table. It resolves to nothing when none of
+      the parents it reaches resolves in turn — among them a parent already
+      retired BEFORE the target closed: its edge may still be readable at that
+      instant, but its own row is not admitted, so it cannot answer at the one
+      instant this gate asks about. One retired after the target — including in
+      the same cascade tick — still answers for it.
     - `CustomResolver` is author code handed the raw `Store`, and the engine
-      does not reach inside it, so what a retired or erased object resolves to
-      is the resolver's own business rather than this frame's. The natural body
-      reads `read_current`, which is `None` for a retired object, so a resolver
+      does not reach inside it, so what a retired object resolves to is the
+      resolver's own business rather than this frame's. The natural body reads
+      `read_current`, which is `None` for a retired object, so a resolver
       written that way denies. A type that needs the precondition refusal after
       retirement declares a second rule — a `DirectProperty` on a scope-key
       column, which survives retirement.
 
     Each bullet is about one hop, never about one target, and the four are not
-    the whole chain. `ScopePolicy.rules` maps each type to an ORDERED list, so
-    a target declares as many of these hops as that list holds and is answered
-    by the first that resolves; and a level no rule of its own can answer
-    climbs to the canonical instance of a narrower scope, where a type declares
-    one — which is none of the four. What the engine's own hops share is the
+    the whole chain. `ScopePolicy.rules` maps each type to an ORDERED
+    list, so a target declares as many of these hops as that
+    list holds and is answered by the first that resolves; and a level no rule of its own can
+    answer climbs to the canonical instance of a narrower scope, where a type
+    declares one — which is none of the four. What the engine's own hops share is the
     frame: any object the engine has to read that had already been retired
     before the target closed is refused there, whichever of those hops reached
     it — so the hop that answers a target's level can fail on an object the
-    target's other hops never touch. A `CustomResolver` is outside that frame
-    only for the reads its own callable makes: the engine does not thread the
+    target's other hops never touch. A `CustomResolver` is outside that frame only
+    for the reads its own callable makes: the engine does not thread the
     instant into author code, so an ancestor the callable reaches for itself is
     read however it reads it, retired or not. Its ANSWER re-enters the engine,
     and every object the engine reads from there is refused on the frame's own
@@ -1005,8 +873,6 @@ def resolve_owning_scope(
             obj_id,
             level,
             set(),
-            trace,
-            None,
             asof,
             cache=cache,
         )
@@ -1020,8 +886,6 @@ def _resolve_contributor(
     obj_type: str,
     obj_id: str,
     visited: set[tuple[str, str]],
-    trace: _TraceCollector | None = None,
-    scope_path: tuple[ScopePathStep, ...] | None = None,
 ) -> str | None:
     key = (obj_type, obj_id)
     if key in visited or len(visited) >= _MAX_DEPTH:
@@ -1036,50 +900,15 @@ def _resolve_contributor(
     if obj is None:
         return None
 
-    if trace is not None and scope_path is None:
-        scope_path = (ScopePathStep(object_type=obj_type, object_id=obj_id),)
-
     result: str | None
     for rule in policy.contributor_rules.get(obj_type, []):
         if isinstance(rule, SelfScope):
-            result = str(obj_id)
-            _record_rule(
-                trace,
-                rule,
-                obj_type,
-                obj_id,
-                None,
-                result,
-                scope_path,
-                resolution_kind="contributor",
-            )
-            return result
+            return str(obj_id)
 
         if isinstance(rule, DirectProperty):
             value = obj.payload.get(rule.property_name)
             if value is not None:
-                result = str(value)
-                _record_rule(
-                    trace,
-                    rule,
-                    obj_type,
-                    obj_id,
-                    None,
-                    result,
-                    scope_path,
-                    resolution_kind="contributor",
-                )
-                return result
-            _record_rule(
-                trace,
-                rule,
-                obj_type,
-                obj_id,
-                None,
-                None,
-                scope_path,
-                resolution_kind="contributor",
-            )
+                return str(value)
             continue
 
         if isinstance(rule, ViaLink):
@@ -1088,67 +917,19 @@ def _resolve_contributor(
             else:
                 parents = store.links_to(rule.link_api_name, obj_id)
             for parent_id in parents:
-                parent_path = None
-                if trace is not None:
-                    parent_path = (scope_path or ()) + (
-                        ScopePathStep(
-                            object_type=rule.parent_type,
-                            object_id=parent_id,
-                            via_link=rule.link_api_name,
-                            direction=rule.direction,
-                        ),
-                    )
                 result = _resolve_contributor(
                     policy,
                     store,
                     rule.parent_type,
                     parent_id,
                     visited,
-                    trace,
-                    parent_path,
                 )
                 if result is not None:
-                    _record_rule(
-                        trace,
-                        rule,
-                        obj_type,
-                        obj_id,
-                        None,
-                        result,
-                        (
-                            trace.last_resolved_path
-                            if trace is not None
-                            else parent_path
-                        ),
-                        tuple(parents) if trace is not None else (),
-                        resolution_kind="contributor",
-                    )
                     return result
-            _record_rule(
-                trace,
-                rule,
-                obj_type,
-                obj_id,
-                None,
-                None,
-                scope_path,
-                tuple(parents) if trace is not None else (),
-                resolution_kind="contributor",
-            )
             continue
 
         if isinstance(rule, CustomResolver):
             result = rule.fn(store, obj_type, obj_id)
-            _record_rule(
-                trace,
-                rule,
-                obj_type,
-                obj_id,
-                None,
-                result,
-                scope_path,
-                resolution_kind="contributor",
-            )
             if result is not None:
                 return result
             continue
@@ -1161,7 +942,6 @@ def resolve_contributor(
     store: Store,
     obj_type: str,
     obj_id: str,
-    trace: _TraceCollector | None = None,
 ) -> str | None:
     """Resolve "the identity behind a row" (e.g. a Response's authoring
     Person) for one object, via `policy.contributor_rules.get(obj_type)`
@@ -1178,4 +958,4 @@ def resolve_contributor(
     ONE unknown identity between them, never one apiece, so losing the ability
     to see who wrote a row can never enlarge a min-N population.
     """
-    return _resolve_contributor(policy, store, obj_type, obj_id, set(), trace)
+    return _resolve_contributor(policy, store, obj_type, obj_id, set())

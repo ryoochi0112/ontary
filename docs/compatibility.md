@@ -483,8 +483,8 @@ description text should re-read it.
 
 An object type listed in `ScopePolicy.unscoped_types` while it **also** declares
 `ScopePolicy.rules[...]` is now refused. `ontology.validate()` raises
-`SCOPE_POLICY_ERROR` naming every offending type, `ontary explain` reports it as a
-finding, and every read of that type refuses at the call.
+`SCOPE_POLICY_ERROR` naming every offending type, `ontary validate` reports it as
+a finding, and every read of that type refuses at the call.
 
 | what you declared | 0.6 | 0.8 |
 | --- | --- | --- |

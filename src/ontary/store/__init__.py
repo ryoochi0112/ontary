@@ -29,7 +29,6 @@ from ontary.audit import EffectRecord as EffectRecord
 from ontary.audit import WriteRecord as WriteRecord
 from ontary.store.inmemory import InMemoryStore as InMemoryStore
 from ontary.store.postgres import PostgresStore as PostgresStore
-from ontary.store.protocol import EraseResult as EraseResult
 from ontary.store.protocol import Store as Store
 from ontary.store.protocol import (
     accept_ontology_fingerprint as accept_ontology_fingerprint,

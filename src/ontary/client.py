@@ -63,14 +63,7 @@ from ontary.actions import ActionError, ActionExecutor, TypedHandler
 from ontary.audit import AuditEntry, CapabilityAccessRecord
 from ontary.declarations import Declarations, declarations
 from ontary.effects import EffectDispatcher
-from ontary.errors import ValidationFailed, VisibilityError
-from ontary.explain import (
-    DecisionTrace,
-    MinNTrace,
-    ScanReport,
-    _ScanCollector,
-    _TraceCollector,
-)
+from ontary.errors import ValidationFailed
 from ontary.functions import BoundQuery
 from ontary.ingest import IngestError, IngestReport, bulk_link, bulk_upsert
 from ontary.meta import OntologyRegistry
@@ -229,116 +222,6 @@ class OntologyRuntime:
         )
         for api_name, (fn, params_cls) in (handlers or {}).items():
             self.actions._register(api_name, fn, params_cls)
-
-    def explain_read(
-        self, consumer: Consumer, obj_type: str, id: str
-    ) -> DecisionTrace:
-        """Explain one guarded read without changing its decision.
-
-        This operator-only method may distinguish a denied row from a
-        nonexistent row. It intentionally lives on ``OntologyRuntime`` and
-        is absent from consumer-bound clients and MCP.
-        """
-        return self._explain_row(consumer, obj_type, id)
-
-    def explain_list(
-        self,
-        consumer: Consumer,
-        obj_type: str,
-        where: dict[str, Any] | None = None,
-    ) -> list[DecisionTrace]:
-        """Return one decision trace per raw row matching ``where``.
-
-        Denied rows are included because this is an operator oracle. Each
-        trace carries the same aggregate-relevant min-N outcome for the
-        selected visible population; that diagnostic does not add a min-N
-        gate to ordinary list reads.
-        """
-        # Reproduce the ordinary list path's pre-row coherence, field, and
-        # operator gates directly so their refusals are byte-identical to a
-        # real list call. Do not fetch its redacted rows: explain must also
-        # include raw matching rows that the ordinary path hides. The
-        # `_require_coherent_scope` gate snapshots `where` once into
-        # `disclosure`; pass that disclosure to `_validate_read_fields`, then
-        # reuse `disclosure.where` for both the matcher and the min-N
-        # selection.
-        disclosure = self.query._require_coherent_scope(obj_type, where=where)
-        self.query._validate_read_fields(consumer, obj_type, disclosure, None)
-        normalized_where = disclosure.where
-        where_matcher = self.query._compile_where(obj_type, normalized_where)
-        selection_trace = _TraceCollector(
-            obj_type, "<selection>", self._definition.policy.min_n
-        )
-        min_n = self.query._selection_min_n(
-            consumer, obj_type, normalized_where, selection_trace
-        )
-
-        traces: list[DecisionTrace] = []
-        for row in self._store.read_all(obj_type):
-            # Explain must use the exact matcher used by ordinary reads.
-            # This keeps operator semantics from diverging on this raw-row path.
-            if where_matcher is not None and not where_matcher(row.payload):
-                continue
-            traces.append(
-                self._explain_row(
-                    consumer,
-                    obj_type,
-                    row.lineage.object_id,
-                    min_n=min_n,
-                )
-            )
-        return traces
-
-    def explain_scan(
-        self,
-        consumer: Consumer,
-        obj_type: str,
-        where: dict[str, Any] | None = None,
-    ) -> ScanReport:
-        """Report scan counts for one governed read as an operator oracle.
-
-        This runs the ordinary unbounded list selection once.
-        ``rows_scanned`` counts every raw stored row the walk consumes before
-        applying ``where``; ``rows_returned`` counts matching visible rows;
-        and ``rows_hidden_by_scope`` counts only rows rejected at the scope
-        branch after matching ``where``. It intentionally lives on
-        ``OntologyRuntime`` and is absent from consumer-bound clients and MCP.
-        """
-        collector = _ScanCollector()
-        self.query.get_objects(
-            consumer,
-            obj_type,
-            where,
-            limit=None,
-            _redact_rows=False,
-            _scan=collector,
-        )
-        return collector.build()
-
-    def _explain_row(
-        self,
-        consumer: Consumer,
-        obj_type: str,
-        obj_id: str,
-        *,
-        min_n: MinNTrace | None = None,
-    ) -> DecisionTrace:
-        collector = _TraceCollector(
-            obj_type, obj_id, self._definition.policy.min_n
-        )
-        try:
-            row = self.query.get_object(
-                consumer, obj_type, obj_id, trace=collector
-            )
-        except VisibilityError as exc:
-            return collector.build(
-                "denied", error_code=exc.code, min_n=min_n
-            )
-        if row is None:
-            return collector.build("not_found", min_n=min_n)
-        if collector.redactions:
-            return collector.build("redacted", min_n=min_n)
-        return collector.build("visible", min_n=min_n)
 
     def drain_effects(
         self, *, limit: int = 100, now: datetime | None = None

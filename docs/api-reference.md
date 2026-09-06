@@ -23,7 +23,6 @@ read, serve — start with the [README](../README.md).
 - [Security](#security)
 - [Stores](#stores)
 - [Bulk ingest](#bulk-ingest)
-- [`ontary.erase`](#ontaryerase)
 - [`ontary.connect`](#ontaryconnect)
 - [MCP server](#mcp-server)
 - [Descriptor authoring](#descriptor-authoring)
@@ -101,12 +100,6 @@ preflight validation and lives in `ontary.connect`.
 
 `ERROR_CODES`, `ErrorCodeInfo`, `Kind`.
 
-### `ontary.explain`
-
-Operator trace models: `DecisionTrace`, `ScopeRuleTrace`, `ScopePathStep`,
-`RedactionTrace`, `MinNTrace`, and `ScanReport`. These are canonical submodule
-imports and are not exported from the `ontary` front door.
-
 ### `ontary.fingerprint`
 
 `OntologyFingerprint`, `fingerprint_ontology`.
@@ -118,21 +111,6 @@ imports and are not exported from the `ontary` front door.
 ### `ontary.ingest`
 
 `IngestError`, `IngestReport`, `bulk_link`, `bulk_upsert`.
-
-### `ontary.erase`
-
-`EraseReport`, `erase_object`.
-
-This is an operator-only Python runbook API. It erases one object by
-`(object_type, id)` and is deliberately not in `ontary.__all__`; it is not
-reachable from `OntologyClient`, `ActionContext`, or MCP. The operator supplies
-`operator=...`. Erasure closes a live object row and purges content from all of
-that object's object rows, matching audit parameters, and effect-outbox
-payloads, while keeping structural tombstones and appending an audit entry.
-Repeating a completed erasure with no newly matched content returns an
-`OBJECT_ALREADY_ERASED` no-op report; a repeat with late-arriving content runs the
-purge again and reports a real erasure; an unknown object id raises
-`OBJECT_ERASURE_NOT_FOUND`.
 
 ### `ontary.mcp_server`
 
@@ -367,32 +345,6 @@ action executor, bound handlers — wired exactly once.
 
 - **`.for_consumer(consumer, *, capabilities=None, effects=None) -> OntologyClient`** —
   a cheap view. Serving many consumers from one process never re-wires anything.
-- **`.explain_read(consumer, obj_type, id) -> DecisionTrace`** — explains one
-  guarded read, including every evaluated scope rule and resolution path,
-  sensitivity redactions, the final verdict (`visible`, `redacted`, `denied`, or
-  `not_found`), and the error code a real read would raise, if any.
-- **`.explain_list(consumer, obj_type, where=None) -> list[DecisionTrace]`** —
-  returns one trace per raw matching row, including denied rows. Every trace also
-  carries the selected visible population's aggregate-relevant min-N outcome;
-  this is diagnostic context and does not add a min-N gate to ordinary lists.
-
-> **Operator trust warning.** Explain reveals hidden-row existence; grant access
-> to it only at the same trust level as holding the raw store. It is deliberately
-> absent from `OntologyClient` and is never registered as an MCP tool.
-
-Import the frozen result model from its canonical submodule:
-
-```python
-from ontary.explain import DecisionTrace
-```
-
-`DecisionTrace.rules` contains `ScopeRuleTrace` entries with rule kind,
-requested level, match result, resolved scope id, and a `scope_path` of object
-type/id hops (ViaLink edges name the link and direction). `redactions` names the
-fields removed and the consumer kind. `min_n` is `not_applicable` for a single
-read and `passed`/`failed` for an explained list selection; its count is included
-because the entire surface is operator-only.
-
 ### `OntologyClient(ontology, store, consumer, *, capabilities=None, effects=None)`
 
 Bound to exactly one `(ontology, store, consumer)`. Constructing it directly works
@@ -866,8 +818,6 @@ read_last(obj_type, obj_id) -> StoredObject | None
 read_all(obj_type) -> list[StoredObject]
 read_page(obj_type, after_key=None, batch=500) -> list[PagedRow]
 retire_object(object_type, obj_id) -> StoredObject
-erase_object_content(object_type, obj_id) -> EraseResult
-object_erasure_state(object_type, obj_id) -> tuple[bool, bool]
 create_link(link_type, from_id, to_id) -> None
 close_link(link_type, from_id, to_id) -> bool
 links_from(link_type, from_id) -> list[str]
@@ -888,9 +838,9 @@ The three history-aware reads exist for ONE caller: the action executor's target
 which has to tell "outside your scope" apart from "already retired". A retired object
 still owns the scope it was in, and `ActionContext.retire` closes its links, so the gate
 resolves that scope from the object's last row plus the links it held when that row
-closed. Consumer reads deliberately do not: resolving a retired — or erased — row's
-scope would put its children back in a reader's visible set, carrying a population past
-`min_n` and releasing an aggregate over the erased subject's own rows. A backend that
+closed. Consumer reads deliberately do not: resolving a retired row's scope would put
+its children back in a reader's visible set, carrying a population past `min_n` and
+releasing an aggregate over the retired subject's own rows. A backend that
 filtered retired rows out of `read_last`, or live-only links out of the `_asof` pair,
 would deny a retired object's own owner instead.
 
@@ -925,57 +875,56 @@ owner permanently. At the target's `valid_to` the earlier-retired ancestor was
 already closed and the surviving one was not, so one instant settles both.
 
 <!-- scope-denied-consequences:start -->
-Where the chain resolves and the consumer covers it, the gate reaches the handler's own
-refusal (`OBJECT_ALREADY_RETIRED`). `SCOPE_DENIED` does not mean one thing: it is raised
-at two places. One is a defense-in-depth refusal of a scope-bearing parameter that is
-not a `str` — parameter validation rejects that first, so it is a floor under type
-confusion rather than a path in normal use. The other fires wherever coverage cannot be
-shown, and that is two situations rather than one: the chain resolved and this consumer
-is outside it, which is the ordinary denial this gate does not change; or the chain did
-not resolve at that instant, and deny-by-default denies. Only the second belongs to this
-frame. Four rule kinds are declared, and each meets retirement and erasure at its OWN
-hop:
+Where the chain resolves and the consumer covers it, the gate reaches the
+handler's own refusal (`OBJECT_ALREADY_RETIRED`). `SCOPE_DENIED` does not
+mean one thing: it is raised at two places. One is a defense-in-depth
+refusal of a scope-bearing parameter that is not a `str` — parameter
+validation rejects that first, so it is a floor under type confusion
+rather than a path in normal use. The other fires wherever coverage cannot
+be shown, and that is two situations rather than one: the chain resolved
+and this consumer is outside it, which is the ordinary denial this gate
+does not change; or the chain did not resolve at that instant, and
+deny-by-default denies. Only the second belongs to this frame. Four rule
+kinds are declared, and each meets retirement at its OWN hop:
 
-- `SelfScope` answers with the object's own id, which neither retirement nor erasure
-  takes away.
-- `DirectProperty` reads the scope key off the payload, and `erase_object_content`
-  blanks by design what that rule reads, which no history-aware read can recover.
-  Retirement leaves the payload alone, because this gate reads the newest row rather
-  than the live one, so erasure is the only lifecycle event this hop's OWN READ loses
-  to. That is the target itself when the target is `DirectProperty`-scoped; it is
-  equally an ANCESTOR whose own hop is `DirectProperty`, which denies a `ViaLink`-scoped
-  target whose link erasure preserved. Erasure destroying the scope key is the point of
-  erasure, not a gap in the gate.
-- `ViaLink` climbs the `links` table, which erasure preserves, so erasure costs this hop
-  nothing. It resolves to nothing when none of the parents it reaches resolves in turn —
-  among them a parent already retired BEFORE the target closed: its edge may still be
-  readable at that instant, but its own row is not admitted, so it cannot answer at the
-  one instant this gate asks about. One retired after the target — including in the same
-  cascade tick — still answers for it.
-- `CustomResolver` is author code handed the raw `Store`, and the engine does not reach
-  inside it, so what a retired or erased object resolves to is the resolver's own
-  business rather than this frame's. The natural body reads `read_current`, which is
-  `None` for a retired object, so a resolver written that way denies. A type that needs
-  the precondition refusal after retirement declares a second rule — a `DirectProperty`
-  on a scope-key column, which survives retirement.
+- `SelfScope` answers with the object's own id, which retirement does not
+  take away.
+- `DirectProperty` reads the scope key off the payload, which retirement
+  leaves alone: this gate reads the newest row rather than the live one.
+- `ViaLink` climbs the `links` table. It resolves to nothing when none of
+  the parents it reaches resolves in turn — among them a parent already
+  retired BEFORE the target closed: its edge may still be readable at that
+  instant, but its own row is not admitted, so it cannot answer at the one
+  instant this gate asks about. One retired after the target — including in
+  the same cascade tick — still answers for it.
+- `CustomResolver` is author code handed the raw `Store`, and the engine
+  does not reach inside it, so what a retired object resolves to is the
+  resolver's own business rather than this frame's. The natural body reads
+  `read_current`, which is `None` for a retired object, so a resolver
+  written that way denies. A type that needs the precondition refusal after
+  retirement declares a second rule — a `DirectProperty` on a scope-key
+  column, which survives retirement.
 
-Each bullet is about one hop, never about one target, and the four are not the whole
-chain. `ScopePolicy.rules` maps each type to an ORDERED list, so a target declares as
-many of these hops as that list holds and is answered by the first that resolves; and a
-level no rule of its own can answer climbs to the canonical instance of a narrower
-scope, where a type declares one — which is none of the four. What the engine's own hops
-share is the frame: any object the engine has to read that had already been retired
-before the target closed is refused there, whichever of those hops reached it — so the
-hop that answers a target's level can fail on an object the target's other hops never
-touch. A `CustomResolver` is outside that frame only for the reads its own callable
-makes: the engine does not thread the instant into author code, so an ancestor the
-callable reaches for itself is read however it reads it, retired or not. Its ANSWER
-re-enters the engine, and every object the engine reads from there is refused on the
-frame's own terms — the canonical instance a narrower answer names, and any object whose
-rules the engine goes on to ask, whose row is checked before its own resolver runs.
+Each bullet is about one hop, never about one target, and the four are not
+the whole chain. `ScopePolicy.rules` maps each type to an ORDERED
+list, so a target declares as many of these hops as that
+list holds and is answered by the first that resolves; and a level no rule of its own can
+answer climbs to the canonical instance of a narrower scope, where a type
+declares one — which is none of the four. What the engine's own hops share is the
+frame: any object the engine has to read that had already been retired
+before the target closed is refused there, whichever of those hops reached
+it — so the hop that answers a target's level can fail on an object the
+target's other hops never touch. A `CustomResolver` is outside that frame only
+for the reads its own callable makes: the engine does not thread the
+instant into author code, so an ancestor the callable reaches for itself is
+read however it reads it, retired or not. Its ANSWER re-enters the engine,
+and every object the engine reads from there is refused on the frame's own
+terms — the canonical instance a narrower answer names, and any object
+whose rules the engine goes on to ask, whose row is checked before its own
+resolver runs.
 
-Every denial in this list fails closed — the object's own owner is denied, nothing is
-disclosed.
+Every denial in this list fails closed — the object's own owner is denied,
+nothing is disclosed.
 <!-- scope-denied-consequences:end -->
 
 Three implementations ship, all proven against one 192-assertion conformance suite:
@@ -1000,11 +949,9 @@ longer than the default, or keep capability calls short.
 
 `retire_object` closes an object's current row without inserting a replacement;
 it does not cascade links. `close_link` closes the one live link matching all
-three identifiers. `erase_object_content` is the backend-local operator erasure
-primitive: it closes a live object, purges content from object, audit, and
-outbox rows, and leaves their structural tombstones in place. All three shipped
-backends implement these verbs. The action-context cascade is layered above the
-store's object-retirement primitive.
+three identifiers. All three shipped backends implement these verbs. The
+action-context cascade is layered above the store's object-retirement
+primitive.
 
 ### Schema versioning
 
@@ -1301,7 +1248,6 @@ table below is generated from it.
 | `UPCAST_FAILED` | Raised when a stored row cannot be read as the current declared version. The message distinguishes two causes because their fixes differ: the chain has no step for the carried version (normally a row written by a NEWER ontology than this declaration, i.e. a downgrade, since `ontology.validate()` rejects an incomplete chain), or an author's upcaster raised on this payload. A read failure is deliberately not a silent fallback to the raw payload, which would hand a consumer data in a shape the declaration says does not exist. |
 | `ONTOLOGY_DRIFT` | Raised at construction when the declared ontology is not the one this store's rows were written under (ontology-evolution AC3/AC4). It is refused BEFORE any query, for the same reason as the `STORE_VERSION_UNSUPPORTED` conflict: a store the engine cannot honestly serve must not answer a read half-correctly first. Drift is not hypothetical; the measured mild case is a row the typed reader refuses while the string reader returns it. The message names every changed type. The two explicit ways forward are to migrate rows (`ontary.migrate.migrate_object_type`, then `accept_ontology_fingerprint`) or accept drift at the call site with `ObjectStore(..., accept_ontology_drift=True)`, which proceeds and writes an audit entry. |
 | `CARDINALITY_VIOLATION` | A link creation would violate its LinkTypeDef cardinality. |
-| `OBJECT_ALREADY_ERASED` | An operator erasure targeted an object whose content was already erased; when no newly matched content is found, it returns a coded no-op report rather than raising. |
 | `OBJECT_ALREADY_RETIRED` | A retirement targeted an object whose current row is already closed. |
 | `STORE_VERSION_UNSUPPORTED` | Raised at store construction when the store's schema stamp is not this engine's `SCHEMA_VERSION` -- a SQLite file's `PRAGMA user_version`, or a Postgres database's `schema_meta` row. Neither backend carries a migration ladder: a store written by a different ontary schema shape is REFUSED, never migrated in place and never adopted. An unstamped store that already has an `objects` table is refused for the same reason -- stamping a shape this engine cannot read would be a lying stamp, and every later query would fail as a confusing uncoded SQL error instead. The message names BOTH the store's and the engine's versions, so an operator knows exactly what to upgrade; the way forward is a matching ontary version, or a fresh store the data is migrated into. |
 | `STORE_BUSY` | A SQLite transaction could not acquire or retain its database lock within ObjectStore's configured busy timeout; retry after the competing writer finishes or increase busy_timeout. This is a conflict, not a precondition: retrying is the remedy, and the kind travels on the MCP wire so callers can branch on retryability. |
@@ -1351,7 +1297,6 @@ table below is generated from it.
 | `MISSING_MAPPED_FIELD` | A map_batch record's property_map referenced a canonical field entirely absent from that record (not merely None). |
 | `NON_NUMERIC_AGGREGATE` | `GuardedQuery.aggregate`'s `value_field` is declared a non-numeric `PropertyType` (anything other than `int`/`float`, such as str/json/datetime/bool). It is checked against the declared type before rows are iterated or coerced, so values that merely look numeric cannot bypass the type contract (spec `m35-sdk-refactor` §6 AC7). |
 | `OBJECT_NOT_FOUND` | An update targeted a non-existent object. |
-| `OBJECT_ERASURE_NOT_FOUND` | An operator erasure targeted an object with no stored row. |
 | `OBJECT_RETIRE_NOT_FOUND` | A retirement targeted an object with no stored row. |
 | `ONTOLOGY_INVALID` | `OntologyRegistry.validate()` rejected a declaration because its cross-references were invalid. |
 | `SCOPE_POLICY_ERROR` | A ScopePolicy declaration is unusable: a rule references an undeclared object type, link type, or scope level; a type declares an empty contributor rule list; or a type is listed in unscoped_types while also declaring scope rules. |
@@ -1372,7 +1317,7 @@ table below is generated from it.
 | `MIN_N_VIOLATION` | An aggregate would be computed over fewer than min_n distinct contributors. |
 | `VISIBILITY_DENIED` | A single-object read/write targeted an object outside the consumer's scope. |
 
-*55 codes across 7 kinds.*
+*53 codes across 7 kinds.*
 
 ---
 

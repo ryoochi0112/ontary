@@ -150,21 +150,9 @@ ERROR_CODES: dict[str, ErrorCodeInfo] = {
         kind="validation",
         description="An update targeted a non-existent object.",
     ),
-    "OBJECT_ERASURE_NOT_FOUND": ErrorCodeInfo(
-        kind="validation",
-        description="An operator erasure targeted an object with no stored row.",
-    ),
     "OBJECT_RETIRE_NOT_FOUND": ErrorCodeInfo(
         kind="validation",
         description="A retirement targeted an object with no stored row.",
-    ),
-    "OBJECT_ALREADY_ERASED": ErrorCodeInfo(
-        kind="conflict",
-        description=(
-            "An operator erasure targeted an object whose content was already "
-            "erased; when no newly matched content is found, it returns a "
-            "coded no-op report rather than raising."
-        ),
     ),
     "OBJECT_ALREADY_RETIRED": ErrorCodeInfo(
         kind="conflict",

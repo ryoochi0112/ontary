@@ -232,8 +232,9 @@ def test_ontology_validate_refuses_the_intersection() -> None:
 
 def test_diagnose_reports_the_intersection_without_raising() -> None:
     """`diagnose` exists to report every defect in one sweep. A rule that only
-    `validate()` knows about is invisible to the author running `ontary explain`
-    -- and `_collect_findings` reported nothing here before this change."""
+    `validate()` knows about is invisible to the author running
+    `ontary validate` -- and `_collect_findings` reported nothing here before
+    this change."""
     definition, _store_ = _incoherent()
 
     findings = _collect_findings(definition)

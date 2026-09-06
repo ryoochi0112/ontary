@@ -247,10 +247,10 @@ def test_include_retired_default_is_off_and_a_retired_row_resolves_nothing(
     silence. Asked here about a RETIRED row directly, the two settings must
     differ: off resolves nothing, on resolves the scope the row owned.
 
-    That difference is the disclosure boundary. A retired or erased row that
-    still resolves puts its children back in a reader's visible set, which
-    carries a population past min_n and releases an aggregate computed over
-    the erased subject's own rows.
+    That difference is the disclosure boundary. A retired row that still
+    resolves puts its children back in a reader's visible set, which carries a
+    population past min_n and releases an aggregate computed over the retired
+    subject's own rows.
     """
     registry = _library_registry(make_registry)
     store = make_store(registry)

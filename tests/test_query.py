@@ -24,7 +24,7 @@ import ontary.query as query_module
 from ontary import _typed_api
 from ontary.actions import ActionContext, ActionExecutor
 from ontary.authoring import ActionParams
-from ontary.client import OntologyClient, OntologyRuntime
+from ontary.client import OntologyClient
 from ontary.errors import InternalError, ValidationFailed, VisibilityError
 from ontary.functions import BoundQuery
 from ontary.meta import (
@@ -717,65 +717,6 @@ def test_exists_bound_matches_unbounded_walk_over_generated_row_shapes(
         truth = query.get_objects(consumer, "Book", where, limit=None)
         assert query.exists(consumer, "Book", where) is (truth != []), case
         assert query.count(consumer, "Book", where) == len(truth), case
-
-
-@pytest.mark.parametrize(
-    ("where_id", "where"),
-    [
-        ("no-where", None),
-        ("rating-gte-1", {"rating": {"gte": 1.0}}),
-    ],
-    ids=["no-where", "rating-gte-1"],
-)
-@pytest.mark.parametrize("length", range(6), ids=lambda length: f"length-{length}")
-def test_scan_report_counts_generated_row_shapes(
-    length: int,
-    where_id: str,
-    where: dict[str, Any] | None,
-    make_registry: RegistryFactory,
-    make_policy: PolicyFactory,
-    make_store: StoreFactory,
-) -> None:
-    """Count scan outcomes over every VSRW sequence of length 0..5.
-
-    ``rows_scanned`` counts every raw row consumed by the unbounded walk,
-    ``rows_returned`` counts visible rows that pass ``where``, and
-    ``rows_hidden_by_scope`` counts ``S`` but not ``R``. A counter defect
-    that first miscounts only once 5+ rejected rows precede the first visible
-    row is not covered by this family.
-    """
-    consumer = _human("shelf", "shelf-1")
-
-    for row_kinds in product("VSRW", repeat=length):
-        shape = "".join(row_kinds)
-        registry = _library_registry(make_registry)
-        store = make_store(registry)
-        _seed_two_shelves(store)
-        for index, kind in enumerate(row_kinds):
-            store.insert(
-                "Book",
-                {"id": f"book-{index}", **_BOOK_SHAPE_ROWS[kind]},
-                SRC,
-            )
-        policy = _library_policy(make_policy)
-        policy.row_visibility = {"Book": _book_shape_row_is_visible}
-        runtime = OntologyRuntime(
-            OntologyDef(name="library", registry=registry, policy=policy),
-            store,
-        )
-        case = f"shape={shape or '<empty>'}, where={where_id}"
-
-        truth = runtime.query.get_objects(
-            consumer, "Book", where, limit=None
-        )
-        report = runtime.explain_scan(consumer, "Book", where)
-        assert report.rows_returned == len(truth), case
-        assert report.rows_scanned == len(store.read_all("Book")), case
-        assert report.rows_hidden_by_scope == row_kinds.count("S"), case
-        if "S" in row_kinds and "R" in row_kinds:
-            assert report.rows_hidden_by_scope != (
-                row_kinds.count("S") + row_kinds.count("R")
-            ), case
 
 
 def test_exists_is_true_when_the_first_row_matches(

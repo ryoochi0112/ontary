@@ -236,73 +236,6 @@ must remain registered while any old row still needs it; after the report has
 rewritten every row at the current version, it can become dead code for that
 type.
 
-## 4. Debug a hidden row with explain
-
-Explain is an operator-only oracle. A consumer should continue to receive the
-ordinary hidden-row result, while an operator with access to the runtime can
-call `OntologyRuntime.explain_read` and inspect the decision trace, including
-the resolved scope path and refusal code.
-`DecisionTrace` is deliberately imported from `ontary.explain`; it is not a
-front-door consumer API and is not served through MCP.
-
-<!-- cookbook-explain-hidden-row-runnable:start -->
-```python
-from ontary import (
-    Consumer,
-    DirectProperty,
-    ObjectStore,
-    Ontology,
-    OntologyObject,
-    Source,
-    prop,
-)
-from ontary.explain import DecisionTrace
-from ontary.testing import raises_code
-
-ontology = Ontology(name="explain-demo", scope_levels=["org"])
-
-
-@ontology.object(
-    layer="L0",
-    scope=[DirectProperty(level="org", property_name="org_id")],
-)
-class Document(OntologyObject):
-    id: str = prop(primary_key=True)
-    org_id: str = prop(scope_level="org")
-    title: str
-
-
-ontology.validate()
-store = ObjectStore(ontology.registry)
-store.insert(
-    "Document",
-    {"id": "doc-1", "org_id": "org-a", "title": "Private"},
-    Source(source_system="cookbook"),
-)
-runtime = ontology.bind(store)
-consumer = Consumer(
-    actor_id="reader-b",
-    role="Member",
-    scope_level="org",
-    scope_id="org-b",
-    kind="human",
-)
-
-with raises_code("VISIBILITY_DENIED"):
-    runtime.for_consumer(consumer).get(Document, "doc-1")
-trace = runtime.explain_read(consumer, "Document", "doc-1")
-assert isinstance(trace, DecisionTrace)
-assert trace.verdict == "denied"
-assert trace.error_code == "VISIBILITY_DENIED"
-assert trace.rules[0].resolved_scope_id == "org-a"
-```
-<!-- cookbook-explain-hidden-row-runnable:end -->
-
-Do not add `explain_read` to an `OntologyClient` wrapper or MCP tool: the
-operator trace can reveal that a hidden row exists. For command-line diagnosis,
-use the corresponding `ontary explain` command with an explicitly authorized
-operator consumer.
-
 ## 5. Serve MCP in development
 
 The Python setup below is doc-tested. The shell command is intentionally not
@@ -336,12 +269,5 @@ ontary serve your_app.ontology:ontology --dev --store ./dev.sqlite --port 8000
 `ontary serve --dev` binds to `127.0.0.1` only. Its labeled development
 consumer is fail-closed: it sees unscoped rows only, and it cannot execute
 actions on scoped ontologies. If a scoped row is hidden while you exercise a
-local server, debug the decision with `ontary explain` rather than weakening the
-scope declaration, for example:
-
-```bash
-ontary explain your_app.ontology:ontology \
-  --consumer Member:org:org-a \
-  --read Document:doc-1 \
-  --store ./dev.sqlite
-```
+local server, review the type's `ScopePolicy` declaration rather than weakening
+it — see [Scope policy](api-reference.md#scope-policy).

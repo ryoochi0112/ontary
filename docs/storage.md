@@ -107,28 +107,4 @@ and code `STORE_VERSION_UNSUPPORTED`, naming the engine and store versions. Movi
 store across schema versions is an explicit operator step: open it with the matching
 ontary version, or migrate the data into a fresh store.
 
-## Operator erasure runbook
-
-For a data-subject erasure request, run `ontary erase pkg.module:ontology
---store ontary.sqlite --type Person --id person-123 --operator privacy-ops`.
-The command purges content from the object's current and historical rows, matching
-audit parameters, and effect-outbox payloads while structure and lineage survive
-in audited tombstone rows; this matching is structural, not a completeness
-guarantee. Detection reaches a bare `id`, the generic `object_id`/`object_ids`/
-`target_id`/`target_ids` pairs, and `*_id`/`*_ids` keys whose trailing
-underscore-separated stem segments, concatenated case-insensitively, name the
-erased object type; a mismatched paired `*_type` suppresses the match. It does
-not reach `owner_id`, `actor_id`, or `assignee_id` on an unrelated stem, prose
-mentions of the subject in `params`, free text in `EffectRecord.error`, or free
-text in outbox `last_error`. Commit `5445af8` added clearing of effect
-payloads/errors and outbox `last_error` for records matched by another
-reference, and R1 added structured detection through `audit_log.writes`; the
-listed residuals still do not trigger detection by themselves, so operators
-must review and handle them manually.
-`--operator` defaults to the OS user when omitted. Repeating an already
-completed request with no newly matched content prints the coded
-`OBJECT_ALREADY_ERASED` no-op report and exits successfully; a repeat with late
-content runs the purge again and reports a real erasure. A never-stored id
-prints `OBJECT_ERASURE_NOT_FOUND` and exits non-zero.
-
 [Return to the README](../README.md) · [See the full storage API](api-reference.md#stores)

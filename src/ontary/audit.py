@@ -107,15 +107,13 @@ class AuditEntry(BaseModel):
     # audited was, in fact, an action -- unlike `invocation_id`, backfilling
     # this one asserts something true, so the column is NOT NULL with a
     # constant default.
-    kind: Literal["action", "function", "migration", "erasure"] = "action"
+    kind: Literal["action", "function", "migration"] = "action"
     # `migration` (M9a): a row rewrite or an accepted ontology drift -- written
     # by the engine's own migration machinery, with no consumer and no governed
     # action behind it. It gets its own kind rather than being filed as an
     # `action` because the period when the data stopped matching the
     # declarations is exactly the period an auditor most needs to find, and a
-    # migration indistinguishable from ordinary writes hides it. `erasure`
-    # identifies the operator-only content purge, which likewise has no
-    # consumer or governed action behind it.
+    # migration indistinguishable from ordinary writes hides it.
     # One id per `execute()` call, stamped on EVERY entry that call writes --
     # the denied/error/ok entry and, for an action with effects, the later
     # `effects_dispatched` entry too. Without it the two are matched by field

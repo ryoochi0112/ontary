@@ -42,17 +42,15 @@ from ontary.store._shared import (
     check_update_authority,
     decode_audit_entry,
     encode_audit_entry,
-    json_references_object,
     live_link_not_found,
     merge_update,
     prepare_insert,
     resolve_link_type,
     retire_object_refusal,
     unknown_page_token,
-    write_references_object,
 )
 from ontary.store.migration import SqliteSchemaMigrator
-from ontary.store.protocol import EraseResult, check_ontology_fingerprint
+from ontary.store.protocol import check_ontology_fingerprint
 from ontary.store.values import (
     DEFAULT_BATCH,
     DEFAULT_TENANT,
@@ -361,162 +359,6 @@ class ObjectStore(SqliteSchemaMigrator):
             WriteRecord(op="retire", object_type=object_type, object_id=obj_id)
         )
         return retired
-
-    def erase_object_content(self, object_type: str, obj_id: str) -> EraseResult:
-        """Tombstone one object's content across all durable content stores."""
-        self._registry.get_object_type(object_type)
-        object_rows_purged = 0
-        audit_entries_purged = 0
-        outbox_rows_purged = 0
-
-        def object_row_exists(row_type: str, row_id: str) -> bool:
-            return (
-                self._conn.execute(
-                    """
-                    SELECT 1 FROM objects
-                    WHERE object_type = ? AND id = ? AND tenant = ?
-                    LIMIT 1
-                    """,
-                    (row_type, row_id, self._tenant),
-                ).fetchone()
-                is not None
-            )
-
-        def references_erased_object(write: dict[str, Any]) -> bool:
-            return write_references_object(
-                write, object_type, obj_id, self._registry, object_row_exists
-            )
-
-        with self.transaction() as conn:
-            live = conn.execute(
-                """
-                SELECT 1 FROM objects
-                WHERE object_type = ? AND id = ? AND valid_to IS NULL
-                  AND tenant = ?
-                LIMIT 1
-                """,
-                (object_type, obj_id, self._tenant),
-            ).fetchone()
-            if live is not None:
-                # Reuse the public close operation so its timestamp/refusal
-                # semantics cannot drift from erasure's close-if-live step.
-                self.retire_object(object_type, obj_id)
-
-            object_rows = conn.execute(
-                """
-                SELECT row_id, payload FROM objects
-                WHERE object_type = ? AND id = ? AND tenant = ?
-                """,
-                (object_type, obj_id, self._tenant),
-            ).fetchall()
-            for row in object_rows:
-                if json.loads(row["payload"]):
-                    conn.execute(
-                        "UPDATE objects SET payload = ? WHERE row_id = ? AND tenant = ?",
-                        ("{}", row["row_id"], self._tenant),
-                    )
-                    object_rows_purged += 1
-
-            matching_invocations: set[str] = set()
-            audit_rows = conn.execute(
-                """
-                SELECT seq, kind, target_type, target_id, params, effects,
-                       writes, invocation_id
-                FROM audit_log WHERE tenant = ? ORDER BY seq ASC
-                """,
-                (self._tenant,),
-            ).fetchall()
-            for row in audit_rows:
-                if row["kind"] == "erasure":
-                    continue
-                params = json.loads(row["params"])
-                effects = json.loads(row["effects"])
-                writes = json.loads(row["writes"])
-                references_object = (
-                    row["target_type"] == object_type and row["target_id"] == obj_id
-                ) or json_references_object(
-                    params, object_type, obj_id
-                ) or json_references_object(
-                    effects, object_type, obj_id
-                ) or any(
-                    references_erased_object(write) for write in writes
-                )
-                if not references_object:
-                    continue
-                if row["invocation_id"] is not None:
-                    matching_invocations.add(str(row["invocation_id"]))
-                effects_have_content = any(
-                    effect["payload"] or effect.get("error") is not None
-                    for effect in effects
-                )
-                if params or effects_have_content:
-                    scrubbed_effects = [
-                        {**effect, "payload": {}, "error": None}
-                        for effect in effects
-                    ]
-                    conn.execute(
-                        """
-                        UPDATE audit_log SET params = ?, effects = ?
-                        WHERE seq = ? AND tenant = ?
-                        """,
-                        (
-                            "{}",
-                            json.dumps(scrubbed_effects),
-                            row["seq"],
-                            self._tenant,
-                        ),
-                    )
-                    audit_entries_purged += 1
-
-            outbox_rows = conn.execute(
-                """
-                SELECT effect_id, invocation_id, payload, last_error
-                FROM effect_outbox WHERE tenant = ?
-                ORDER BY emitted_at ASC, seq ASC
-                """,
-                (self._tenant,),
-            ).fetchall()
-            for row in outbox_rows:
-                payload = json.loads(row["payload"])
-                references_object = (
-                    row["invocation_id"] in matching_invocations
-                    or json_references_object(payload, object_type, obj_id)
-                )
-                if references_object and (
-                    payload or row["last_error"] is not None
-                ):
-                    conn.execute(
-                        """
-                        UPDATE effect_outbox SET payload = ?, last_error = NULL
-                        WHERE effect_id = ? AND tenant = ?
-                        """,
-                        ("{}", row["effect_id"], self._tenant),
-                    )
-                    outbox_rows_purged += 1
-
-        return EraseResult(
-            object_rows_purged=object_rows_purged,
-            audit_entries_purged=audit_entries_purged,
-            outbox_rows_purged=outbox_rows_purged,
-        )
-
-    def object_erasure_state(
-        self, object_type: str, obj_id: str
-    ) -> tuple[bool, bool]:
-        """Return whether object rows and erasable object content exist."""
-        self._registry.get_object_type(object_type)
-        rows = self._conn.execute(
-            """
-            SELECT valid_to, payload FROM objects
-            WHERE object_type = ? AND id = ? AND tenant = ?
-            """,
-            (object_type, obj_id, self._tenant),
-        ).fetchall()
-        has_content = any(
-            row["valid_to"] is None or bool(json.loads(row["payload"]))
-            for row in rows
-        )
-        return bool(rows), has_content
 
     def _row_to_stored(self, row: sqlite3.Row) -> StoredObject:
         payload: dict[str, Any] = json.loads(row["payload"])

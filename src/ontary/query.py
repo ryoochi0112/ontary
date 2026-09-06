@@ -91,7 +91,6 @@ from typing import Any, Final, Generic, Literal, NoReturn, TypeVar, final, overl
 from pydantic import BaseModel, ConfigDict
 
 from ontary.errors import InternalError, ValidationFailed, VisibilityError
-from ontary.explain import MinNTrace, _ScanCollector, _TraceCollector
 from ontary.meta import OntologyRegistry
 from ontary.scope import (
     DirectProperty,
@@ -612,10 +611,8 @@ class GuardedQuery:
         self,
         consumer: Consumer,
         obj: StoredObject,
-        trace: _TraceCollector | None = None,
         *,
         scope_cache: _ScopeReadCache | None = None,
-        scan: _ScanCollector | None = None,
     ) -> bool:
         # The V/S/R/W family in
         # `test_exists_bound_matches_unbounded_walk_over_generated_row_shapes`
@@ -627,12 +624,9 @@ class GuardedQuery:
                 self._store,
                 obj_type,
                 obj.lineage.object_id,
-                trace,
                 cache=scope_cache,
             )
             if not covers_scope(self._policy, consumer, resolved):
-                if scan is not None:
-                    scan.rows_hidden_by_scope += 1
                 return False
 
         # `row_visibility` (see `ontary.scope.RowVisibilityFn`) is applied
@@ -701,7 +695,6 @@ class GuardedQuery:
         consumer: Consumer,
         obj_type: str,
         obj: StoredObject,
-        trace: _TraceCollector | None = None,
     ) -> StoredObject:
         """Redact hidden fields from a COPY of `obj`'s payload -- `lineage`
         is never touched (it carries no sensitivity-classified property) and
@@ -709,10 +702,6 @@ class GuardedQuery:
         frozen; this always returns a new instance with a new `payload`
         dict)."""
         hidden = self._hidden_fields(consumer, obj_type, disclosure="learned")
-        if trace is not None:
-            trace.record_redaction(
-                consumer.kind, tuple(sorted(hidden & obj.payload.keys()))
-            )
         payload = {k: v for k, v in obj.payload.items() if k not in hidden}
         return StoredObject(payload=payload, lineage=obj.lineage)
 
@@ -1070,12 +1059,10 @@ class GuardedQuery:
         obj_type: str,
         where_matcher: _WhereMatcher | None,
         order_spec: _OrderSpec | None,
-        trace: _TraceCollector | None,
         *,
         redact_rows: bool,
         scope_cache: _ScopeReadCache,
         stop_after: int | None,
-        scan: _ScanCollector | None,
     ) -> list[StoredObject]:
         rows = self._store.read_all(obj_type)
         if order_spec is not None:
@@ -1089,24 +1076,12 @@ class GuardedQuery:
         # so there is nowhere to write a drifting "rows reached" counter.
         def _selected() -> Iterator[StoredObject]:
             for row in rows:
-                if scan is not None:
-                    scan.rows_scanned += 1
                 if where_matcher is not None and not where_matcher(row.payload):
                     continue
-                if not self._visible(
-                    consumer,
-                    row,
-                    trace,
-                    scope_cache=scope_cache,
-                    scan=scan,
-                ):
+                if not self._visible(consumer, row, scope_cache=scope_cache):
                     continue
-                if scan is not None:
-                    scan.rows_returned += 1
                 yield (
-                    self._redact(consumer, obj_type, row, trace)
-                    if redact_rows
-                    else row
+                    self._redact(consumer, obj_type, row) if redact_rows else row
                 )
 
         selected = _selected()
@@ -1121,7 +1096,6 @@ class GuardedQuery:
         where_matcher: _WhereMatcher | None,
         limit: int,
         after: str | None,
-        trace: _TraceCollector | None,
         scope_cache: _ScopeReadCache,
     ) -> Page:
         batch_size = max(limit, DEFAULT_BATCH)
@@ -1138,11 +1112,9 @@ class GuardedQuery:
                     and not where_matcher(paged_row.obj.payload)
                 ):
                     continue
-                if not self._visible(
-                    consumer, paged_row.obj, trace, scope_cache=scope_cache
-                ):
+                if not self._visible(consumer, paged_row.obj, scope_cache=scope_cache):
                     continue
-                kept.append(self._redact(consumer, obj_type, paged_row.obj, trace))
+                kept.append(self._redact(consumer, obj_type, paged_row.obj))
                 last_kept_key = paged_row.key
                 if len(kept) >= limit:
                     break
@@ -1162,7 +1134,6 @@ class GuardedQuery:
         order_spec: _OrderSpec,
         limit: int,
         after: str | None,
-        trace: _TraceCollector | None,
         scope_cache: _ScopeReadCache,
     ) -> Page:
         # The store cursor still validates against the store's row-id stream;
@@ -1194,9 +1165,9 @@ class GuardedQuery:
         for key, row in entries:
             if where_matcher is not None and not where_matcher(row.payload):
                 continue
-            if not self._visible(consumer, row, trace, scope_cache=scope_cache):
+            if not self._visible(consumer, row, scope_cache=scope_cache):
                 continue
-            items.append(self._redact(consumer, obj_type, row, trace))
+            items.append(self._redact(consumer, obj_type, row))
             last_key = key
             if len(items) >= limit:
                 break
@@ -1217,7 +1188,6 @@ class GuardedQuery:
         limit: None,
         after: str | None = None,
         order_by: OrderBy | None = None,
-        trace: _TraceCollector | None = None,
     ) -> list[StoredObject]: ...
     @overload
     def get_objects(
@@ -1229,10 +1199,8 @@ class GuardedQuery:
         limit: None,
         after: str | None = None,
         order_by: OrderBy | None = None,
-        trace: _TraceCollector | None = None,
         _redact_rows: Literal[False],
         _stop_after: int | None = None,
-        _scan: _ScanCollector | None = None,
     ) -> list[StoredObject]: ...
     @overload
     def get_objects(
@@ -1244,7 +1212,6 @@ class GuardedQuery:
         limit: int = DEFAULT_READ_LIMIT,
         after: str | None = None,
         order_by: OrderBy | None = None,
-        trace: _TraceCollector | None = None,
     ) -> Page: ...
     def get_objects(
         self,
@@ -1255,10 +1222,8 @@ class GuardedQuery:
         limit: int | None | object = _UNSET_LIMIT,
         after: str | None = None,
         order_by: OrderBy | None = None,
-        trace: _TraceCollector | None = None,
         _redact_rows: bool = True,
         _stop_after: int | None = None,
-        _scan: _ScanCollector | None = None,
     ) -> list[StoredObject] | Page:
         """Read visible payload rows, optionally ordered and paged.
 
@@ -1270,8 +1235,6 @@ class GuardedQuery:
         projection switch: the selection and visibility gates always run, and
         only the payload-copy redaction is skipped when it is false.
         ``_stop_after`` is an internal bound on that same unbounded walk.
-        ``_scan`` optionally observes that walk for the operator-only scan
-        report and is never constructed by ordinary reads.
         """
         disclosure = self._require_coherent_scope(obj_type, where=where)
         effective_limit = self._effective_limit(limit)
@@ -1300,11 +1263,9 @@ class GuardedQuery:
                 obj_type,
                 where_matcher,
                 order_spec,
-                trace,
                 redact_rows=_redact_rows,
                 scope_cache=scope_cache,
                 stop_after=_stop_after,
-                scan=_scan,
             )
 
         if order_spec is not None:
@@ -1315,7 +1276,6 @@ class GuardedQuery:
                 order_spec,
                 effective_limit,
                 after,
-                trace,
                 scope_cache,
             )
         return self._row_id_page(
@@ -1324,7 +1284,6 @@ class GuardedQuery:
             where_matcher,
             effective_limit,
             after,
-            trace,
             scope_cache,
         )
 
@@ -1333,28 +1292,24 @@ class GuardedQuery:
         consumer: Consumer,
         obj_type: str,
         obj_id: str,
-        *,
-        trace: _TraceCollector | None = None,
     ) -> StoredObject | None:
         self._require_coherent_scope(obj_type)
         row = self._store.read_current(obj_type, obj_id)
         if row is None:
             return None
         scope_cache = _ScopeReadCache()
-        if not self._visible(consumer, row, trace, scope_cache=scope_cache):
+        if not self._visible(consumer, row, scope_cache=scope_cache):
             raise VisibilityError(
                 f"{consumer.actor_id!r} cannot view {obj_type}/{obj_id}",
                 code="VISIBILITY_DENIED",
             )
-        return self._redact(consumer, obj_type, row, trace)
+        return self._redact(consumer, obj_type, row)
 
     def count(
         self,
         consumer: Consumer,
         obj_type: str,
         where: dict[str, Any] | None = None,
-        *,
-        trace: _TraceCollector | None = None,
     ) -> int:
         """Count rows in the consumer's visible selection.
 
@@ -1372,7 +1327,6 @@ class GuardedQuery:
                 obj_type,
                 where,
                 limit=None,
-                trace=trace,
                 _redact_rows=False,
             )
         )
@@ -1382,8 +1336,6 @@ class GuardedQuery:
         consumer: Consumer,
         obj_type: str,
         where: dict[str, Any] | None = None,
-        *,
-        trace: _TraceCollector | None = None,
     ) -> bool:
         """Whether the consumer's visible selection contains any row."""
         return bool(
@@ -1392,7 +1344,6 @@ class GuardedQuery:
                 obj_type,
                 where,
                 limit=None,
-                trace=trace,
                 _redact_rows=False,
                 _stop_after=1,
             )
@@ -1405,7 +1356,6 @@ class GuardedQuery:
         from_id: str,
         *,
         reverse: bool = False,
-        trace: _TraceCollector | None = None,
     ) -> list[StoredObject]:
         link_def = self._registry.get_link_type(link_type)
         if link_def.identity_revealing and consumer.kind == "human":
@@ -1433,10 +1383,10 @@ class GuardedQuery:
         for tid in target_ids:
             row = self._store.read_current(target_type, tid)
             if row is None or not self._visible(
-                consumer, row, trace, scope_cache=scope_cache
+                consumer, row, scope_cache=scope_cache
             ):
                 continue
-            results.append(self._redact(consumer, target_type, row, trace))
+            results.append(self._redact(consumer, target_type, row))
         return results
 
     # -- aggregation -----------------------------------------------------
@@ -1449,7 +1399,6 @@ class GuardedQuery:
         where: dict[str, Any] | None = None,
         *,
         func: AggregateFunc = "mean",
-        trace: _TraceCollector | None = None,
         _author_dispatch: _AuthorDispatch | None = None,
         _disclosures: list[tuple[str, str]] | None = None,
     ) -> AggregateValue:
@@ -1461,7 +1410,6 @@ class GuardedQuery:
             where,
             None,
             func,
-            trace,
             scope_cache=_ScopeReadCache(),
             _author_dispatch=_author_dispatch,
             _disclosures=_disclosures,
@@ -1482,7 +1430,6 @@ class GuardedQuery:
         where: dict[str, Any] | None = None,
         *,
         func: AggregateFunc = "mean",
-        trace: _TraceCollector | None = None,
         _author_dispatch: _AuthorDispatch | None = None,
         _disclosures: list[tuple[str, str]] | None = None,
     ) -> dict[str, AggregateValue]:
@@ -1521,7 +1468,6 @@ class GuardedQuery:
             where,
             group_by,
             func,
-            trace,
             scope_cache=_ScopeReadCache(),
             _author_dispatch=_author_dispatch,
             _disclosures=_disclosures,
@@ -1538,8 +1484,6 @@ class GuardedQuery:
         consumer: Consumer,
         obj_type: str,
         where: dict[str, Any] | None = None,
-        *,
-        trace: _TraceCollector | None = None,
     ) -> int:
         """How many distinct contributors back this selection -- the size of
         a *releasable* population, never an identity.
@@ -1613,10 +1557,9 @@ class GuardedQuery:
             consumer,
             obj_type,
             disclosure.where,
-            trace,
             scope_cache=_ScopeReadCache(),
         )
-        count = self._contributor_count(obj_type, visible, trace)
+        count = self._contributor_count(obj_type, visible)
         min_n = self._policy.min_n
         # The empty selection refuses UNCONDITIONALLY, not just when it
         # trips `min_n` -- mirroring `_aggregate`'s own `no_rows` branch,
@@ -1629,8 +1572,6 @@ class GuardedQuery:
         # Parity is the invariant a reviewer checks; a version of it that
         # is true for most thresholds is not one.
         passed = bool(visible) and count >= min_n
-        if trace is not None:
-            trace.record_min_n(count=count, threshold=min_n, passed=passed)
         if not passed:
             raise VisibilityError(
                 _min_n_violation_message(obj_type, min_n),
@@ -1674,7 +1615,6 @@ class GuardedQuery:
         consumer: Consumer,
         obj_type: str,
         where: _NormalizedWhere | None,
-        trace: _TraceCollector | None = None,
         *,
         scope_cache: _ScopeReadCache,
     ) -> list[StoredObject]:
@@ -1690,7 +1630,7 @@ class GuardedQuery:
         for row in self._store.read_all(obj_type):
             if where_matcher is not None and not where_matcher(row.payload):
                 continue
-            if not self._visible(consumer, row, trace, scope_cache=scope_cache):
+            if not self._visible(consumer, row, scope_cache=scope_cache):
                 continue
             visible.append(row)
         return visible
@@ -1751,7 +1691,6 @@ class GuardedQuery:
         where: dict[str, Any] | None,
         group_by: str | None,
         func: AggregateFunc,
-        trace: _TraceCollector | None = None,
         *,
         scope_cache: _ScopeReadCache,
         _author_dispatch: _AuthorDispatch | None = None,
@@ -1899,14 +1838,11 @@ class GuardedQuery:
             consumer,
             obj_type,
             normalized_where,
-            trace,
             scope_cache=scope_cache,
         )
 
         min_n = self._policy.min_n
         if not visible:
-            if trace is not None:
-                trace.record_min_n(count=0, threshold=min_n, passed=False)
             raise VisibilityError(
                 _min_n_violation_message(f"{obj_type}.{value_field}", min_n),
                 code="MIN_N_VIOLATION",
@@ -1943,14 +1879,8 @@ class GuardedQuery:
             # `func="count"`, release how many people answered). The floor and
             # the released number must describe the same population.
             value_rows = [r for r in group_rows if value_field in r.payload]
-            contributor_count = self._contributor_count(
-                obj_type, value_rows, trace
-            )
+            contributor_count = self._contributor_count(obj_type, value_rows)
             passed = contributor_count >= min_n
-            if trace is not None:
-                trace.record_min_n(
-                    count=contributor_count, threshold=min_n, passed=passed
-                )
             if not passed:
                 shown_key = "<redacted>" if group_key_hidden else repr(key)
                 raise VisibilityError(
@@ -2074,7 +2004,6 @@ class GuardedQuery:
         self,
         obj_type: str,
         group_rows: list[StoredObject],
-        trace: _TraceCollector | None = None,
     ) -> int:
         """Count distinct contributors backing a group of rows (T4 review
         debt; see module docstring for what replaced the prototype's
@@ -2107,34 +2036,9 @@ class GuardedQuery:
                 self._store,
                 obj_type,
                 row.lineage.object_id,
-                trace,
             )
             if resolved is not None:
                 contributor_ids.add(resolved)
             else:
                 unresolved_rows += 1
         return len(contributor_ids) + (1 if unresolved_rows else 0)
-
-    def _selection_min_n(
-        self,
-        consumer: Consumer,
-        obj_type: str,
-        where: _NormalizedWhere | None,
-        trace: _TraceCollector,
-    ) -> MinNTrace:
-        """Record aggregate-relevant min-N for an explained list selection."""
-        visible = self._visible_rows(
-            consumer,
-            obj_type,
-            where,
-            trace,
-            scope_cache=_ScopeReadCache(),
-        )
-        count = self._contributor_count(obj_type, visible, trace)
-        threshold = self._policy.min_n
-        trace.record_min_n(
-            count=count,
-            threshold=threshold,
-            passed=bool(visible) and count >= threshold,
-        )
-        return trace.min_n
