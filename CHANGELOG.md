@@ -14,6 +14,13 @@ you**.
 Pre-v1 hygiene: closes the remaining repository and CI gaps before the v1.0.0
 crossing without changing the package version or the runtime contract.
 
+OSS v0 cut: reduces `ontary` to its core. Every removed public name is listed
+under `### Removed`; the next release (0.11.0) is the first to ship without them.
+
+### Removed
+
+<!-- one bullet per removed public name; each task appends here -->
+
 ### Changed
 
 - Decision B is recorded in `docs/v1-gate.md`: exact-scope-id match is the v1
