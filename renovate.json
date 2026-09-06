@@ -1,0 +1,33 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "local>Atrae/renovate-config"
+  ],
+  "description": [
+    "The org preset chain (local>Atrae/renovate-config -> wevoxsre) is built for Go, TypeScript, aqua and mise repos. Nothing in it configures a Python package index: a scan of every file in Atrae/renovate-config found no registryUrls, hostRules, or pypi entry. ontary is the first Python consumer.",
+    "ontary resolves all Python packages through the Takumi Guard PyPI proxy (https://pypi.flatt.tech/simple/), pinned in pyproject.toml under [[tool.uv.index]]. Dependabot PRs #3, #4 and #5 each rewrote all 1544 source URLs in uv.lock off that proxy and onto public PyPI, under titles that read as routine version bumps; #17 pinned the index so any tool that shells out to `uv lock` keeps the proxy.",
+    "Whether Renovate honours that pin -- rather than resolving on its own -- is UNVERIFIED. Until one Renovate PR has been inspected and its uv.lock confirmed to keep the flatt.tech URLs, automerge stays off: an automerged lock rewrite would land on main with nobody reading it. Re-enable by deleting the overrides below, not by editing the org preset."
+  ],
+  "reviewers": [],
+  "assignAutomerge": false,
+  "packageRules": [
+    {
+      "description": "Override wevoxsre's automerge:true. Matched by updateType rather than by package glob on purpose: matchPackageNames:['*'] only means 'everything' on newer Renovate majors, and would silently match NOTHING on an older one -- leaving automerge on, which is the exact failure this file exists to prevent. Later packageRules win, so this lands after the preset's.",
+      "matchUpdateTypes": [
+        "major",
+        "minor",
+        "patch",
+        "pin",
+        "digest",
+        "bump",
+        "rollback",
+        "replacement",
+        "lockFileMaintenance"
+      ],
+      "automerge": false
+    }
+  ],
+  "lockFileMaintenance": {
+    "automerge": false
+  }
+}

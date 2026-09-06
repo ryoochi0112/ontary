@@ -1,0 +1,151 @@
+name: verify
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - name: Install dependencies
+        run: uv sync --all-extras
+      - name: make verify
+        run: make verify
+
+  # The Postgres backend's real gate (M8a). `verify` above runs the conformance
+  # suite against SQLite and in-memory only, because `make verify` is defined as
+  # offline and no-DB and breaking that would make the gate unrunnable on a
+  # laptop. So the third backend gets a job with a real server: same suite, same
+  # assertions, one more `STORE_FACTORIES` entry. Without this, `PostgresStore`
+  # would be exactly the "nothing ever tested this" hole M6 found in packaging.
+  postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - name: Install dependencies
+        run: uv sync --all-extras
+      - name: Conformance suite + backend tests against Postgres
+        env:
+          ONTARY_TEST_POSTGRES_DSN: postgresql://postgres:postgres@localhost:5432/postgres
+        run: |
+          uv run pytest tests/test_store_conformance.py tests/test_store_postgres.py \
+            tests/test_multi_tenancy.py tests/test_erase.py tests/test_actions.py \
+            tests/test_examples_tickets_e2e.py -q
+
+      # Storage envelope curve (spec `storage-envelope.md` AC1/AC2/AC10). This
+      # is the PUBLISHED, reader-reproducible Postgres curve -- run on this
+      # fixed `postgres:16` service, not a developer machine (spec §4: "a
+      # laptop number is not reproducible by a reader"). It asserts no timing
+      # threshold and never gates the merge (L23); `continue-on-error` means
+      # its failure or absence is reported in this job's own log, never
+      # silently treated as a measured number (L30). `docs/storage.md`
+      # currently quotes `PostgresStore` figures from a local Homebrew 17.11
+      # run (no Docker daemon was available to run `postgres:16` locally when
+      # they were built) -- reconcile them against this step's log once it
+      # has actually run.
+      - name: Storage envelope curve (informational, non-gating)
+        continue-on-error: true
+        run: |
+          uv run python scripts/scan_curve.py 1000 5000 25000 --uncached \
+            --dsn postgresql://postgres:postgres@localhost:5432/postgres
+
+  upgrade-fixture-honesty:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        tag: [v0.7.0, v0.8.0, v0.9.0]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.tag }}
+          path: old
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - name: Prove the old checkout is the exact tag
+        run: |
+          actual=$(git -C old describe --tags --exact-match)
+          test "$actual" = "${{ matrix.tag }}"
+      - name: Install the tagged package into an isolated environment
+        run: |
+          uv venv old/.venv
+          uv pip install --python old/.venv/bin/python ./old
+      - name: Save the committed fixtures before regeneration
+        run: |
+          cp "tests/fixtures/upgrade/${{ matrix.tag }}/tickets.sqlite" \
+            "$RUNNER_TEMP/committed-tickets.sqlite"
+          cp "tests/fixtures/upgrade/${{ matrix.tag }}/expected.json" \
+            "$RUNNER_TEMP/committed-expected.json"
+      - name: Regenerate with the tagged package and frozen writer
+        run: |
+          tag="${{ matrix.tag }}"
+          writer_version="${tag#v}"
+          writer_version="${writer_version//./_}"
+          PYTHONPATH="$PWD/old" old/.venv/bin/python \
+            "tests/fixtures/upgrade/writers/write_v${writer_version}.py"
+      - name: Compare regenerated fixtures with committed fixtures
+        run: |
+          python scripts/dump_store.py \
+            "tests/fixtures/upgrade/${{ matrix.tag }}/tickets.sqlite" \
+            > "$RUNNER_TEMP/regenerated-store.json"
+          python scripts/dump_store.py "$RUNNER_TEMP/committed-tickets.sqlite" \
+            > "$RUNNER_TEMP/committed-store.json"
+          diff -u "$RUNNER_TEMP/committed-store.json" \
+            "$RUNNER_TEMP/regenerated-store.json"
+          diff -u "$RUNNER_TEMP/committed-expected.json" \
+            "tests/fixtures/upgrade/${{ matrix.tag }}/expected.json"
+
+  # The check that had never existed (M6 step 3). `verify` above runs from the
+  # source tree with every extra installed -- precisely the environment an
+  # outside adopter does NOT have. Their first command is
+  # `pip install ontary`, and nothing verified that path until a manual
+  # clean-venv install turned up `ontary-mcp` dying on a bare
+  # `ModuleNotFoundError`. Deliberately NO extras and no dev dependencies here:
+  # installing pytest would defeat the point, which is why the smoke test is a
+  # plain script rather than a test module.
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - name: Build sdist + wheel
+        run: uv build --out-dir dist
+      - name: Install the wheel into an empty environment
+        run: |
+          uv venv --python 3.12 /tmp/clean
+          VIRTUAL_ENV=/tmp/clean uv pip install dist/*.whl
+      - name: Smoke-test the installed package
+        run: /tmp/clean/bin/python scripts/install_smoke.py
+      - name: Upload the distributions
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
