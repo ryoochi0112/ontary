@@ -1,0 +1,27 @@
+# Replaces renovate.json (removed 2026-09-07): the Renovate app was never
+# installed on this repository, so that config had been silently dead.
+# Nothing is automerged. A lockfile rewrite is read by a human before it lands
+# on main; uv.lock stays the single source of truth for pinned versions.
+version: 2
+updates:
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      # One PR for every minor and patch bump. Majors match no group, so each
+      # opens its own PR and gets read on its own.
+      python-minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      # Actions are SHA-pinned with a `# vX.Y.Z` comment; Dependabot bumps the
+      # SHA and rewrites the comment in the same PR.
+      actions:
+        patterns: ["*"]
