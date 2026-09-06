@@ -26,9 +26,6 @@ Note: `run_mcp.py`'s `build_multi_consumer_server()` omits `token_verifier`
 and `auth` for brevity. Unlike [`docs/mcp-serving.md`](../../docs/mcp-serving.md),
 copying it verbatim over a real transport yields `UNAUTHENTICATED` calls.
 
-[`run_connector.py`](run_connector.py) demonstrates connector ingestion
-against the same ontology.
-
 ## Test coverage
 
 - [`tests/test_examples_tickets_e2e.py`](../../tests/test_examples_tickets_e2e.py)

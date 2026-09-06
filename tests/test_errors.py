@@ -69,7 +69,6 @@ ENGINE_EXCEPTION_CODES: dict[str, tuple[type[OntaryError], str]] = {
     "NON_NUMERIC_AGGREGATE": (ValidationFailed, "validation"),
     "UNKNOWN_OPERATOR": (ValidationFailed, "validation"),
     "OPERATOR_TYPE_MISMATCH": (ValidationFailed, "validation"),
-    "ENTITY_KEY_MISMATCH": (ValidationFailed, "validation"),
 }
 
 # T4 (multi-consumer-mcp): the two new permission-refusal codes the
@@ -634,15 +633,6 @@ def test_kind_class_raise_sites_use_literal_catalog_codes() -> None:
         # validator into a report row; both keywords and the exact forwarded
         # expression stay pinned here, in the key.
         ("ingest.py", "bulk_upsert", "IngestError", "code", _NO_MESSAGE),
-        # _map_objects remaps the index of an already-validated ingest report
-        # row while forwarding that row's code unchanged.
-        (
-            "connect/mapper.py",
-            "_map_objects",
-            "IngestError",
-            "e.code",
-            _NO_MESSAGE,
-        ),
     }
     ingest_batch_report_sites: set[_Site] = {
         # These are the two client raising-policy boundaries. Their code is

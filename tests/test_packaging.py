@@ -61,7 +61,7 @@ def test_py_typed_marker_ships_in_the_package() -> None:
 def test_core_install_depends_only_on_pydantic() -> None:
     """The claim the README makes in its first three lines is a packaging fact,
     not a stylistic one: an adopter should be able to take the core without
-    inheriting an MCP server, dlt, or duckdb."""
+    inheriting an MCP server or a Postgres driver."""
     core = [
         dependency
         for dependency in (requires("ontary") or [])
@@ -74,7 +74,7 @@ def test_core_install_depends_only_on_pydantic() -> None:
 def test_optional_extras_are_declared_for_every_optional_import() -> None:
     optional = _project()["optional-dependencies"]
     assert isinstance(optional, dict)
-    assert {"mcp", "dlt", "bq", "dev"} <= set(optional)
+    assert {"mcp", "postgres", "dev"} <= set(optional)
 
 
 def test_metadata_carries_the_pointers_an_outside_consumer_needs() -> None:

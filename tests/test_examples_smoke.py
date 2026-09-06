@@ -12,34 +12,23 @@ Covers:
 - two-ontology coexistence: the inline ontology builds + validates alongside
   `examples/tickets`'s in the same process, with no cross-talk between their
   registries, actions, or functions (spec §7).
-- `examples.tickets.connector` -- the AC11 second-domain connector -- landing
-  inline raw fixtures through `run_pipeline` (objects+links, clean report,
-  idempotent re-run).
-- `examples/tickets/run_connector.py` (spec AC15 runnable example) -- its
-  `main()` entrypoint runs without raising and prints a recognizable
-  `RunReport` summary.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
-import subprocess
-import sys
-from datetime import datetime, timezone
 from typing import Any
 
 import pytest
 from mcp.server.fastmcp import FastMCP
 
 from examples.tickets import run_mcp
-from examples.tickets.connector import TicketsCSVLikeSource, build_tickets_mapping_spec
 from examples.tickets.fixtures import load_fixtures
 from examples.tickets.ontology import build_ontology
 from ontary import ActionContext, ActionParams, BoundQuery, Ontology, OntologyObject, prop, target
 from ontary.actions import ActionError
 from ontary.client import OntologyClient
-from ontary.connect import oid, run_pipeline
 from ontary.errors import VisibilityError
 from ontary.mcp_server import build_mcp_server
 from ontary.security import Consumer
@@ -351,76 +340,7 @@ def test_two_ontologies_coexist_in_one_process_without_cross_talk() -> None:
     assert caught.value.code == "UNKNOWN_ACTION"
 
 
-# -- AC11: examples/tickets/connector.py -----------------------------------
-
-_TICKETS_RAW = {
-    "orgs": [{"org_id": "o1", "name": "Acme Support"}],
-    "queues": [{"queue_id": "q1", "org_id": "o1", "name": "Billing"}],
-    "agents": [{"agent_id": "a1", "display_name": "Ada", "email": "ada@acme.test"}],
-    "tickets": [
-        {"ticket_id": "t1", "queue_id": "q1", "subject": "Invoice mismatch", "age_hours": 4.0},
-        {"ticket_id": "t2", "queue_id": "q1", "subject": "Refund request", "age_hours": 12.0},
-    ],
-}
-
-
-def test_tickets_connector_ingest_smoke() -> None:
-    """AC11: a tiny non-DSO connector, own canonical schema + `MappingSpec`,
-    landing inline raw fixtures through `run_pipeline` -- objects+links land,
-    the report is clean, and re-running the same batch is idempotent (no
-    duplicate objects/links, report counts stable)."""
-    ontology, store = build_ontology()
-    connector = TicketsCSVLikeSource(extracted_at=datetime(2026, 7, 23, tzinfo=timezone.utc))
-    mapping = build_tickets_mapping_spec()
-
-    report = run_pipeline(connector, mapping, ontology, store, raw=_TICKETS_RAW, run_at="run-1")
-
-    assert report.ok
-    assert report.written == {"Org": 1, "Queue": 1, "Agent": 1, "Ticket": 2}
-    assert report.links_created == {"queueOfOrg": 1, "ticketInQueue": 2}
-    assert report.links_skipped.get("queueOfOrg", 0) == 0
-    assert report.links_skipped.get("ticketInQueue", 0) == 0
-
-    org_id = oid("tickets_csv", "Org", "o1")
-    ticket_1_id = oid("tickets_csv", "Ticket", "t1")
-    ticket_2_id = oid("tickets_csv", "Ticket", "t2")
-    org = store.read_current("Org", org_id)
-    assert org is not None
-    assert org.payload["name"] == "Acme Support"
-    t1 = store.read_current("Ticket", ticket_1_id)
-    t2 = store.read_current("Ticket", ticket_2_id)
-    assert t1 is not None and t1.payload["subject"] == "Invoice mismatch"
-    assert t2 is not None and t2.payload["subject"] == "Refund request"
-
-    # Re-running the identical batch is idempotent: same oids -> upsert, no
-    # duplicate objects, and the already-linked pairs are skipped rather
-    # than re-created (spec AC4/AC11).
-    report2 = run_pipeline(connector, mapping, ontology, store, raw=_TICKETS_RAW, run_at="run-2")
-    assert report2.ok
-    assert report2.written == {"Org": 1, "Queue": 1, "Agent": 1, "Ticket": 2}
-    assert store.read_current("Org", org_id) is not None
-    assert report2.links_created == {"queueOfOrg": 0, "ticketInQueue": 0}
-    assert report2.links_skipped == {"queueOfOrg": 0, "ticketInQueue": 0}
-
-
 # -- AC15: runnable examples -------------------------------------------
-
-
-def test_run_connector_example_prints_run_report_and_exits_zero() -> None:
-    """`examples/tickets/run_connector.py` is the AC15 runnable connector
-    example -- run it exactly as a user would (`python -m
-    examples.tickets.run_connector`) and check it succeeds and prints a
-    recognizable `RunReport` summary."""
-    result = subprocess.run(
-        [sys.executable, "-m", "examples.tickets.run_connector"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert result.returncode == 0, result.stderr
-    assert "ok=True" in result.stdout
-    assert "written={'Org': 1, 'Queue': 1, 'Agent': 1, 'Ticket': 2}" in result.stdout
-    assert "re-run ok=True" in result.stdout
 
 
 def test_run_mcp_example_builds_server_and_returns_query_envelope() -> None:

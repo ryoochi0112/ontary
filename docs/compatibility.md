@@ -432,7 +432,7 @@ stretched to cover this spelling cleanup.
 - **Python**: 3.12+. Dropping a Python version is a minor bump pre-1.0, and is announced
   in the changelog.
 - **pydantic**: `>=2.7`, and the core install depends on nothing else. Everything else —
-  the MCP server, dlt/duckdb connectors, BigQuery — is an optional extra, so an adopter
+  the MCP server, the Postgres backend — is an optional extra, so an adopter
   who wants only the governed runtime inherits only pydantic.
 - **An extra's floor can rise, and that narrows what you can install.** It is not a
   breaking change to the API, but it can break a *resolution*, so it is announced in the

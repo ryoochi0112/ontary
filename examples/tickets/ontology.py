@@ -13,7 +13,7 @@ declare-once, class-authored (`@_ontology.action(...)`/`@_ontology
 `fixtures.py` now only holds the synthetic-data loader, not any
 registration wiring.
 
-`build_ontology()` is called by every test/fixture/connector that needs an
+`build_ontology()` is called by every test/fixture that needs an
 `(Ontology, ObjectStore)` pair. Handlers/functions are declared exactly
 once, at import time, on the module-level `_ontology` -- so unlike the
 pre-M4b version there is no need to re-create a `FunctionRegistry`/handler
@@ -252,7 +252,7 @@ def build_ontology() -> tuple[Ontology, ObjectStore]:
     """Returns the module-level `Ontology` (registry + declared
     `EscalateTicket`/`ticketStats` handlers, shared and immutable after
     `.validate()` above) paired with a fresh `ObjectStore` -- every caller
-    (tests/fixtures/connector) gets independent data to seed and tear
+    (tests/fixtures) gets independent data to seed and tear
     down, while `OntologyClient(ontology, store, consumer)`/
     `build_mcp_server(ontology, store, consumer)` auto-bind the SAME
     declared handlers with zero manual wiring (spec `typed-actions.md`

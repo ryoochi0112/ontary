@@ -3,7 +3,7 @@
 [English](api-reference.md) · **日本語** · [← README](../README.md)
 
 `ontary` のキュレーションされたフロントドア: `__all__` の **58 個の名前**。
-残りのエンジン API は、`ontary.meta`、`ontary.store`、`ontary.connect` などの
+残りのエンジン API は、`ontary.meta`、`ontary.store` などの
 定義元サブモジュールから利用します。
 
 これは調べ物のためのドキュメントです。「宣言する → バインドする → 読む → 配信する」
@@ -23,7 +23,6 @@
 - [セキュリティ](#セキュリティ)
 - [ストア](#ストア)
 - [バルク取り込み](#バルク取り込み)
-- [`ontary.connect`](#ontaryconnect)
 - [MCP サーバー](#mcp-サーバー)
 - [記述子による宣言](#記述子による宣言)
 - [エラーコード](#エラーコード)
@@ -38,12 +37,10 @@
 
 ### Authoring vocabulary / 宣言用語彙
 
-`ActionContext`、`ActionParams`、`BaseConnector`、`BoundQuery`、`CanonicalBatch`、
-`CanonicalRecord`、`CapabilityHandle`、`Cardinality`、`Consumer`、`CustomResolver`、
-`DirectProperty`、`LinkBinding`、`LinkHandle`、`MappingSpec`、`ObjectBinding`、
-`Ontology`、`OntologyObject`、`RawTables`、`RowVisibilityStore`、`SelfScope`、
-`Sensitivity`、`Source`、`Store`、`ViaLink`、`oid`、`prop`、`ref`、`run_pipeline`、
-`scope_ref`、`target`。
+`ActionContext`、`ActionParams`、`BoundQuery`、`CapabilityHandle`、`Cardinality`、
+`Consumer`、`CustomResolver`、`DirectProperty`、`LinkHandle`、`Ontology`、
+`OntologyObject`、`RowVisibilityStore`、`SelfScope`、`Sensitivity`、`Source`、
+`Store`、`ViaLink`、`prop`、`ref`、`scope_ref`、`target`。
 
 ### Runtime entries / ランタイム項目
 
@@ -64,7 +61,7 @@ from ontary import Ontology, OntologyObject, Consumer, prop, target, Cardinality
 ```
 
 Python 3.12+。コアパッケージの依存は `pydantic` のみ。エクストラ: `[mcp]`（MCP
-サーバー）、`[dlt]`（dlt/duckdb によるコネクタ抽出）、`[bq]`（BigQuery 対応を追加）。
+サーバー）、`[postgres]`（`PostgresStore` バックエンド）。
 
 ---
 
@@ -72,8 +69,6 @@ Python 3.12+。コアパッケージの依存は `pydantic` のみ。エクス�
 
 以下の名前は意図的にフロントドアへ平坦化していません。エンジンを拡張したり高度な
 統合を行ったりするときは、定義元サブモジュールから import してください。
-`MappingValidationError` は connector の事前検証用の通常の `Exception` であり、
-`ontary.connect` にあります。
 
 ### `ontary.actions`
 
@@ -86,12 +81,6 @@ Python 3.12+。コアパッケージの依存は `pydantic` のみ。エクス�
 ### `ontary.client`
 
 `OntologyRuntime`。
-
-### `ontary.connect`
-
-`LinkSkip`、`MappingValidationError`、`RunReport`、`SourceConnector`、
-`SourceLineage`、`map_batch`、`run_dlt_extract`、`to_date`、`to_datetime`、
-`to_optional_date`、`to_optional_datetime`。
 
 ### `ontary.errors`
 
@@ -906,51 +895,6 @@ client.ingest_links(
 
 ---
 
-## `ontary.connect`
-
-任意のソースシステムとオントロジーの間に置く、ソース非依存のステージング層。ベンダーを
-差し替えてもオントロジーには手を入れずに済みます。エンジン名は 20 個です。
-
-### 正規モデル
-
-- **`CanonicalRecord`** — 基底クラス。`lineage: Lineage` スタンプ
-  （`source_system`、`source_id`、`extracted_at`）が構築時に強制されます。
-- **`CanonicalBatch`** — `entities: dict[str, list[CanonicalRecord]]`。
-- **`RawTables`** — テーブル名をキーにしたソース形状の行。
-
-### コネクタ
-
-- **`SourceConnector`** — プロトコル。`extract()`（副作用あり。`make verify` からは
-  呼ばれません）と `transform(raw) -> CanonicalBatch`（純粋。ユニットテスト対象）。
-- **`BaseConnector`** — 便利な基底クラス。
-- **`run_dlt_extract(source, pipeline_name, staging_dir) -> RawTables`** — dlt による
-  抽出（`dlt` エクストラが必要）。
-
-### マッピング
-
-- **`MappingSpec`** — `object_bindings`、`link_bindings`。
-- **`ObjectBinding`** — `entity`、`object_type`、`key_field`、`property_map`、
-  `record_model`、`transform`。
-- **`LinkBinding`** — `link_type`、`from_entity`、`from_key_field`、`to_entity`、
-  `to_key_field`。
-- **`map_batch(batch, mapping, registry, store, *, source_system, run_at) -> RunReport`**
-- **`run_pipeline(connector, mapping, ontology, store, *, raw=None, run_at=None) -> RunReport`**
-
-`oid(source_system, object_type, key) -> str` が、マッピングを冪等にする決定的な
-オントロジー id を導出します。同じバッチを再実行しても重複ではなく upsert になります。
-
-`RunReport` — `source_system`、`run_at`、`written`、`errors`、
-`entities_absent_from_batch`、`links_created`、`links_resolved_same_batch`、
-`links_resolved_via_store`、`links_skipped`、`link_skip_details`、`link_errors`。
-どの binding も参照していないバッチエンティティは `ENTITY_KEY_MISMATCH` になります。
-逆（binding はあるがバッチが出さないエンティティ）はエラーではなくレポートに計上されます。
-
-### 変換ヘルパー
-
-`to_date`、`to_datetime`、`to_optional_date`、`to_optional_datetime`。
-
----
-
 ## MCP サーバー
 
 ```python
@@ -1193,7 +1137,6 @@ MCP サーバーでは、この実行時ではなくトランスポートによ�
 | Code | Meaning |
 | --- | --- |
 | `AFTER_WITHOUT_LIMIT` | `GuardedQuery.get_objects`'s (or `OntologyClient.list`'s) `after` was given without `limit` (pagination-hardening T2 review P1) -- the unpaginated `Store.read_all` path has no page to resume, so ignoring `after` would let a caller that lost track of its limit silently re-read every visible row and duplicate work; a caller that genuinely wants everything passes no `after` at all. |
-| `ENTITY_KEY_MISMATCH` | Raised by `map_batch` when a `CanonicalBatch`'s entity keys and the `MappingSpec`'s `ObjectBinding.entity` names disagree in the authoring-bug direction (spec m35-sdk-refactor AC10). The check is ONE-DIRECTIONAL: batch keys MUST be a subset of binding keys, so a typo such as `widgits` cannot be swallowed by `CanonicalBatch.get()` as zero objects. Binding keys are NOT required to be a subset of batch keys; a partial or incremental connector run may omit normal entities, which is counted in `RunReport.entities_absent_from_batch` instead of failing. |
 | `INVALID_BATCH` | `Store.read_page`'s `batch` was < 1 (SQLite's LIMIT -1 means unlimited and InMemoryStore's negative slice drops rows -- both the opposite of a bounded read). |
 | `INVALID_CURSOR` | Raised when `Store.read_page`'s `after_key` is malformed OR simply unknown. `after_key` is UNTRUSTED input: it reaches the store from an MCP client via a later page-filling loop, round-tripped from a previous page's cursor without any guarantee the caller did not tamper with it. As amended 2026-07-25 (T2 review, spec §5), it is a random per-row PAGE TOKEN (`objects.page_token`, uuid4 hex), not a decimal row id. Resolving token to row id through the unique index is the ONLY way to turn a cursor into row identity, so every string never issued for a real row (malformed, tampered, or made up) raises this same error on both backends. There is no distinct well-formed but out-of-range case from the old integer design's `OverflowError`/silent-empty-page divergence. A token issued for a row since superseded by `update` still resolves because lookup uses `row_id` independently of `valid_to`, so an in-flight cursor remains a valid resume point (spec §8). |
 | `GROUP_KEY_COLLISION` | Two distinct `group_by` values in one selection release as the same dictionary key, so one cell would have to describe two populations. The released shape is `dict[str, ...]` -- a public return type and MCP's wire shape -- and `str()` is not injective over the values a group key can take: an optional property keys `None` on the rows that lack it, which collides with a row carrying the literal string `"None"`. The populations did not merge; the later one overwrote the earlier, so the released value (and, under `func="count"`, the released size) described whichever rows were inserted last, decided by nothing the caller supplied or could observe. Raised per group as each is released, AFTER that group's min-N check, so the release floor keeps precedence over a shape refusal. |
@@ -1204,7 +1147,6 @@ MCP サーバーでは、この実行時ではなくトランスポートによ�
 | `INVALID_PARAMS` | A call's parameters failed declared-shape validation: an action's params, or a read parameter whose SHAPE is wrong -- an `order_by` that is neither a field name nor a (field, direction) pair, or a `where=` that is not a mapping of field name to condition. A parameter naming something that does not exist is `UNKNOWN_FIELD` instead; this code is about the shape, not the name. |
 | `INVALID_RECORD` | A bulk_upsert record failed declared-shape validation (missing primary key, missing required property, unknown property, or a value that does not match its declared type). The validation kind carries the SAME `INVALID_RECORD` code that `bulk_upsert` already reports: from a caller's point of view, a record not matching the declaration is one failure regardless of which write path noticed. This closes the M9 hole where only ingest checked: `Store.insert`/`update` and therefore `ActionContext.insert`/`update` could commit a row missing a required property or carrying a wrong-typed value, report success, and leave the typed reader unable to hydrate it. The same code wraps a Pydantic `ValidationError` while hydrating a stored `OntologyObject` payload (for example, a non-ISO datetime string), never surfacing a bare traceback; a stored row failing declared-shape validation on read-back is the same failure class ingest carries on write. |
 | `LINK_NOT_FOUND` | A link closure found no matching live link. |
-| `MISSING_MAPPED_FIELD` | A map_batch record's property_map referenced a canonical field entirely absent from that record (not merely None). |
 | `NON_NUMERIC_AGGREGATE` | `GuardedQuery.aggregate`'s `value_field` is declared a non-numeric `PropertyType` (anything other than `int`/`float`, such as str/json/datetime/bool). It is checked against the declared type before rows are iterated or coerced, so values that merely look numeric cannot bypass the type contract (spec `m35-sdk-refactor` §6 AC7). |
 | `OBJECT_NOT_FOUND` | An update targeted a non-existent object. |
 | `OBJECT_RETIRE_NOT_FOUND` | A retirement targeted an object with no stored row. |
@@ -1226,7 +1168,7 @@ MCP サーバーでは、この実行時ではなくトランスポートによ�
 | `MIN_N_VIOLATION` | An aggregate would be computed over fewer than min_n distinct contributors. |
 | `VISIBILITY_DENIED` | A single-object read/write targeted an object outside the consumer's scope. |
 
-*全 48 コード / 7 種別。*
+*全 46 コード / 7 種別。*
 
 ---
 
@@ -1237,8 +1179,7 @@ MCP サーバーでは、この実行時ではなくトランスポートによ�
 その code はレポート内の失敗に対応します。すべてのエラーは `ERROR_CODES` の安定した
 `code` を持ちます。特定の種別を捕捉するには `except <KindClass> as e: e.code` を使い、
 `IngestError` を含むすべてのコード付きエラーを捕捉するには `except OntaryError as e: e.code`
-を使います。`MappingValidationError` は binding の事前検証に使う通常の `Exception` で、
-この階層には含まれません。
+を使います。
 
 | 例外 | 親クラス | 送出される場面 |
 | --- | --- | --- |

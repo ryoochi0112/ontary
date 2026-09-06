@@ -21,7 +21,6 @@ import pytest
 from pydantic import BaseModel
 
 import ontary
-import ontary.connect
 from ontary.declarations import Declarations
 from ontary.errors import ERROR_CODES
 
@@ -109,13 +108,14 @@ REMOVED_SINCE_080_ERROR_CODES = frozenset(
         "EFFECT_NOT_SERIALIZABLE",
         "UPCAST_FAILED",
         "ONTOLOGY_DRIFT",
+        "ENTITY_KEY_MISMATCH",
+        "MISSING_MAPPED_FIELD",
     }
 )
 NEW_ENGLISH_DOCS = tuple(
     _DOCS / name
     for name in (
         "storage.md",
-        "connectors.md",
         "mcp-serving.md",
         "queries.md",
         "authority.md",
@@ -228,19 +228,6 @@ DEMOTED_NAMES_BY_MODULE = {
     "ontary.actions": {"ActionExecutor"},
     "ontary.audit": {"CapabilityAccessRecord"},
     "ontary.client": {"OntologyRuntime"},
-    "ontary.connect": {
-        "LinkSkip",
-        "MappingValidationError",
-        "RunReport",
-        "SourceConnector",
-        "SourceLineage",
-        "map_batch",
-        "run_dlt_extract",
-        "to_date",
-        "to_datetime",
-        "to_optional_date",
-        "to_optional_datetime",
-    },
     "ontary.errors": {"ERROR_CODES", "ErrorCodeInfo", "Kind"},
     "ontary.functions": {"FunctionHandler", "FunctionRegistry"},
     "ontary.ingest": {"IngestError", "IngestReport", "bulk_link", "bulk_upsert"},
@@ -742,8 +729,8 @@ def test_demoted_names_remain_importable_at_canonical_submodules() -> None:
     """Demotion changes the root surface, not the engine's defining modules.
 
     The guard rejects both failure modes: a name disappearing from its
-    canonical module (for example `MappingValidationError` from
-    `ontary.connect`) and an accidental re-export back onto the curated root.
+    canonical module (for example `IngestReport` from
+    `ontary.ingest`) and an accidental re-export back onto the curated root.
     """
     demoted = {
         name for names in DEMOTED_NAMES_BY_MODULE.values() for name in names

@@ -2,7 +2,7 @@
 `examples/tickets`' `Ticket.escalated` is declared ontology-owned
 (`owned={"escalated": False}`) while `status` stays source-backed.
 
-This test drives the FULL governed path -- connector ingest, not
+This test drives the FULL governed path -- `OntologyClient.ingest`, not
 `store.update` directly, and `EscalateTicket` through the real
 `ActionExecutor`/`OntologyClient.execute`, not a raw store write -- to prove
 the seam the spec's problem statement calls out is closed end to end:
@@ -35,7 +35,6 @@ from mcp.server.fastmcp import FastMCP
 import ontary
 import ontary.cli as cli
 import ontary.mcp_server as mcp_server
-from examples.tickets.connector import TicketsCSVLikeSource, build_tickets_mapping_spec
 from examples.tickets.fixtures import load_fixtures
 from examples.tickets.ontology import (
     Ticket,
@@ -59,7 +58,6 @@ from ontary import (
     prop,
 )
 from ontary.client import OntologyClient
-from ontary.connect import oid, run_pipeline
 from ontary.meta import OntologyRegistry
 from ontary.security import Consumer
 from ontary.store import Store, WriteRecord
@@ -108,39 +106,51 @@ def tickets_store_factory(request: pytest.FixtureRequest) -> StoreFactory:
     factory: StoreFactory = request.param
     return factory
 
-_RAW_OPEN = {
-    "orgs": [{"org_id": "o1", "name": "Acme Support"}],
-    "queues": [{"queue_id": "q1", "org_id": "o1", "name": "Billing"}],
-    "agents": [{"agent_id": "a1", "display_name": "Ada", "email": "ada@acme.test"}],
-    "tickets": [
-        {"ticket_id": "t1", "queue_id": "q1", "subject": "Invoice mismatch",
-         "age_hours": 4.0, "status": "open"},
-    ],
-}
+_INGEST_SOURCE = Source(source_system="tickets_csv")
 
-_RAW_CLOSED = {
-    "orgs": [{"org_id": "o1", "name": "Acme Support"}],
-    "queues": [{"queue_id": "q1", "org_id": "o1", "name": "Billing"}],
-    "agents": [{"agent_id": "a1", "display_name": "Ada", "email": "ada@acme.test"}],
-    "tickets": [
-        {"ticket_id": "t1", "queue_id": "q1", "subject": "Invoice mismatch",
-         "age_hours": 4.0, "status": "closed"},
-    ],
-}
+_TICKETS_OPEN = [
+    {
+        "id": "t1",
+        "queue_id": "q1",
+        "subject": "Invoice mismatch",
+        "age_hours": 4.0,
+        "status": "open",
+    },
+]
+
+_TICKETS_CLOSED = [
+    {
+        "id": "t1",
+        "queue_id": "q1",
+        "subject": "Invoice mismatch",
+        "age_hours": 4.0,
+        "status": "closed",
+    },
+]
 
 
 def test_ingest_escalate_reingest_survives_via_governed_path() -> None:
     ontology, store = build_ontology()
-    connector = TicketsCSVLikeSource(extracted_at=datetime(2026, 7, 23, tzinfo=timezone.utc))
-    mapping = build_tickets_mapping_spec()
+    loader = OntologyClient(
+        ontology,
+        store,
+        Consumer(
+            actor_id="loader", role="Manager", scope_level="org", scope_id="o1", kind="human"
+        ),
+    )
 
-    # 1. Connector ingest lands the ticket with status="open"; `escalated`
-    #    is not supplied by source (it's ontology-owned) -- the declared
-    #    default (False) is injected on insert.
-    report = run_pipeline(connector, mapping, ontology, store, raw=_RAW_OPEN, run_at="run-1")
+    # 1. Bulk ingest lands the ticket with status="open"; `escalated` is not
+    #    supplied by source (it's ontology-owned) -- the declared default
+    #    (False) is injected on insert.
+    loader.ingest("Org", [{"id": "o1", "name": "Acme Support"}], _INGEST_SOURCE)
+    loader.ingest("Queue", [{"id": "q1", "name": "Billing"}], _INGEST_SOURCE)
+    loader.ingest_links("queueOfOrg", [("q1", "o1")], _INGEST_SOURCE)
+    report = loader.ingest("Ticket", _TICKETS_OPEN, _INGEST_SOURCE)
     assert report.ok, report.errors
+    loader.ingest_links("ticketInQueue", [("t1", "q1")], _INGEST_SOURCE)
 
-    ticket_id = oid("tickets_csv", "Ticket", "t1")
+    ticket_id = "t1"
+    queue_id = "q1"
     ticket = store.read_current("Ticket", ticket_id)
     assert ticket is not None
     assert ticket.payload["status"] == "open"
@@ -148,7 +158,6 @@ def test_ingest_escalate_reingest_survives_via_governed_path() -> None:
 
     # 2. EscalateTicket through the real governed path: OntologyClient ->
     #    ActionExecutor.execute -- not store.update directly.
-    queue_id = oid("tickets_csv", "Queue", "q1")
     consumer = Consumer(
         actor_id="agent-1", role="Agent", scope_level="queue", scope_id=queue_id, kind="human"
     )
@@ -181,7 +190,7 @@ def test_ingest_escalate_reingest_survives_via_governed_path() -> None:
     #    "closed" -- the source-backed property refreshes, and the
     #    ontology-owned `escalated` (written only by the action, never by
     #    source) survives the merge (spec AC4/AC5).
-    report2 = run_pipeline(connector, mapping, ontology, store, raw=_RAW_CLOSED, run_at="run-2")
+    report2 = loader.ingest("Ticket", _TICKETS_CLOSED, _INGEST_SOURCE)
     assert report2.ok, report2.errors
 
     final_ticket = store.read_current("Ticket", ticket_id)

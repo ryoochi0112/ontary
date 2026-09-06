@@ -507,27 +507,6 @@ ERROR_CODES: dict[str, ErrorCodeInfo] = {
             "precedence over a shape refusal."
         ),
     ),
-    "ENTITY_KEY_MISMATCH": ErrorCodeInfo(
-        kind="validation",
-        description=(
-            "Raised by `map_batch` when a `CanonicalBatch`'s entity keys and the "
-            "`MappingSpec`'s `ObjectBinding.entity` names disagree in the "
-            "authoring-bug direction (spec m35-sdk-refactor AC10). The check is "
-            "ONE-DIRECTIONAL: batch keys MUST be a subset of binding keys, so a "
-            "typo such as `widgits` cannot be swallowed by `CanonicalBatch.get()` "
-            "as zero objects. Binding keys are NOT required to be a subset of "
-            "batch keys; a partial or incremental connector run may omit normal "
-            "entities, which is counted in `RunReport.entities_absent_from_batch` "
-            "instead of failing."
-        ),
-    ),
-    "MISSING_MAPPED_FIELD": ErrorCodeInfo(
-        kind="validation",
-        description=(
-            "A map_batch record's property_map referenced a canonical "
-            "field entirely absent from that record (not merely None)."
-        ),
-    ),
     "INVALID_LIMIT": ErrorCodeInfo(
         kind="validation",
         description=(

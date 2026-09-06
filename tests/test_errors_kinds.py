@@ -22,10 +22,8 @@ KIND_CLASSES = {
 def test_exported_coded_exceptions_match_kind_hierarchy_and_catalog() -> None:
     """Every exported coded exception is rooted at its catalogued kind.
 
-    ``MappingValidationError`` is intentionally a plain ``Exception`` for
-    connector preflight validation, so it is outside the coded taxonomy.
     ``OntaryError`` is the taxonomy root and therefore has no
-    kind-class parent of their own.
+    kind-class parent of its own.
     """
     exported_exceptions = [
         getattr(ontary, name)
