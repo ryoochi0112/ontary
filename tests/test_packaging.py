@@ -166,8 +166,26 @@ def test_documented_install_ref_matches_the_current_version() -> None:
     a reader copies out of the newest entry installs the version it describes.
     """
     version_tag = f"@v{_project()['version']}"
-    root = PYPROJECT.parent
-    seen: set[str] = set()
+    found = _walk_doc_install_refs(PYPROJECT.parent)
+    for name, refs in found.items():
+        for line in refs:
+            assert version_tag in line, (
+                f"{name} pins a stale tag: {line.strip()!r} does not name "
+                f"{version_tag!r}"
+            )
+    missing = sorted(set(_REQUIRED_REFS) - set(found))
+    assert not missing, f"no longer documents the git install ref: {missing}"
+
+
+def _walk_doc_install_refs(root: Path) -> dict[str, list[str]]:
+    """Every doc under `root` carrying an install ref, keyed by relative path.
+
+    Split out of the test so the walk's SCOPE is drivable against a fixture
+    root: which directories it refuses to police is a property in its own
+    right, and pointing the real walk at the real repo can only ever observe
+    the tree that happens to be on disk.
+    """
+    found: dict[str, list[str]] = {}
     candidates = sorted(p for suffix in _DOC_SUFFIXES for p in root.rglob(f"*{suffix}"))
     for path in candidates:
         if any(part in _SKIP_DIRS for part in path.parts):
@@ -177,16 +195,53 @@ def test_documented_install_ref_matches_the_current_version() -> None:
         if name == "CHANGELOG.md":
             text = _newest_release_section(text)
         refs = [line for line in text.splitlines() if _INSTALL_REF in line]
-        if not refs:
-            continue
-        seen.add(name)
-        for line in refs:
-            assert version_tag in line, (
-                f"{name} pins a stale tag: {line.strip()!r} does not name "
-                f"{version_tag!r}"
-            )
-    missing = sorted(set(_REQUIRED_REFS) - seen)
-    assert not missing, f"no longer documents the git install ref: {missing}"
+        if refs:
+            found[name] = refs
+    return found
+
+
+def test_install_ref_walk_refuses_to_police_nested_git_worktrees(
+    tmp_path: Path,
+) -> None:
+    """A git worktree nested in the repo is not repo content, and its CHANGELOG
+    archive is not drift.
+
+    `git worktree add` inside the repo -- what Claude Code does under
+    `.claude/worktrees/` -- puts a SECOND checkout under the walk's root. Two
+    things then go wrong at once, and this pins both. The walk descends into it,
+    so every historical `@v0.10.0` in that copy's changelog reads as a stale tag;
+    and the newest-release-section narrowing is keyed on the relative path being
+    exactly `CHANGELOG.md`, which the nested copy is not, so it loses the
+    archive exemption and is checked whole. The result was a red `make verify`
+    for anyone with a worktree open, on a tree whose own docs were correct.
+    """
+    (tmp_path / "CHANGELOG.md").write_text(
+        "## [Unreleased]\n\n## [0.11.0]\n"
+        'uv add "ontary @ git+https://github.com/ryoochi0112/ontary@v0.11.0"\n'
+        "\n## [0.10.0]\n"
+        'uv add "ontary @ git+https://github.com/ryoochi0112/ontary@v0.10.0"\n'
+    )
+    nested = tmp_path / ".claude" / "worktrees" / "some-worktree"
+    nested.mkdir(parents=True)
+    (nested / "CHANGELOG.md").write_text(
+        "## [Unreleased]\n\n## [0.11.0]\n"
+        'uv add "ontary @ git+https://github.com/ryoochi0112/ontary@v0.11.0"\n'
+        "\n## [0.10.0]\n"
+        'uv add "ontary @ git+https://github.com/ryoochi0112/ontary@v0.10.0"\n'
+    )
+    (nested / "README.md").write_text(
+        'uv add "ontary @ git+https://github.com/ryoochi0112/ontary@v0.9.0"\n'
+    )
+
+    found = _walk_doc_install_refs(tmp_path)
+
+    assert set(found) == {"CHANGELOG.md"}, (
+        "the walk policed a nested worktree: "
+        f"{sorted(set(found) - {'CHANGELOG.md'})}"
+    )
+    assert found["CHANGELOG.md"] == [
+        'uv add "ontary @ git+https://github.com/ryoochi0112/ontary@v0.11.0"'
+    ]
 
 
 #: What makes a line an install ref. Deliberately the ref FRAGMENT
@@ -211,8 +266,24 @@ _DOC_SUFFIXES = (".md", ".html")
 #: silently failing the walk. `site` is the MkDocs build output written by `make docs-build`.
 #: `specs` holds design notes and implementation plans: they quote install refs
 #: as placeholders and historical examples, and no reader installs from them.
+#: `.claude` is local agent state, git-excluded and carrying no tracked file --
+#: crucially it is where `git worktree add` puts a nested SECOND CHECKOUT of this
+#: repo. Without this entry the walk descends into that checkout and reads its
+#: changelog archive as drift, so `make verify` went red for anyone with a
+#: worktree open while the tree's own docs were correct.
 _SKIP_DIRS = frozenset(
-    {".venv", ".git", ".mypy_cache", ".pytest_cache", "node_modules", "build", "dist", "site", "specs"}
+    {
+        ".venv",
+        ".git",
+        ".claude",
+        ".mypy_cache",
+        ".pytest_cache",
+        "node_modules",
+        "build",
+        "dist",
+        "site",
+        "specs",
+    }
 )
 
 #: Docs that must ALWAYS carry the install command. Without this, a canonical
