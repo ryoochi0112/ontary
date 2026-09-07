@@ -9,6 +9,7 @@ from typing import Any, Literal
 
 import pytest
 from conftest import _mcp_uninstalled
+from mcp.server.mcpserver import MCPServer
 
 import ontary.cli as cli
 import ontary.mcp_server as mcp_server
@@ -32,21 +33,18 @@ def _serve_ontology() -> Ontology:
     return ontology
 
 
-class _FakeSettings:
-    host = "not-configured"
-    port = -1
-
-
 class _FakeServer:
     def __init__(self) -> None:
-        self.settings: cli._MCPSettings = _FakeSettings()
         self.runs: list[tuple[str, str, int]] = []
 
     def run(
         self,
         transport: Literal["streamable-http"] = "streamable-http",
+        *,
+        host: str,
+        port: int,
     ) -> None:
-        self.runs.append((transport, self.settings.host, self.settings.port))
+        self.runs.append((transport, host, port))
 
 
 def test_start_dev_server_refuses_non_local_bind() -> None:
@@ -55,7 +53,6 @@ def test_start_dev_server_refuses_non_local_bind() -> None:
     with pytest.raises(ValueError, match=r"localhost-only.*127\.0\.0\.1"):
         cli._start_dev_server(server, host="0.0.0.0", port=8123)
 
-    assert server.settings.host == "not-configured"
     assert server.runs == []
 
 
@@ -119,6 +116,30 @@ def test_serve_runs_streamable_http_on_localhost_and_chosen_port(
 
     assert cli.main(["serve", _target(), "--dev", "--port", "9123"]) == 0
     assert server.runs == [("streamable-http", "127.0.0.1", 9123)]
+
+
+def test_serve_passes_dev_configuration_to_real_mcp_server(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Use a real MCPServer to catch access to its removed `.settings` fields.
+
+    Hand-written fakes carried `.settings`, so they could not catch this MCP 2.x break.
+    """
+    captured: list[tuple[str, dict[str, object]]] = []
+
+    def _capture(
+        _server: MCPServer,
+        transport: str = "stdio",
+        **kwargs: object,
+    ) -> None:
+        captured.append((transport, kwargs))
+
+    monkeypatch.setattr(MCPServer, "run", _capture)
+
+    assert cli.main(["serve", _target(), "--dev", "--port", "9123"]) == 0
+    assert captured == [
+        ("streamable-http", {"host": "127.0.0.1", "port": 9123})
+    ]
 
 
 def test_serve_uses_default_port(monkeypatch: pytest.MonkeyPatch) -> None:

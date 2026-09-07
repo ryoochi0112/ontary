@@ -23,17 +23,13 @@ class _LoadFailure(Exception):
     """A target or store could not be loaded for a CLI command."""
 
 
-class _MCPSettings(Protocol):
-    host: str
-    port: int
-
-
 class _MCPServer(Protocol):
-    settings: _MCPSettings
-
     def run(
         self,
         transport: Literal["streamable-http"] = "streamable-http",
+        *,
+        host: str,
+        port: int,
     ) -> None: ...
 
 
@@ -192,9 +188,7 @@ def _start_dev_server(
         raise ValueError(
             f"ontary serve --dev is localhost-only; host must be {_DEV_HOST}"
         )
-    server.settings.host = host
-    server.settings.port = port
-    server.run(transport="streamable-http")
+    server.run(transport="streamable-http", host=host, port=port)
 
 
 def _run_serve(target: str, store_path: str | None, port: int) -> int:

@@ -551,16 +551,15 @@ def test_tickets_cli_serve_hands_runner_exact_dev_configuration(
 ) -> None:
     captured: dict[str, object] = {}
 
-    class Settings:
-        host = "unset"
-        port = -1
-
     class Server:
-        def __init__(self) -> None:
-            self.settings = Settings()
-
-        def run(self, transport: str = "streamable-http") -> None:
-            captured["run"] = (transport, self.settings.host, self.settings.port)
+        def run(
+            self,
+            transport: str = "streamable-http",
+            *,
+            host: str,
+            port: int,
+        ) -> None:
+            captured["run"] = (transport, host, port)
 
     def fake_build(
         ontology: Ontology,
