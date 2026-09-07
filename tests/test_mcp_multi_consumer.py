@@ -30,21 +30,18 @@ Covers, by spec §7 row:
 - #20 golden end-to-end: an authenticated `execute_action` writes an audit
   row where `actor != principal`.
 
-Plus, added after a whole-branch `/review` BLOCKED this branch with a P0 no
-per-task review caught (not one of the numbered rows above -- ledger task
-T10): `test_stateless_http_serves_each_request_its_own_token` drives the
-REAL ASGI app (`httpx2.ASGITransport` over `MCPServer.streamable_http_app()`,
-a stub `TokenVerifier`, no socket) rather than setting the contextvar
-directly, because the contextvar shortcut every OTHER test in this file
-uses cannot tell "resolved from this call's token" apart from "resolved
-from a token frozen at session-establishment and read N times" -- see that
-test's own docstring.
+The ASGI regression test drives both stateless and stateful streamable HTTP
+through `httpx2.ASGITransport` over `MCPServer.streamable_http_app()`, with a
+stub `TokenVerifier` and no socket. It does not set the auth contextvar
+directly, because that shortcut cannot distinguish a current request's token
+from one frozen when a stateful session was initialized.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
@@ -65,7 +62,7 @@ from ontary.actions import ActionContext, ActionError
 from ontary.authoring import ActionParams, Ontology, OntologyObject, prop, scope_ref, target
 from ontary.client import OntologyClient, OntologyRuntime
 from ontary.functions import BoundQuery
-from ontary.mcp_server import build_multi_consumer_mcp_server
+from ontary.mcp_server import MCP_INCOMPATIBLE_HINT, build_multi_consumer_mcp_server
 from ontary.meta import Cardinality
 from ontary.scope import DirectProperty, SelfScope, ViaLink
 from ontary.security import Consumer
@@ -796,6 +793,28 @@ def test_missing_mcp_extra_names_the_install_command_multi_consumer() -> None:
     assert isinstance(exc_info.value.__cause__, ModuleNotFoundError)
 
 
+def test_importable_mcp_with_missing_mcpserver_module_reports_incompatible_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Simulate the mcp-1.x layout; the adjacent missing-root test pins
+    `MCP_EXTRA_HINT` through this same public builder."""
+    import mcp
+
+    assert mcp is not None
+    ontology, _Book = _library_ontology()
+    store = _build_store(ontology)
+    monkeypatch.setitem(sys.modules, "mcp.server.mcpserver", None)
+
+    with pytest.raises(ImportError) as exc_info:
+        build_multi_consumer_mcp_server(
+            ontology, store, resolve_consumer=_resolve_known_consumers
+        )
+
+    assert str(exc_info.value) == MCP_INCOMPATIBLE_HINT
+    assert "mcp>=2.1.1,<3" in str(exc_info.value)
+    assert isinstance(exc_info.value.__cause__, ModuleNotFoundError)
+
+
 
 
 # -- ledger T10 P1: passing exactly one of token_verifier/auth is a -------
@@ -858,11 +877,16 @@ class _StubTokenVerifier:
         return self._tokens.get(token)
 
 
-def test_stateless_http_serves_each_request_its_own_token() -> None:
-    """Drive the real ASGI auth pipeline and prove the call sees its token.
+@pytest.mark.parametrize("stateless_http", [True, False])
+def test_stateless_http_serves_each_request_its_own_token(
+    stateless_http: bool,
+) -> None:
+    """Pin per-request token resolution at the real ASGI boundary in both
+    session modes, using `httpx2.ASGITransport` and never the contextvar.
 
-    No socket or network is involved: `httpx2.ASGITransport` invokes the
-    `MCPServer.streamable_http_app()` ASGI callable in-process.
+    MCP 2.x resolves the token per request even in stateful sessions, whereas
+    MCP 1.28.1 froze the auth context at `initialize` in stateful mode; that
+    old behavior is why 1.x deployments had to force `stateless_http=True`.
     """
 
     async def _run() -> None:
@@ -912,7 +936,7 @@ def test_stateless_http_serves_each_request_its_own_token() -> None:
         )
 
         app = server.streamable_http_app(
-            stateless_http=True,
+            stateless_http=stateless_http,
             json_response=True,
             transport_security=TransportSecuritySettings(
                 enable_dns_rebinding_protection=False
@@ -944,6 +968,8 @@ def test_stateless_http_serves_each_request_its_own_token() -> None:
                 )
                 assert init_response.status_code == 200, init_response.text
                 session_id = init_response.headers.get("mcp-session-id")
+                if not stateless_http:
+                    assert session_id is not None, "stateful mode did not mint a session id"
 
                 call_headers = {
                     "Authorization": "Bearer tok-B",

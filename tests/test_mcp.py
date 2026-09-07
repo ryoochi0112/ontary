@@ -30,6 +30,7 @@ Covers:
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import sys
 from typing import Any, Protocol
@@ -236,6 +237,17 @@ def _call(server: MCPServer, name: str, arguments: dict[str, Any]) -> dict[str, 
 
 
 # -- introspection --------------------------------------------------------
+
+
+def test_every_registered_tool_is_a_coroutine_function() -> None:
+    server, _store = _build_server(_librarian())
+    tool_names = [tool.name for tool in asyncio.run(server.list_tools())]
+    assert tool_names, "server registered no tools"
+    for name in tool_names:
+        tool = server._tool_manager.get_tool(name)
+        assert inspect.iscoroutinefunction(tool.fn), (
+            f"registered tool {name!r} is not a coroutine function"
+        )
 
 
 def test_list_object_types_matches_registry() -> None:
