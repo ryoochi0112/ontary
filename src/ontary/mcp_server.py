@@ -94,11 +94,12 @@ if TYPE_CHECKING:
 ConsumerResolver = Callable[["AccessToken"], "Consumer | None"]
 """Maps one request's verified `AccessToken` to the `Consumer` it should act
 as, or `None` if nothing maps it (spec `multi-consumer-mcp.md` §4.1). Must be
-SYNCHRONOUS -- `mcp` 1.28.1 calls a sync tool directly on the event loop
-(no worker-thread offload), so an async resolver would neither stop the
-loop from blocking (the tool body's store I/O is synchronous anyway) nor
-avoid forking the twelve tool bodies into a sync copy and an async copy; see
-`build_multi_consumer_mcp_server`'s docstring (§4.4).
+SYNCHRONOUS -- the twelve tool handlers are `async def`, so the resolver is
+called on the event loop inside the request's task. It must therefore be a
+plain synchronous callable that does not block (no network round-trips that
+stall the loop -- a slow resolver stalls every in-flight request), and an
+`async` resolver is not accepted because the tool bodies call it
+synchronously; see `build_multi_consumer_mcp_server`'s docstring (§4.4).
 
 If this callback raises a deliberate `OntaryError` (rather than returning
 `None`), that error's `.message` IS echoed verbatim in the tool's error
@@ -1004,6 +1005,15 @@ def build_multi_consumer_mcp_server(
     `streamable_http_app()` wires in only when both fields are already set
     at that call -- passing them here, through the constructor, is what
     keeps that whole pipeline intact.
+
+    Transport options -- `stateless_http`, `json_response`,
+    `transport_security`, `host`, and `port` -- are not constructor arguments
+    on mcp 2.x; the deployer passes them to
+    `server.run(transport="streamable-http", ...)` or (all but `port`)
+    `server.streamable_http_app(...)`. On mcp 2.x, each request resolves its
+    own token in stateful sessions too: the auth context is no longer copied
+    once at `initialize`, and `tests/test_mcp_multi_consumer.py` pins both
+    session modes at the ASGI boundary.
 
     **One runtime, many views (AC7).** Exactly one `OntologyRuntime` -- one
     `GuardedQuery`, one `ActionExecutor`, every ontology-declared handler
