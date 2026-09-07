@@ -188,9 +188,14 @@ def _walk_doc_install_refs(root: Path) -> dict[str, list[str]]:
     found: dict[str, list[str]] = {}
     candidates = sorted(p for suffix in _DOC_SUFFIXES for p in root.rglob(f"*{suffix}"))
     for path in candidates:
-        if any(part in _SKIP_DIRS for part in path.parts):
+        # Measured RELATIVE to `root`: `_SKIP_DIRS` names directories inside the
+        # repo, and `path.parts` would also match every ancestor above it. A
+        # checkout living at `<repo>/.claude/worktrees/<name>` would then skip
+        # every one of its own files.
+        relative = path.relative_to(root)
+        if any(part in _SKIP_DIRS for part in relative.parts):
             continue
-        name = path.relative_to(root).as_posix()
+        name = relative.as_posix()
         text = path.read_text()
         if name == "CHANGELOG.md":
             text = _newest_release_section(text)
@@ -242,6 +247,39 @@ def test_install_ref_walk_refuses_to_police_nested_git_worktrees(
     assert found["CHANGELOG.md"] == [
         'uv add "ontary @ git+https://github.com/ryoochi0112/ontary@v0.11.0"'
     ]
+
+
+def test_install_ref_walk_measures_skip_dirs_from_the_root_it_is_given(
+    tmp_path: Path,
+) -> None:
+    """A checkout whose OWN path sits under a skipped name is still walked.
+
+    `_SKIP_DIRS` names directories *inside* the repo, but matching it against
+    `path.parts` matches the ABSOLUTE path -- so it also matches every ancestor
+    above the root. Claude Code puts its worktrees at
+    `<repo>/.claude/worktrees/<name>`, so running the suite from one skips every
+    file in it: `found` comes back empty and the `_REQUIRED_REFS` guard fires on
+    a tree whose docs are correct. That is the same red `make verify` the
+    `.claude` entry was added to fix, reached from the other side.
+
+    Pins both halves at once -- the ancestor must NOT suppress the walk, and a
+    skipped directory genuinely inside the root must still be skipped.
+    """
+    root = tmp_path / ".claude" / "worktrees" / "wt"
+    (root / ".venv").mkdir(parents=True)
+    (root / "README.md").write_text(
+        'uv add "ontary @ git+https://github.com/ryoochi0112/ontary@v0.11.0"\n'
+    )
+    (root / ".venv" / "VENDORED.md").write_text(
+        'uv add "ontary @ git+https://github.com/ryoochi0112/ontary@v0.9.0"\n'
+    )
+
+    found = _walk_doc_install_refs(root)
+
+    assert set(found) == {"README.md"}, (
+        "the walk read its own root's path as a skipped directory: "
+        f"found {sorted(found)}"
+    )
 
 
 #: What makes a line an install ref. Deliberately the ref FRAGMENT
