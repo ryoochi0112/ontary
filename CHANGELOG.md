@@ -11,6 +11,22 @@ you**.
 
 ## [Unreleased]
 
+### Breaking
+
+- `ontary[mcp]` now requires `mcp>=2.1.1,<3` (was `>=1.27.2,<2`); mcp 1.x is
+  no longer supported — on 1.x the builders raise `ImportError` naming the range
+  to install.
+- Both `build_mcp_server` and `build_multi_consumer_mcp_server` return
+  `mcp.server.mcpserver.MCPServer` (was `mcp.server.fastmcp.FastMCP`).
+- `build_multi_consumer_mcp_server` no longer forces `stateless_http=True`; pass
+  transport options (`stateless_http`, `json_response`, `transport_security`, `host`;
+  `port` on `run()`) to `run()`/`streamable_http_app()`. On mcp 2.x each request
+  resolves its own token in stateful sessions too.
+- The twelve tool handlers are `async def` (2.x runs sync handlers on a worker
+  thread, which the thread-affine SQLite store cannot serve); a `ConsumerResolver`
+  stays a synchronous callable and now runs on the event loop.
+- To stay on mcp 1.x, pin `ontary<0.12`.
+
 ### Added
 
 - CI tests on Python 3.13 as well as 3.12, matching the classifiers.
@@ -35,8 +51,8 @@ you**.
 - The ruff rule set is declared explicitly (`select = ["E4", "E7", "E9", "F", "I",
   "B", "C901"]`) instead of extending the implicit default. ruff 0.16.0 widened
   the defaults from 59 to 413 rules; the explicit list keeps the pre-0.16 gate.
-- Dependabot ignores `mcp` major bumps: 2.x removes the integration surface
-  `mcp_server.py` imports, so a 2.x PR cannot go green without a migration.
+- Dependabot's `mcp` major-bump ignore was added for PR #10 and removed again by
+  this change now that the migration has landed.
 
 ## [0.11.0] — 2026-09-06
 

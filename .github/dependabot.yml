@@ -19,14 +19,6 @@ updates:
       # opens its own PR and gets read on its own.
       python-minor-and-patch:
         update-types: [minor, patch]
-    ignore:
-      # mcp 2.x drops the `mcp.server.fastmcp` and auth-module layout that
-      # src/ontary/mcp_server.py imports (see the `<2` rationale above `mcp = [...]`
-      # in pyproject.toml). Moving to 2.x is a migration with its own spec, not a
-      # dependency bump; until then a 2.x PR would only ever be red (PR #10).
-      - dependency-name: mcp
-        update-types: ["version-update:semver-major"]
-
   - package-ecosystem: github-actions
     directory: /
     schedule:
