@@ -3,7 +3,7 @@
 
 No socket, no OAuth issuer: the MCP auth contextvar is set/reset directly
 (`mcp.server.auth.middleware.auth_context.auth_context_var`), exactly the
-technique this task's brief verified works, and `FastMCP.call_tool` invokes
+technique this task's brief verified works, and `MCPServer.call_tool` invokes
 the tool function in-process -- same no-network approach `tests/test_mcp.py`
 and `tests/test_mcp_resolver_seam.py` already use.
 
@@ -30,35 +30,30 @@ Covers, by spec §7 row:
 - #20 golden end-to-end: an authenticated `execute_action` writes an audit
   row where `actor != principal`.
 
-Plus, added after a whole-branch `/review` BLOCKED this branch with a P0 no
-per-task review caught (not one of the numbered rows above -- ledger task
-T10): `test_stateless_http_serves_each_request_its_own_token` drives the
-REAL ASGI app (`httpx.ASGITransport` over `FastMCP.streamable_http_app()`,
-a stub `TokenVerifier`, no socket) rather than setting the contextvar
-directly, because the contextvar shortcut every OTHER test in this file
-uses cannot tell "resolved from this call's token" apart from "resolved
-from a token frozen at session-establishment and read N times" -- see that
-test's own docstring, and `build_multi_consumer_mcp_server`'s `stateless_
-http=True` comment, for the mechanism.
+The ASGI regression test drives both stateless and stateful streamable HTTP
+through `httpx2.ASGITransport` over `MCPServer.streamable_http_app()`, with a
+stub `TokenVerifier` and no socket. It does not set the auth contextvar
+directly, because that shortcut cannot distinguish a current request's token
+from one frozen when a stateful session was initialized.
 """
 
 from __future__ import annotations
 
 import asyncio
-import builtins
 import json
+import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
 
-import httpx
+import httpx2
 import pytest
 from conftest import _mcp_uninstalled
 from mcp.server.auth.middleware.auth_context import auth_context_var
 from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
 from mcp.server.auth.provider import AccessToken
 from mcp.server.auth.settings import AuthSettings
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import LATEST_PROTOCOL_VERSION
 from pydantic import AnyHttpUrl
@@ -67,7 +62,7 @@ from ontary.actions import ActionContext, ActionError
 from ontary.authoring import ActionParams, Ontology, OntologyObject, prop, scope_ref, target
 from ontary.client import OntologyClient, OntologyRuntime
 from ontary.functions import BoundQuery
-from ontary.mcp_server import _load_fastmcp, build_multi_consumer_mcp_server
+from ontary.mcp_server import MCP_INCOMPATIBLE_HINT, build_multi_consumer_mcp_server
 from ontary.meta import Cardinality
 from ontary.scope import DirectProperty, SelfScope, ViaLink
 from ontary.security import Consumer
@@ -228,18 +223,14 @@ def _authenticated_as(
         auth_context_var.reset(reset)
 
 
-def _call(server: FastMCP, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+def _call(server: MCPServer, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     """Call `name` in-process and decode the JSON payload the tool
     returned -- duplicated from `test_mcp.py`'s own helper of the same
     name, per this file's docstring."""
     result = asyncio.run(server.call_tool(name, arguments))
-    if isinstance(result, tuple):
-        _content, structured = result
-        assert isinstance(structured, dict)
-        return structured
-    assert isinstance(result, list)
-    assert len(result) == 1
-    payload: dict[str, Any] = json.loads(result[0].text)  # type: ignore[union-attr]
+    if result.structured_content is not None:
+        return result.structured_content
+    payload: dict[str, Any] = json.loads(result.content[0].text)
     return payload
 
 
@@ -274,7 +265,7 @@ ALL_TOOLS: tuple[tuple[str, dict[str, Any]], ...] = (
 
 def _build_multi_consumer_server(
     resolve_consumer: Any = _resolve_known_consumers,
-) -> tuple[FastMCP, ObjectStore]:
+) -> tuple[MCPServer, ObjectStore]:
     ontology, _Book = _library_ontology()
     store = _build_store(ontology)
     server = build_multi_consumer_mcp_server(ontology, store, resolve_consumer=resolve_consumer)
@@ -782,9 +773,9 @@ def test_missing_mcp_extra_names_the_install_command_multi_consumer() -> None:
 
     This is the ONLY path that pins `_load_get_access_token`'s
     `MCP_EXTRA_HINT` branch as live: `build_multi_consumer_mcp_server` calls
-    `_load_get_access_token()` before `_load_fastmcp()` (see that function's
+    `_load_get_access_token()` before `_load_mcp_server()` (see that function's
     docstring), so with both loaders blocked, `_load_get_access_token` is
-    the one that raises first -- not `_load_fastmcp`.
+    the one that raises first -- not `_load_mcp_server`.
     """
     ontology, _Book = _library_ontology()
     store = _build_store(ontology)
@@ -802,36 +793,28 @@ def test_missing_mcp_extra_names_the_install_command_multi_consumer() -> None:
     assert isinstance(exc_info.value.__cause__, ModuleNotFoundError)
 
 
-def test_importable_mcp_with_missing_fastmcp_module_reports_incompatible_version(
+def test_importable_mcp_with_missing_mcpserver_module_reports_incompatible_version(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Simulate the mcp-2.x layout: root package present, FastMCP path gone."""
+    """Simulate the mcp-1.x layout; the adjacent missing-root test pins
+    `MCP_EXTRA_HINT` through this same public builder."""
     import mcp
 
     assert mcp is not None
-    original_import = builtins.__import__
+    ontology, _Book = _library_ontology()
+    store = _build_store(ontology)
+    monkeypatch.setitem(sys.modules, "mcp.server.mcpserver", None)
 
-    def _missing_fastmcp(
-        name: str,
-        globals: dict[str, Any] | None = None,
-        locals: dict[str, Any] | None = None,
-        fromlist: tuple[str, ...] = (),
-        level: int = 0,
-    ) -> Any:
-        if name == "mcp.server.fastmcp":
-            raise ModuleNotFoundError(
-                "No module named 'mcp.server.fastmcp'", name=name
-            )
-        return original_import(name, globals, locals, fromlist, level)
-
-    monkeypatch.setattr(builtins, "__import__", _missing_fastmcp)
     with pytest.raises(ImportError) as exc_info:
-        _load_fastmcp()
+        build_multi_consumer_mcp_server(
+            ontology, store, resolve_consumer=_resolve_known_consumers
+        )
 
-    message = str(exc_info.value)
-    assert "installed `mcp` version is unsupported" in message
-    assert "mcp>=1.27.2,<2" in message
+    assert str(exc_info.value) == MCP_INCOMPATIBLE_HINT
+    assert "mcp>=2.1.1,<3" in str(exc_info.value)
     assert isinstance(exc_info.value.__cause__, ModuleNotFoundError)
+
+
 
 
 # -- ledger T10 P1: passing exactly one of token_verifier/auth is a -------
@@ -839,7 +822,7 @@ def test_importable_mcp_with_missing_fastmcp_module_reports_incompatible_version
 
 
 def test_token_verifier_without_auth_raises_valueerror_at_construction() -> None:
-    """`FastMCP.__init__` itself refuses this combination -- construction
+    """`MCPServer.__init__` itself refuses this combination -- construction
     never completes and no call is ever made, so this is fail-FAST, not
     the per-call fail-CLOSED sequence (#11 above). Measured through the
     public builder against the actual installed `mcp`, not asserted from
@@ -894,44 +877,16 @@ class _StubTokenVerifier:
         return self._tokens.get(token)
 
 
-def test_stateless_http_serves_each_request_its_own_token() -> None:
-    """Pins the whole-branch `/review` P0 at the ASGI level: every OTHER
-    test in this file sets `mcp.server.auth.middleware.auth_context.
-    auth_context_var` directly, in-process -- which PRESUPPOSES that a
-    tool body always runs with the CURRENT request's contextvar. It cannot
-    distinguish that from "resolved from a token frozen once, at session
-    establishment, and read N times", because it never drives the
-    transport that would freeze it.
+@pytest.mark.parametrize("stateless_http", [True, False])
+def test_stateless_http_serves_each_request_its_own_token(
+    stateless_http: bool,
+) -> None:
+    """Pin per-request token resolution at the real ASGI boundary in both
+    session modes, using `httpx2.ASGITransport` and never the contextvar.
 
-    `mcp` 1.28.1's DEFAULT stateful streamable HTTP starts one session
-    TASK on the `initialize` request and reuses that same task for every
-    later request bearing that session's `Mcp-Session-Id` -- so a tool
-    body invoked by request #2 actually runs *inside request #1's task*,
-    which copied the auth contextvar once, at task-start time.
-    `get_access_token()` therefore returns request #1's `AccessToken` for
-    the whole session's life, no matter which request's `Authorization`
-    header actually reached the transport. `build_multi_consumer_mcp_
-    server` sets `stateless_http=True` specifically to defeat this -- see
-    that function's own comment for the mechanism.
-
-    This test drives the REAL ASGI app: `httpx.ASGITransport` over
-    `FastMCP.streamable_http_app()`, with a stub `TokenVerifier` wired
-    through `build_multi_consumer_mcp_server`'s own public `token_
-    verifier=`/`auth=` keyword arguments -- forwarded verbatim to the
-    underlying `FastMCP(...)` constructor, the only place either can be
-    set (see that function's docstring) -- so this drives the REAL
-    `BearerAuthBackend` / `AuthContextMiddleware` pipeline through the
-    documented, public seam rather than the contextvar shortcut every
-    other test in this file uses. No socket, no network: `ASGITransport`
-    calls the ASGI `app` callable in-process, synchronously.
-
-    MUTATION CHECK (required by this task's brief): flip `build_multi_
-    consumer_mcp_server`'s `stateless_http=True` back to `False` and this
-    test FAILS -- request #2 (bearing tok-B, `scopes=["admin"]`) reuses
-    request #1's `Mcp-Session-Id`, so the stateful transport routes it into
-    request #1's already-running session task, whose frozen contextvar
-    still holds tok-A (`scopes=["read"]`); `resolve_consumer` then sees
-    tok-A for request #2 too, and the assertion below (`("admin",)`) fails.
+    MCP 2.x resolves the token per request even in stateful sessions, whereas
+    MCP 1.28.1 froze the auth context at `initialize` in stateful mode; that
+    old behavior is why 1.x deployments had to force `stateless_http=True`.
     """
 
     async def _run() -> None:
@@ -966,11 +921,11 @@ def test_stateless_http_serves_each_request_its_own_token() -> None:
             store,
             resolve_consumer=_recording_resolver,
             # The public seam (this task's brief, P0): forwarded VERBATIM
-            # to `FastMCP(...)` by `build_multi_consumer_mcp_server` --
+            # to `MCPServer(...)` by `build_multi_consumer_mcp_server` --
             # the only place either can be wired, per that function's own
             # docstring. `auth` must be set alongside `token_verifier` --
-            # FastMCP only wires `BearerAuthBackend`/`AuthContextMiddleware`
-            # into the ASGI app when BOTH are present (see `FastMCP.
+            # MCPServer only wires `BearerAuthBackend`/`AuthContextMiddleware`
+            # into the ASGI app when BOTH are present (see `MCPServer.
             # streamable_http_app`); neither URL is ever dereferenced by
             # anything this test exercises.
             token_verifier=_StubTokenVerifier({"tok-A": token_a, "tok-B": token_b}),
@@ -980,26 +935,17 @@ def test_stateless_http_serves_each_request_its_own_token() -> None:
             ),
         )
 
-        # Plain JSON responses (not SSE) -- simpler to assert against, and
-        # orthogonal to the stateless/stateful question this test pins.
-        # (`json_response` has no constructor keyword of its own on
-        # `build_multi_consumer_mcp_server` -- it is a plain, public,
-        # non-underscore-prefixed `FastMCP` settings field, unlike
-        # `_token_verifier`/`settings.auth` above, so mutating it here
-        # post-construction is not the seam this task's brief is about.)
-        server.settings.json_response = True
-        # FastMCP auto-enables DNS rebinding protection for a "localhost"
-        # host, which would otherwise 421 every request from this
-        # in-process client -- irrelevant to what this test drives.
-        server.settings.transport_security = TransportSecuritySettings(
-            enable_dns_rebinding_protection=False
+        app = server.streamable_http_app(
+            stateless_http=stateless_http,
+            json_response=True,
+            transport_security=TransportSecuritySettings(
+                enable_dns_rebinding_protection=False
+            ),
         )
 
-        app = server.streamable_http_app()
-
         async with server.session_manager.run():
-            transport = httpx.ASGITransport(app=app)
-            async with httpx.AsyncClient(
+            transport = httpx2.ASGITransport(app=app)
+            async with httpx2.AsyncClient(
                 transport=transport, base_url="http://localhost"
             ) as client:
                 init_response = await client.post(
@@ -1022,6 +968,8 @@ def test_stateless_http_serves_each_request_its_own_token() -> None:
                 )
                 assert init_response.status_code == 200, init_response.text
                 session_id = init_response.headers.get("mcp-session-id")
+                if not stateless_http:
+                    assert session_id is not None, "stateful mode did not mint a session id"
 
                 call_headers = {
                     "Authorization": "Bearer tok-B",

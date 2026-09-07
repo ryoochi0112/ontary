@@ -54,7 +54,7 @@ from ontary.errors import (
 )
 from ontary.functions import BoundQuery
 
-# `ontary.mcp_server` defers its OWN `mcp` import (`_load_fastmcp`/
+# `ontary.mcp_server` defers its OWN `mcp` import (`_load_mcp_server`/
 # `_load_get_access_token`, called only from inside the builders), so importing
 # it here is safe for a core-only install. The redundant `as` alias tells
 # ruff this front-door re-export is deliberate.

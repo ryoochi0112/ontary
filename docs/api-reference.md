@@ -970,7 +970,7 @@ raises `OWNED_PROPERTY_REFUSED`.
 from ontary.mcp_server import build_mcp_server
 
 server = build_mcp_server(ontology, store, consumer, *, name=None,
-                          capabilities=None)  # -> FastMCP
+                          capabilities=None)  # -> MCPServer
 ```
 
 One server process, one `Consumer` identity. Declared handlers arrive **pre-bound** —
@@ -1036,7 +1036,7 @@ server = build_multi_consumer_mcp_server(
     ontology, store, *, resolve_consumer, name=None,
     capabilities=None,
     token_verifier=None, auth=None,
-)  # -> FastMCP
+)  # -> MCPServer
 ```
 
 One server process, **many proven identities** — no `consumer` argument. Builds exactly
@@ -1062,28 +1062,22 @@ introspection:
 The SDK verifies no token and issues none — `token_verifier` and `auth` are MCP's own
 types (`mcp.server.auth.provider.TokenVerifier` / `mcp.server.auth.settings.
 AuthSettings`), configured by the deployer and forwarded VERBATIM to the underlying
-`FastMCP(...)` call — the only place either can be wired, since `FastMCP` exposes no
+`MCPServer(...)` call — the only place either can be wired, since `MCPServer` exposes no
 public setter for either afterwards. Passing neither is a legitimate stdio-only or
 intentionally-open deployment; passing exactly one of the two is not a runtime state at
-all — `FastMCP.__init__` raises `ValueError` (fail-fast at construction), so no server
+all — `MCPServer.__init__` raises `ValueError` (fail-fast at construction), so no server
 is ever built and no call is ever made. Stdio carries no auth context at all, so a
 multi-consumer server run that way always refuses every call with `UNAUTHENTICATED`
 regardless of these two arguments; use `build_mcp_server(ontology, store, consumer)`
 for a single-consumer stdio process instead.
 
-**Constructed `stateless_http=True`, hardcoded — a real transport trade-off.**
-FastMCP's default stateful streamable HTTP starts one long-lived session task on the
-`initialize` request and reuses it for every later request bearing that session's
-`Mcp-Session-Id`; a tool body invoked by a later request would then run *inside the
-`initialize` request's task*, whose auth context was copied once, at task-start time —
-silently breaking "never cached" above, since a revoked or re-scoped token would keep
-being served from that frozen binding until the session ended. `stateless_http=True`
-gives every request its own fresh transport and session task instead, so there is
-nothing to freeze a token into. Cost: no session resumability on this server (SSE
-streaming itself is controlled by FastMCP's own `json_response` setting, not by
-`stateless_http`, and is unaffected either way). `build_mcp_server` is unaffected — it
-has no session to freeze a token into (one `Consumer`, bound at construction, for the
-process's whole life).
+**Transport options belong to `run()`/`streamable_http_app()`.** The builder does not
+force a session mode: on mcp 2.x, `stateless_http`, `json_response`,
+`transport_security`, and `host` are keyword arguments of `run()` and
+`streamable_http_app()`, and `port` of `run()` (an ASGI app binds no socket). Each request resolves its own token in stateful
+sessions too; `tests/test_mcp_multi_consumer.py` pins both modes at the ASGI
+boundary. `build_mcp_server` has one `Consumer` bound at construction and no
+per-request identity to resolve.
 
 Needs the `mcp` extra.
 

@@ -14,7 +14,7 @@ import json
 import sys
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import pytest
 
@@ -251,13 +251,9 @@ def make_call() -> CallFactory:
 
     def _make(server: Any, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         result = asyncio.run(server.call_tool(name, arguments))
-        if isinstance(result, tuple):
-            _content, structured = result
-            assert isinstance(structured, dict)
-            return structured
-        assert isinstance(result, list)
-        assert len(result) == 1
-        payload: dict[str, Any] = json.loads(result[0].text)
+        if result.structured_content is not None:
+            return cast(dict[str, Any], result.structured_content)
+        payload: dict[str, Any] = json.loads(result.content[0].text)
         return payload
 
     return _make

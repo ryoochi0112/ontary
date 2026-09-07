@@ -52,6 +52,7 @@ exemption on a hidden property -- without the incoherent declaration.
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any
 
 import pytest
@@ -434,12 +435,15 @@ def test_refused_over_the_mcp_wire() -> None:
     definition, store = _incoherent()
     server = build_mcp_server(definition, store, CONSUMER)
 
-    payload = asyncio.run(
+    result = asyncio.run(
         server.call_tool(
             "count_objects",
             {"obj_type": "RecordB", "where": {"group_id": SECRET}},
         )
-    )[1]
+    )
+    payload = result.structured_content
+    if payload is None:
+        payload = json.loads(result.content[0].text)
 
     assert payload["error"]["code"] == "SCOPE_POLICY_ERROR"
 

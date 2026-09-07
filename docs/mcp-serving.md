@@ -118,7 +118,7 @@ sharing per-request consumer state.
 ## Authentication and failure direction
 
 The SDK verifies no token and issues none. Pass the deployer's `token_verifier` and
-`AuthSettings` into the builder so FastMCP can install its authentication pipeline.
+`AuthSettings` into the builder so `MCPServer` can install its authentication pipeline.
 The callback receives an `AccessToken` that MCP has already verified.
 
 If a request has no verified token, the server raises `PermissionDenied` with code
@@ -135,17 +135,21 @@ visible to an auditor.
 
 ## Transport requirements
 
-The multi-consumer builder constructs FastMCP with `stateless_http=True`. Stateful
-streamable HTTP would reuse the task that handled `initialize`, which could retain
-one request's authentication context for later calls. Stateless requests give each
-invocation a fresh task and preserve the no-cache identity contract, at the cost of
-session resumability and replay of missed events.
+The multi-consumer builder returns an `MCPServer` but does not choose a transport
+mode. On mcp 2.x, transport options (`stateless_http`, `json_response`,
+`transport_security`, `host`) are keyword arguments of `run()` and
+`streamable_http_app()`, and `port` of `run()`. Each request resolves its own token in stateful sessions
+as well, and the SDK's test suite pins both modes at the ASGI boundary.
+
+```python
+server.run(transport="streamable-http", stateless_http=True, json_response=True)
+```
 
 `stdio` carries no bearer-token context. A multi-consumer server run over stdio
 therefore refuses calls with `UNAUTHENTICATED`; use the single-consumer
 `build_mcp_server(ontology, store, consumer)` for a zero-infrastructure stdio
 process. The SDK does not provide its own HTTP entrypoint: the deployer runs the
-FastMCP server or wraps its ASGI application in the host's process.
+`MCPServer` instance or wraps its ASGI application in the host's process.
 
 See [the API reference MCP section](api-reference.md#mcp-server) for the builder
 signatures and tool behavior, and its

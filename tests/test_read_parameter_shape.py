@@ -52,6 +52,7 @@ The inputs the existing suite structurally could not construct:
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any
 
 import pytest
@@ -124,7 +125,10 @@ def _declared_rows(count: int = 6) -> list[dict[str, Any]]:
 
 def _mcp(definition: OntologyDef, store: ObjectStore, tool: str, **args: Any) -> Any:
     server = build_mcp_server(definition, store, CONSUMER)
-    return asyncio.run(server.call_tool(tool, args))[1]
+    result = asyncio.run(server.call_tool(tool, args))
+    if result.structured_content is not None:
+        return result.structured_content
+    return json.loads(result.content[0].text)
 
 
 # =========================================================================

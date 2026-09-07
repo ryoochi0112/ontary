@@ -30,20 +30,13 @@ License = "https://github.com/ryoochi0112/ontary/blob/main/LICENSE"
 
 [project.optional-dependencies]
 mcp = [
-    # Empirically established floor -- not a guess, and not just the
-    # installed 1.28.1 pinned blindly. `FastMCP(stateless_http=)` and
-    # `FastMCP(token_verifier=)` land by 1.13.0, but `AccessToken.subject`
-    # (read at the principal-stamping line in mcp_server.py) has no
-    # `subject` field through 1.27.1 -- pydantic silently drops the
-    # unknown `subject=` kwarg at construction, and reading `.subject`
-    # back raises `AttributeError` -- first fixed at 1.27.2. Confirmed by
-    # installing each candidate `mcp` release into an isolated venv and
-    # running `tests/test_mcp_multi_consumer.py`'s full suite against it:
-    # 6 tests fail on 1.27.1; the whole suite passes on 1.27.2.
-    # The <2 ceiling protects the `mcp.server.fastmcp` and auth-module
-    # layouts imported lazily by mcp_server.py; 2.x does not preserve that
-    # integration surface.
-    "mcp>=1.27.2,<2",
+    # mcp 2.x ships `mcp.server.fastmcp` only as a raising stub, so `<2`-era imports
+    # fail. `stateless_http`, `json_response`, and `transport_security` moved from the
+    # constructor to `run()`/`streamable_http_app()`; 2.x runs sync `def` tool handlers
+    # on a worker thread, hence the `async def` handlers in `mcp_server.py`.
+    # 2.1.1 is the first 2.x release verified against the full suite: `make verify`
+    # is green on 2.1.1; `<3` guards the next layout change.
+    "mcp>=2.1.1,<3",
 ]
 postgres = [
     # psycopg 3. `[binary]` so an adopter does not need libpq headers to install

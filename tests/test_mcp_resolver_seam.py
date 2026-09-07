@@ -50,7 +50,7 @@ import asyncio
 import json
 from typing import Any
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 from ontary.mcp_server import _register_tools
 from ontary.meta import OntologyRegistry
@@ -65,19 +65,15 @@ def _empty_ontology() -> OntologyDef:
     return OntologyDef("empty", OntologyRegistry(), ScopePolicy(levels=["global"]))
 
 
-def _call(server: FastMCP, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+def _call(server: MCPServer, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     """Call `name` in-process and decode the JSON payload the tool
     returned -- same shape as `tests/test_mcp.py`'s own `_call` helper,
     duplicated here rather than imported so this file stays independent of
     that one (spec AC12: `tests/test_mcp.py` stays untouched)."""
     result = asyncio.run(server.call_tool(name, arguments))
-    if isinstance(result, tuple):
-        _content, structured = result
-        assert isinstance(structured, dict)
-        return structured
-    assert isinstance(result, list)
-    assert len(result) == 1
-    payload: dict[str, Any] = json.loads(result[0].text)  # type: ignore[union-attr]
+    if result.structured_content is not None:
+        return result.structured_content
+    payload: dict[str, Any] = json.loads(result.content[0].text)
     return payload
 
 
@@ -281,14 +277,14 @@ def test_all_tools_matches_what_register_tools_actually_registered() -> None:
     hardcoded tuple that merely happens to agree with it today (P1-2) -- an
     twelfth tool `_register_tools` grows must show up here as a failure,
     not silently escape both this file's assertions."""
-    server = FastMCP("tool-inventory")
+    server = MCPServer("tool-inventory")
     _register_tools(server, _empty_ontology(), lambda: _StubClient())  # type: ignore[arg-type]
 
     assert {t.name for t in asyncio.run(server.list_tools())} == {n for n, _ in ALL_TOOLS}
 
 
 def test_resolve_client_result_is_the_client_the_tool_acts_on() -> None:
-    server = FastMCP("counting-and-identity")
+    server = MCPServer("counting-and-identity")
     calls = {"n": 0}
 
     def resolve_client() -> _FreshClient:
@@ -328,7 +324,7 @@ def test_resolve_client_result_is_the_client_the_tool_acts_on() -> None:
 
 
 def test_raising_resolver_fails_closed_without_leaking_message() -> None:
-    server = FastMCP("raising")
+    server = MCPServer("raising")
     secret = "super-secret-internal-detail-nobody-should-see"
 
     def resolve_client() -> _StubClient:

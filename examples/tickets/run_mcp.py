@@ -8,7 +8,7 @@ Run it with:
 from __future__ import annotations
 
 from mcp.server.auth.provider import AccessToken
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 from examples.tickets.fixtures import load_fixtures
 from examples.tickets.ontology import build_ontology
@@ -16,7 +16,7 @@ from ontary import Consumer, build_mcp_server
 from ontary.mcp_server import ConsumerResolver, build_multi_consumer_mcp_server
 
 
-def build_server() -> FastMCP:
+def build_server() -> MCPServer:
     """Build the fixture-seeded tickets server for one queue-scoped agent."""
     ontology, store = build_ontology()
     ids = load_fixtures(store)
@@ -30,7 +30,7 @@ def build_server() -> FastMCP:
     return build_mcp_server(ontology, store, consumer)
 
 
-def build_multi_consumer_server() -> FastMCP:
+def build_multi_consumer_server() -> MCPServer:
     """Build one server whose authenticated agents receive queue-scoped views."""
     ontology, store = build_ontology()
     ids = load_fixtures(store)

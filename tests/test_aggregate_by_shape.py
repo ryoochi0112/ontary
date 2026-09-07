@@ -36,6 +36,7 @@ required scope-routing property, so none of the three was reachable.
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any
 
 import pytest
@@ -122,7 +123,9 @@ def _mcp_aggregate(
 ) -> Any:
     server = build_mcp_server(definition, store, CONSUMER)
     result = asyncio.run(server.call_tool("aggregate_objects", arguments))
-    return result[1]
+    if result.structured_content is not None:
+        return result.structured_content
+    return json.loads(result.content[0].text)
 
 
 # -- B1: an unknown `group_by` is refused, not silently collapsed ------------
