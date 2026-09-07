@@ -188,9 +188,14 @@ def _walk_doc_install_refs(root: Path) -> dict[str, list[str]]:
     found: dict[str, list[str]] = {}
     candidates = sorted(p for suffix in _DOC_SUFFIXES for p in root.rglob(f"*{suffix}"))
     for path in candidates:
-        if any(part in _SKIP_DIRS for part in path.parts):
+        rel = path.relative_to(root)
+        # Matched against `rel`, never the absolute path. A Claude Code
+        # worktree IS `<repo>/.claude/worktrees/<name>`, so the absolute form
+        # skipped EVERY candidate the moment `make verify` ran from inside
+        # one -- `.claude` was in the road to the root, not below it.
+        if any(part in _SKIP_DIRS for part in rel.parts):
             continue
-        name = path.relative_to(root).as_posix()
+        name = rel.as_posix()
         text = path.read_text()
         if name == "CHANGELOG.md":
             text = _newest_release_section(text)
@@ -238,6 +243,49 @@ def test_install_ref_walk_refuses_to_police_nested_git_worktrees(
     assert set(found) == {"CHANGELOG.md"}, (
         "the walk policed a nested worktree: "
         f"{sorted(set(found) - {'CHANGELOG.md'})}"
+    )
+    assert found["CHANGELOG.md"] == [
+        'uv add "ontary @ git+https://github.com/ryoochi0112/ontary@v0.11.0"'
+    ]
+
+
+def test_install_ref_walk_polices_a_root_that_itself_sits_under_a_skipped_dir(
+    tmp_path: Path,
+) -> None:
+    """`_SKIP_DIRS` names directories BELOW the root, not the road to it.
+
+    The sibling test above is why this one exists. A Claude Code worktree IS
+    `<repo>/.claude/worktrees/<name>`, so when `make verify` runs inside one,
+    the walk's own ROOT carries `.claude` in its absolute parts. Matching
+    `_SKIP_DIRS` against the absolute path then skipped every candidate,
+    `found` came back empty, and the required-refs arm failed with
+    `no longer documents the git install ref: ['CHANGELOG.md', 'README.md']`
+    -- the guard reporting that the repo had dropped a command it was in fact
+    still carrying. The exemption added to stop the walk policing a nested
+    worktree stopped it policing ANYTHING from inside one.
+
+    The fixture root is built under `.claude/worktrees/` on purpose: that path
+    shape is the whole bug, and a fixture rooted anywhere else walks straight
+    past it. Matching relative to `root` is what keeps both properties at
+    once -- skip a `.claude` BENEATH the tree, ignore one ABOVE it.
+    """
+    root = tmp_path / ".claude" / "worktrees" / "some-worktree"
+    root.mkdir(parents=True)
+    (root / "CHANGELOG.md").write_text(
+        "## [Unreleased]\n\n## [0.11.0]\n"
+        'uv add "ontary @ git+https://github.com/ryoochi0112/ontary@v0.11.0"\n'
+        "\n## [0.10.0]\n"
+        'uv add "ontary @ git+https://github.com/ryoochi0112/ontary@v0.10.0"\n'
+    )
+    (root / "README.md").write_text(
+        'uv add "ontary @ git+https://github.com/ryoochi0112/ontary@v0.11.0"\n'
+    )
+
+    found = _walk_doc_install_refs(root)
+
+    assert set(found) == {"CHANGELOG.md", "README.md"}, (
+        "the walk skipped the tree it was pointed at, because the path TO that "
+        f"root contains a _SKIP_DIRS name: found {sorted(found)}"
     )
     assert found["CHANGELOG.md"] == [
         'uv add "ontary @ git+https://github.com/ryoochi0112/ontary@v0.11.0"'
