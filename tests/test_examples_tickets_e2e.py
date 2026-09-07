@@ -19,18 +19,22 @@ import asyncio
 import itertools
 import json
 import os
+import socket
 import subprocess
 import sys
+import time
 from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
+import httpx2
 import pytest
 from mcp.server.auth.middleware.auth_context import auth_context_var
 from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
 from mcp.server.auth.provider import AccessToken
 from mcp.server.mcpserver import MCPServer
+from mcp.types import LATEST_PROTOCOL_VERSION
 
 import ontary
 import ontary.cli as cli
@@ -607,6 +611,153 @@ def test_tickets_cli_serve_hands_runner_exact_dev_configuration(
     ) == ("ontary-dev", "ontary-dev", "dev", "localhost")
     assert captured["name"] == "tickets (ontary dev)"
     assert captured["run"] == ("streamable-http", "127.0.0.1", 9137)
+
+
+# --- `ontary serve --dev` over a real socket -------------------------------
+#
+# The tests above stop one layer short of the transport: they replace either
+# `build_mcp_server` or `MCPServer.run`, so nothing in the suite ever reaches
+# `run_streamable_http_async`. `MCPServer.run(self, transport, **kwargs)`
+# swallows unknown keyword arguments, so an `mcp` release inside the pinned
+# `>=2.1.1,<3` range could drop or rename `host`/`port` -- or change what
+# `transport="streamable-http"` starts -- and every test above would stay
+# green while `ontary serve --dev` served nothing. This boots the CLI for
+# real and completes one `initialize` handshake against it.
+
+_SERVE_STARTUP_TIMEOUT = 30.0
+_SERVE_REQUEST_TIMEOUT = 10.0
+_SERVE_SHUTDOWN_TIMEOUT = 10.0
+_SERVE_POLL_INTERVAL = 0.05
+
+
+def _free_localhost_port() -> int:
+    """Reserve, then release, an ephemeral port so concurrent runs never collide.
+
+    A hardcoded port would make this test flaky whenever two suites run at
+    once -- a CI matrix sharing a runner, or two worktrees of this repo. The
+    CLI rejects `--port 0`, so the port is resolved here rather than delegated
+    to the kernel at bind time; the gap between release and re-bind is why a
+    failure to start reports the server log, which names that lost race
+    ("address already in use") outright.
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.bind(("127.0.0.1", 0))
+        return int(probe.getsockname()[1])
+
+
+def _wait_until_accepting(
+    process: subprocess.Popen[bytes], port: int, log_path: Path
+) -> None:
+    """Poll the port until it accepts a connection, or fail with the server log.
+
+    Polling rather than sleeping a fixed interval: the wait ends as soon as
+    uvicorn binds (tens of milliseconds locally) and still tolerates a slow
+    cold start in CI.
+    """
+    deadline = time.monotonic() + _SERVE_STARTUP_TIMEOUT
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            raise AssertionError(
+                f"ontary serve --dev exited with {process.returncode} before "
+                f"binding 127.0.0.1:{port}\n--- server log ---\n"
+                f"{log_path.read_text()}"
+            )
+        try:
+            with socket.create_connection(
+                ("127.0.0.1", port), timeout=_SERVE_POLL_INTERVAL
+            ):
+                return
+        except OSError:
+            time.sleep(_SERVE_POLL_INTERVAL)
+    raise AssertionError(
+        f"ontary serve --dev did not accept connections on 127.0.0.1:{port} "
+        f"within {_SERVE_STARTUP_TIMEOUT}s\n--- server log ---\n"
+        f"{log_path.read_text()}"
+    )
+
+
+def _sse_payload(body: str) -> dict[str, Any]:
+    """Decode the single JSON-RPC message from a `text/event-stream` response.
+
+    The dev server does not pass `json_response=True`, so a real client reads
+    SSE frames here, not a bare JSON body.
+    """
+    data_lines = [
+        line.removeprefix("data:").strip()
+        for line in body.splitlines()
+        if line.startswith("data:")
+    ]
+    assert len(data_lines) == 1, f"expected one SSE data frame, got {body!r}"
+    decoded: dict[str, Any] = json.loads(data_lines[0])
+    return decoded
+
+
+def test_tickets_cli_serve_dev_completes_initialize_over_a_real_socket(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    port = _free_localhost_port()
+    log_path = tmp_path / "serve.log"
+
+    with log_path.open("wb") as log:
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "ontary.cli",
+                "serve",
+                "examples.tickets.ontology:build_ontology",
+                "--dev",
+                "--port",
+                str(port),
+            ],
+            cwd=repo_root,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+        )
+        try:
+            _wait_until_accepting(process, port, log_path)
+            response = httpx2.post(
+                f"http://127.0.0.1:{port}/mcp",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": LATEST_PROTOCOL_VERSION,
+                        "capabilities": {},
+                        "clientInfo": {"name": "ontary-serve-smoke", "version": "0.0.0"},
+                    },
+                },
+                headers={
+                    "Accept": "application/json, text/event-stream",
+                    "Content-Type": "application/json",
+                },
+                timeout=_SERVE_REQUEST_TIMEOUT,
+            )
+        finally:
+            process.terminate()
+            try:
+                process.wait(timeout=_SERVE_SHUTDOWN_TIMEOUT)
+            except subprocess.TimeoutExpired:  # pragma: no cover - defensive
+                process.kill()
+                process.wait(timeout=_SERVE_SHUTDOWN_TIMEOUT)
+
+    assert response.status_code == 200, response.text
+    # A minted session id is the transport's own handshake artifact: the
+    # streamable-HTTP manager sets it, and stdio never would.
+    assert response.headers.get("mcp-session-id"), dict(response.headers)
+    payload = _sse_payload(response.text)
+    assert "error" not in payload, payload
+    result = payload["result"]
+    assert result["serverInfo"]["name"] == "tickets (ontary dev)"
+    # Only that a version was negotiated, not which one. The server answers
+    # with the newest version IT supports, not the `LATEST_PROTOCOL_VERSION`
+    # the request asked for, so the exact string belongs to `mcp`'s version
+    # table -- pinning it here would turn every routine `mcp` bump red without
+    # saying anything about ontary's transport.
+    assert isinstance(result["protocolVersion"], str)
+    assert result["protocolVersion"]
 
 
 def test_tickets_ontology_diagnose_is_clean() -> None:
