@@ -943,7 +943,7 @@ client.ingest_links(
 from ontary.mcp_server import build_mcp_server
 
 server = build_mcp_server(ontology, store, consumer, *, name=None,
-                          capabilities=None)  # -> FastMCP
+                          capabilities=None)  # -> MCPServer
 ```
 
 1 サーバープロセスにつき 1 つの `Consumer` アイデンティティ。宣言済みハンドラは
@@ -1007,7 +1007,7 @@ server = build_multi_consumer_mcp_server(
     ontology, store, *, resolve_consumer, name=None,
     capabilities=None,
     token_verifier=None, auth=None,
-)  # -> FastMCP
+)  # -> MCPServer
 ```
 
 1 サーバープロセスで**多数の証明済みアイデンティティ**を提供します — `consumer` 引数は
@@ -1033,33 +1033,26 @@ fail-closed 挙動をします。
 
 この SDK はトークンを検証も発行もしません — `token_verifier` と `auth` は MCP 自身の
 型です（`mcp.server.auth.provider.TokenVerifier` / `mcp.server.auth.settings.
-AuthSettings`）。デプロイヤーが設定し、内部の `FastMCP(...)` 呼び出しへそのまま
-渡されます — `FastMCP` は構築後にどちらを設定する public なセッターも公開して
+AuthSettings`）。デプロイヤーが設定し、内部の `MCPServer(...)` 呼び出しへそのまま
+渡されます — `MCPServer` は構築後にどちらを設定する public なセッターも公開して
 いないため、ここが唯一の配線ポイントです。どちらも渡さないのは stdio 専用、
 または意図的に認証なしのデプロイとして正当ですが、どちらか片方だけを渡すのは
-実行時の状態ですらありません — `FastMCP.__init__` がその場で `ValueError` を
+実行時の状態ですらありません — `MCPServer.__init__` がその場で `ValueError` を
 送出する（構築時点での fail-fast）ため、サーバーは構築されず、呼び出しも一切
 発生しません。stdio には認証コンテキストが全くないため、この 2 引数の値に
 関わらず stdio 上のマルチコンシューマーサーバーは常にすべての呼び出しを
 `UNAUTHENTICATED` で拒否します。1 コンシューマー・stdio プロセスには
 `build_mcp_server(ontology, store, consumer)` を使ってください。
 
-**`stateless_http=True` で構築されます（ハードコード） — これは実装の細部ではなく、
-実在するトランスポート上のトレードオフです。** FastMCP の既定の stateful streamable
-HTTP は `initialize` request で 1 つのセッションタスクを起動し、そのセッションの
-`Mcp-Session-Id` を持つ以降のすべての request をこのタスクで再利用します。つまり
-後続 request が呼び出すツール本体は実際には**`initialize` request 自身のタスクの中で**
-実行され、その認証コンテキストはタスク開始時に一度だけコピーされたものです —
-これは上記の「解決結果はキャッシュされない」という前提を静かに破ります。失効・
-再スコープされたトークンは、セッションが終わるまでその凍結されたバインディングの
-まま提供され続けてしまいます。`stateless_http=True` は、すべての request に
-まっさらなトランスポートとセッションタスクを与えることでこれを防ぎます — トークンを
-凍結する余地自体をなくすということです。代償: このサーバーではセッションの再開
-（resumability）ができません（SSE ストリーミング自体は `stateless_http` ではなく
-FastMCP 自身の `json_response` 設定で制御されており、いずれの値でも影響を受けま
-せん）。`build_mcp_server` は影響を受けません — そもそも 1 プロセスの生涯にわたって
-構築時に束縛された 1 つの `Consumer` しか持たず、トークンを凍結するセッションが
-存在しないからです。
+**トランスポートのオプションは `run()`/`streamable_http_app()` に渡します。**
+ビルダーはセッションモードを強制しません。
+mcp 2.x では、`stateless_http`、`json_response`、`transport_security`、`host` は
+`run()` と `streamable_http_app()` のキーワード引数です。
+ASGI アプリはソケットを bind しないため、`port` は `run()` のキーワード引数です。
+stateful セッションでも、各 request はその request 自身のトークンを解決します。
+`tests/test_mcp_multi_consumer.py` は ASGI 境界で両方のモードを固定しています。
+`build_mcp_server` は構築時に束縛された 1 つの `Consumer` だけを持ち、request ごとに
+解決するアイデンティティはありません。
 
 `mcp` エクストラが必要です。
 
