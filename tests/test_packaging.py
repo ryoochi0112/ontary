@@ -17,7 +17,7 @@ from __future__ import annotations
 import re
 import tomllib
 from importlib.metadata import metadata, requires, version
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import ontary
 
@@ -188,11 +188,19 @@ def _walk_doc_install_refs(root: Path) -> dict[str, list[str]]:
     found: dict[str, list[str]] = {}
     candidates = sorted(p for suffix in _DOC_SUFFIXES for p in root.rglob(f"*{suffix}"))
     for path in candidates:
-        if any(part in _SKIP_DIRS for part in path.parts):
+        relative = path.relative_to(root)
+        parts = relative.parts
+        if any(part in _SKIP_DIRS for part in parts):
             continue
-        name = path.relative_to(root).as_posix()
+        if any(
+            parts[i : i + len(pair)] == pair
+            for pair in _SKIP_SUBPATHS
+            for i in range(len(parts))
+        ):
+            continue
+        name = relative.as_posix()
         text = path.read_text()
-        if name == "CHANGELOG.md":
+        if PurePosixPath(name).name == "CHANGELOG.md":
             text = _newest_release_section(text)
         refs = [line for line in text.splitlines() if _INSTALL_REF in line]
         if refs:
@@ -207,13 +215,21 @@ def test_install_ref_walk_refuses_to_police_nested_git_worktrees(
     archive is not drift.
 
     `git worktree add` inside the repo -- what Claude Code does under
-    `.claude/worktrees/` -- puts a SECOND checkout under the walk's root. Two
-    things then go wrong at once, and this pins both. The walk descends into it,
-    so every historical `@v0.10.0` in that copy's changelog reads as a stale tag;
-    and the newest-release-section narrowing is keyed on the relative path being
-    exactly `CHANGELOG.md`, which the nested copy is not, so it loses the
-    archive exemption and is checked whole. The result was a red `make verify`
-    for anyone with a worktree open, on a tree whose own docs were correct.
+    `.claude/worktrees/` -- puts a SECOND checkout under the walk's root, and TWO
+    independent things then go wrong. Each has its own arm below, because fixing
+    either one alone leaves the other reachable.
+
+    1. The walk descends into the checkout, so every historical `@v0.10.0` in
+       that copy's docs reads as a stale tag. This arm pins the skip.
+    2. The newest-release-section narrowing was keyed on the relative path being
+       exactly `CHANGELOG.md`, which a nested copy never is, so it lost the
+       archive exemption and was checked whole -- pinned by
+       `test_changelog_archive_exemption_follows_the_filename` , which uses a
+       nested checkout OUTSIDE `.claude` because `git worktree add` accepts any
+       destination and only our own tooling chooses `.claude/worktrees/`.
+
+    The result was a red `make verify` for anyone with a worktree open, on a
+    tree whose own docs were correct.
     """
     (tmp_path / "CHANGELOG.md").write_text(
         "## [Unreleased]\n\n## [0.11.0]\n"
@@ -244,6 +260,80 @@ def test_install_ref_walk_refuses_to_police_nested_git_worktrees(
     ]
 
 
+def test_changelog_archive_exemption_follows_the_filename(tmp_path: Path) -> None:
+    """A changelog is an archive wherever it sits, not only at the repo root.
+
+    Cause 2 of the nested-checkout bug, pinned on its own. The narrowing used to
+    compare the whole relative path to `CHANGELOG.md`, so `wt/CHANGELOG.md` was
+    read as a current-state doc and its true history of `@v0.10.0` releases read
+    as drift. `git worktree add` takes any destination, so skipping
+    `.claude/worktrees` does not reach this -- keep the two fixes independent.
+    """
+    nested = tmp_path / "wt"
+    nested.mkdir()
+    for target in (tmp_path / "CHANGELOG.md", nested / "CHANGELOG.md"):
+        target.write_text(
+            "## [Unreleased]\n\n## [0.11.0]\n"
+            'uv add "ontary @ git+https://github.com/ryoochi0112/ontary@v0.11.0"\n'
+            "\n## [0.10.0]\n"
+            'uv add "ontary @ git+https://github.com/ryoochi0112/ontary@v0.10.0"\n'
+        )
+
+    found = _walk_doc_install_refs(tmp_path)
+
+    current = ['uv add "ontary @ git+https://github.com/ryoochi0112/ontary@v0.11.0"']
+    assert found["wt/CHANGELOG.md"] == current, (
+        "a nested changelog lost its archive exemption: " f"{found['wt/CHANGELOG.md']}"
+    )
+    assert found["CHANGELOG.md"] == current
+
+
+def test_install_ref_walk_still_polices_committed_claude_assets(
+    tmp_path: Path,
+) -> None:
+    """Skipping `.claude` wholesale would blind the guard to tracked docs.
+
+    `.claude` is NOT git-excluded -- only `.claude/worktrees/` is -- and
+    `.claude/skills`, `.claude/commands` and `.claude/agents` are conventionally
+    committed. A stale install ref in one of those ships to readers, so the skip
+    has to be the `.claude/worktrees` PAIR and never the parent directory.
+    """
+    skill = tmp_path / ".claude" / "skills" / "install"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text(
+        'uv add "ontary @ git+https://github.com/ryoochi0112/ontary@v0.9.0"\n'
+    )
+
+    found = _walk_doc_install_refs(tmp_path)
+
+    assert ".claude/skills/install/SKILL.md" in found, (
+        "a committed .claude asset escaped the walk; the skip must be the "
+        ".claude/worktrees pair, not the .claude directory"
+    )
+
+
+def test_install_ref_walk_scope_survives_the_clone_location(tmp_path: Path) -> None:
+    """The guard must not be disabled by where the repo happens to be cloned.
+
+    The skip used to test the ABSOLUTE path's components, so a checkout under
+    any directory named `build`, `dist`, `site` (or a `~/specs/ontary`) matched
+    a skip entry for every file and the whole guard passed vacuously.
+    """
+    root = tmp_path / "build" / "ontary"
+    root.mkdir(parents=True)
+    (root / "CHANGELOG.md").write_text(
+        "## [0.11.0]\n"
+        'uv add "ontary @ git+https://github.com/ryoochi0112/ontary@v0.9.0"\n'
+    )
+
+    found = _walk_doc_install_refs(root)
+
+    assert "CHANGELOG.md" in found, (
+        "the clone's own path disabled the guard; skips must be scoped to the "
+        "path relative to the walk root"
+    )
+
+
 #: What makes a line an install ref. Deliberately the ref FRAGMENT
 #: (`ontary@v…`) and not the full `git+ssh://git@github.com` URL: docs
 #: legitimately elide the host (`git+ssh://.../ontary@v0.1.0`, a historical
@@ -266,16 +356,13 @@ _DOC_SUFFIXES = (".md", ".html")
 #: silently failing the walk. `site` is the MkDocs build output written by `make docs-build`.
 #: `specs` holds design notes and implementation plans: they quote install refs
 #: as placeholders and historical examples, and no reader installs from them.
-#: `.claude` is local agent state, git-excluded and carrying no tracked file --
-#: crucially it is where `git worktree add` puts a nested SECOND CHECKOUT of this
-#: repo. Without this entry the walk descends into that checkout and reads its
-#: changelog archive as drift, so `make verify` went red for anyone with a
-#: worktree open while the tree's own docs were correct.
+#: Matched against the path RELATIVE to the walk root: an absolute match lets the
+#: clone's own location disable the guard, so checking out this repo into any
+#: directory with a component named `build` or `dist` would pass it vacuously.
 _SKIP_DIRS = frozenset(
     {
         ".venv",
         ".git",
-        ".claude",
         ".mypy_cache",
         ".pytest_cache",
         "node_modules",
@@ -285,6 +372,18 @@ _SKIP_DIRS = frozenset(
         "specs",
     }
 )
+
+#: Skipped only as an adjacent PAIR, never as single components. `.claude` alone
+#: would be wrong: it is NOT git-excluded (only `.claude/worktrees/` is, via
+#: `.git/info/exclude`), and `.claude/skills`, `.claude/commands` and
+#: `.claude/agents` are conventionally COMMITTED -- skipping the parent would let
+#: a tracked doc carrying a stale install ref ship unpoliced, the exact
+#: "passing by absence" hole `_REQUIRED_REFS` exists to close.
+#: `.claude/worktrees` is where `git worktree add` puts a nested SECOND CHECKOUT
+#: of this repo. It cannot hold repo content, and without this the walk descends
+#: into that checkout and reads its changelog archive as drift -- `make verify`
+#: went red for anyone with a worktree open while the tree's own docs were fine.
+_SKIP_SUBPATHS: tuple[tuple[str, ...], ...] = ((".claude", "worktrees"),)
 
 #: Docs that must ALWAYS carry the install command. Without this, a canonical
 #: file that drops the command entirely just stops being walked -- passing by
