@@ -6,12 +6,21 @@ import argparse
 import importlib
 import json
 import sys
-from typing import Literal, Protocol, cast
+from typing import TYPE_CHECKING
 
 from ontary.authoring import Ontology
 from ontary.diagnose import Finding
 from ontary.security import Consumer
 from ontary.store import InMemoryStore, ObjectStore, Store
+
+if TYPE_CHECKING:
+    # TYPING ONLY, and it must stay that way: `ontary.cli` is importable
+    # without the `mcp` extra, which is why `_run_serve` defers
+    # `build_mcp_server` behind a try/except ImportError. `from __future__
+    # import annotations` (above) makes every reference below a string, so
+    # this line never runs at import time. Same pattern, and same reason, as
+    # `ontary.mcp_server`'s own TYPE_CHECKING block.
+    from mcp.server.mcpserver import MCPServer
 
 __all__ = ("main",)
 
@@ -21,16 +30,6 @@ _DEFAULT_DEV_PORT = 8000
 
 class _LoadFailure(Exception):
     """A target or store could not be loaded for a CLI command."""
-
-
-class _MCPServer(Protocol):
-    def run(
-        self,
-        transport: Literal["streamable-http"] = "streamable-http",
-        *,
-        host: str,
-        port: int,
-    ) -> None: ...
 
 
 def _parse_port(value: str) -> int:
@@ -178,12 +177,29 @@ def _run_validate(target: str, as_json: bool) -> int:
 
 
 def _start_dev_server(
-    server: _MCPServer,
+    server: MCPServer,
     *,
     host: str,
     port: int,
 ) -> None:
-    """Start the MCP HTTP transport after enforcing the dev-only bind."""
+    """Start the MCP HTTP transport after enforcing the dev-only bind.
+
+    `server` is annotated with the VENDORED `MCPServer`, not a local
+    Protocol, so that `mypy --strict` checks this function against the class
+    that actually runs. The previous shape -- a hand-written Protocol reached
+    through a `cast` -- asserted the vendored surface instead of checking it,
+    and mypy stayed green over `server.settings.host = host` even though mcp
+    2.x's `Settings` has no such field, so `ontary serve --dev` shipped
+    raising `ValueError` at runtime. Keep the real class here: it is what
+    turns the next vendored-API drift back into a `make verify` failure.
+
+    One drift this CANNOT catch: `MCPServer.run` is a single
+    `run(transport="stdio", **kwargs: Any)` with no overloads, so mypy
+    accepts any keyword and any transport. Omitting `transport=` below would
+    silently serve stdio and discard host/port. That one is held by
+    `tests/test_cli_serve.py::test_serve_passes_dev_configuration_to_real_mcp_server`,
+    which asserts the exact transport and kwargs against a real `MCPServer`.
+    """
     if host != _DEV_HOST:
         raise ValueError(
             f"ontary serve --dev is localhost-only; host must be {_DEV_HOST}"
@@ -223,14 +239,11 @@ def _run_serve(target: str, store_path: str | None, port: int) -> int:
     try:
         from ontary.mcp_server import build_mcp_server
 
-        server = cast(
-            _MCPServer,
-            build_mcp_server(
-                ontology,
-                store,
-                consumer,
-                name=f"{ontology.name} (ontary dev)",
-            ),
+        server = build_mcp_server(
+            ontology,
+            store,
+            consumer,
+            name=f"{ontology.name} (ontary dev)",
         )
         _start_dev_server(server, host=_DEV_HOST, port=port)
     except ImportError as exc:
