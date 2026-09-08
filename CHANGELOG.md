@@ -11,6 +11,12 @@ you**.
 
 ## [Unreleased]
 
+### Documentation
+
+- `docs/storage.md` states which role applies the PostgreSQL RLS policies: the one
+  that constructs the store on an empty database, which needs `CREATE` on the schema
+  and becomes the table owner. Roles that connect later need only table DML.
+
 ### Changed
 
 - A declared `datetime` value must carry a time component. A date-only string

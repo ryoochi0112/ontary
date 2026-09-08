@@ -91,6 +91,16 @@ bypass PostgreSQL RLS by database design, so application connections must use an
 ordinary role. `rls=False` disables only this second database layer; the engine's
 tenant predicates still run.
 
+The RLS statements run once, in the same transaction that creates the schema, so
+the role that constructs the store on an empty database is the role that owns the
+tables and applies the policies. That role needs `CREATE` on the target schema;
+nothing else is required, because a table's creator is its owner and `ALTER TABLE
+... FORCE ROW LEVEL SECURITY` and `CREATE POLICY` are owner privileges. `FORCE`
+means that owner is still constrained by the policies afterwards. Roles that only
+connect later need `SELECT`, `INSERT`, `UPDATE`, and `DELETE` on the four tables,
+which the owning role grants. Do not pre-create the tables from a migration tool:
+an `objects` table without the engine's stamp is refused at construction.
+
 Database- or schema-per-tenant is also valid when stronger physical isolation is
 worth the operational cost. The shared-schema option is for deployments where a
 single database is the better fit.
