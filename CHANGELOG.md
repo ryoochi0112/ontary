@@ -11,6 +11,16 @@ you**.
 
 ## [Unreleased]
 
+## [0.12.0] — 2026-09-08
+
+```bash
+uv add "ontary @ git+https://github.com/ryoochi0112/ontary@v0.12.0"
+```
+
+mcp 2.x, hardened CI, and the first two SDK gaps picked from real use: ranges
+in `where` and `datetime` comparisons. The mcp bump is breaking; pin
+`ontary<0.12` to stay on mcp 1.x.
+
 ### Breaking
 
 - `ontary[mcp]` now requires `mcp>=2.1.1,<3` (was `>=1.27.2,<2`); mcp 1.x is
