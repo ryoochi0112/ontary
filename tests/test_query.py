@@ -368,6 +368,7 @@ def test_where_operator_matrix_matches_declared_types(
         ({"flag": {"gt": False}}, "OPERATOR_TYPE_MISMATCH"),
         ({"moment": {"gt": "not a datetime"}}, "OPERATOR_TYPE_MISMATCH"),
         ({"moment": {"gt": 20260101}}, "OPERATOR_TYPE_MISMATCH"),
+        ({"moment": {"gt": "2026-01-01"}}, "OPERATOR_TYPE_MISMATCH"),
         # A multi-operator mapping is validated per operator: one bad key
         # refuses the whole condition, with the same codes as the one-key form.
         ({"count": {"gte": 1, "regex": 2}}, "UNKNOWN_OPERATOR"),

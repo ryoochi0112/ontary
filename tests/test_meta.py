@@ -454,6 +454,9 @@ def test_validate_rejects_function_with_unregistered_capability() -> None:
         ("date", date(2024, 1, 1)),
         ("date", "2024-01-01"),
         ("datetime", "2024-01-01T00:00:00"),
+        ("datetime", "2024-01-01T00:00:00+09:00"),
+        ("datetime", "2024-01-01T00:00:00.250Z"),
+        ("datetime", "2024-01-01 00:00:00"),
         ("json", {"a": 1}),
         ("json", [1, 2]),
         ("json", "a string is valid json-typed scalar too"),
@@ -480,6 +483,11 @@ def test_validate_scalar_happy_path(prop_type: str, value: object) -> None:
         ("date", 20240101),
         ("datetime", 1234),
         ("datetime", "not-a-date"),
+        # A date-only string parses as a naive midnight datetime in Python,
+        # but a declared datetime must carry a time component: as a where
+        # operand it would silently never match an offset-aware column.
+        ("datetime", "2024-01-01"),
+        ("datetime", "20240101"),
         # bool is never accepted for a non-"bool" declared type, even "json"
         # (which otherwise accepts bool's supertype int) -- Python's bool
         # is an int subclass, so this guard must run before the isinstance

@@ -398,7 +398,9 @@ is their conjunction on that one field, so `{"gte": a, "lt": b}` is a half-open
 range and `{"contains": "x", "ne": "x"}` is a substring match with one value
 excluded; an empty mapping is refused. Comparisons apply to declared `int`,
 `float`, `date`, or `datetime` properties. `date` and `datetime` operands are the
-same ISO-8601 strings (or `date` values) the property stores. The four comparison
+same ISO-8601 strings (or `date` values) the property stores; a `datetime` must
+carry a time component, so a date-only string is `OPERATOR_TYPE_MISMATCH` rather
+than a naive midnight that never matches an offset-aware column. The four comparison
 operators treat a `datetime` as an instant, so an operand in another UTC offset
 matches by moment, not by spelling, and a stored value whose offset-awareness
 differs from the operand's (naive against aware) does not match; `eq`, `ne`, and
