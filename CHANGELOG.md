@@ -29,6 +29,17 @@ you**.
 
 ### Added
 
+- `where` conditions accept several operators on one field, AND-ed:
+  `{"decided_at": {"gte": a, "lt": b}}` is a range. Before, a mapping with more
+  than one key was refused as `UNKNOWN_OPERATOR`, so a half-open range over one
+  property could not be written. A multi-key mapping stays learning-shaped for
+  the hidden scope-key exemption, even when it contains an `in`.
+- `gt`/`gte`/`lt`/`lte` on declared `datetime` properties, compared as instants
+  across UTC offsets. Before, comparisons were limited to `int`, `float`, and
+  `date`, so an ISO datetime column could only be matched exactly.
+- `docs/storage.md` documents the drop-and-recreate path across a schema stamp
+  (9 under `ontos` → 10 under `ontary`), since neither backend has a migration
+  ladder.
 - CI tests on Python 3.13 as well as 3.12, matching the classifiers.
 - `codeql.yml`: CodeQL for Python on every PR, on `main`, and weekly.
 - A `workflows` job in `verify.yml` lints the workflows with zizmor, so an

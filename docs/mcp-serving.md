@@ -36,8 +36,9 @@ The twelve tools are registered with these MCP safety hints:
 | `execute_action` | `destructiveHint=True` |
 
 `query_objects` accepts `where`, `order_by`, `limit`, and `after`. Its `where` grammar uses
-bare scalars for equality and one-key `gt`/`gte`/`lt`/`lte`/`in`/`ne`/`contains`
-operator mappings, validated against declared property types. Unknown operators
+bare scalars for equality and `gt`/`gte`/`lt`/`lte`/`in`/`ne`/`contains` operator
+mappings, validated against declared property types; several operators in one
+mapping are AND-ed, so `{"gte": a, "lt": b}` is a range. Unknown operators
 return `UNKNOWN_OPERATOR`; incompatible operators or operands return
 `OPERATOR_TYPE_MISMATCH`; unknown keys return the existing `UNKNOWN_FIELD` error.
 The MCP server applies a default limit of 100 and refuses

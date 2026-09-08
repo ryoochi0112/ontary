@@ -387,9 +387,18 @@ payload と lineage を分離した凍結オブジェクトです。`_object_typ
 ### フィルター、順序、読み取り上限
 
 `where` は等価一致の素の scalar、または `gt`、`gte`、`lt`、`lte`、`in`、`ne`、
-`contains` のいずれか 1 つを指定する mapping を受け付けます。比較演算子は宣言済みの
-`int`、`float`、`date` プロパティで使えます。`in` は宣言済み型の値のリストを取り、
-`ne` はすべての宣言済み型に使え、`contains` は `str` の部分文字列検査です。未知の
+`contains` をキーとする mapping を受け付けます。複数のキーを持つ mapping は、その
+1 つのフィールドに対する AND 条件です。`{"gte": a, "lt": b}` は半開区間の範囲指定、
+`{"contains": "x", "ne": "x"}` は 1 つの値を除いた部分文字列一致になります。空の
+mapping は拒否されます。比較演算子は宣言済みの `int`、`float`、`date`、`datetime`
+プロパティで使えます。`date` と `datetime` の operand は、プロパティが保存するのと
+同じ ISO-8601 文字列（または `date` 値）です。4 つの比較演算子は `datetime` を瞬間
+として比較するため、別の UTC オフセットで書いた operand も同じ時刻なら一致します。
+保存値と operand のオフセット有無が異なる（naive と aware）行は一致しません。
+`datetime` に対する `eq`、`ne`、`in` は従来どおり保存された文字列そのものと一致
+させます。`in` は宣言済み型の値の
+リストを取り、`ne` はすべての宣言済み型に使え、`contains` は `str` の部分文字列
+検査です。未知の
 演算子は `UNKNOWN_OPERATOR`、プロパティ型に合わない演算子または operand は
 `OPERATOR_TYPE_MISMATCH` になります。この operand の型検査は、等価比較の唯一の
 書き方であるベアのスカラーにも適用されます。例外は `None` で、これは null 判定と
@@ -405,9 +414,9 @@ mapping 値は演算子構文なので、宣言済み `json` プロパティの�
 
 `DirectProperty` として宣言されたスコープルーティングキーが隠しフィールドである
 場合、スコープキーの例外は、素の `eq` 値による等価一致と、明示的なリストを
-operand とする `in` に限られます。`gt`、`gte`、`lt`、`lte`、`ne`、`contains`、
-リストでない `in`、および不正な shape は、呼び出し側に値を学習させるため
-`VISIBILITY_DENIED` で拒否されます。operand は実際に値を供給する必要があります。
+operand とする単独の `in` に限られます。`gt`、`gte`、`lt`、`lte`、`ne`、`contains`、
+リストでない `in`、不正な shape、および複数キーの mapping（`in` を含むものも）は、
+呼び出し側に値を学習させるため `VISIBILITY_DENIED` で拒否されます。operand は実際に値を供給する必要があります。
 `str`、`int`、`float`、`bool`、`date` のいずれかです。したがって `None`、`None` を
 含むリスト、空の `in` リストも拒否されます。素の null は事前知識を必要とせず、
 行ごとの null 探索になるためです。読める フィールドに対する null 絞り込みは
@@ -903,6 +912,7 @@ user_version` へ刻印します。Postgres も同じ番号を `schema_meta` に
 挙げて拒否します。刻印が高い場合も低い場合も、未刻印で `objects` テーブルをすでに
 持つ場合も同じです。スキーマバージョンをまたぐ移行はオペレーターの明示的な手順です。
 対応する ontary バージョンで開くか、新しいストアにデータを移してください。
+drop して作り直す手順は [storage.md](storage.md#moving-across-a-schema-version) にあります。
 
 ---
 
@@ -977,9 +987,11 @@ server = build_mcp_server(ontology, store, consumer, *, name=None,
 `AFTER_WITHOUT_LIMIT`、1 未満または 1000 超の値は `INVALID_LIMIT` になります。
 
 `where` の文法は、素の scalar を等価一致として使うか、`gt`、`gte`、`lt`、`lte`、
-`in`、`ne`、`contains` のいずれか 1 つを指定する mapping 形式です。演算子は宣言済み
+`in`、`ne`、`contains` を指定する mapping 形式です。1 つの mapping に複数の演算子を
+書くと AND 条件になり、`{"gte": a, "lt": b}` は範囲指定です。演算子は宣言済み
 プロパティ型に対して検証され、未知の演算子は `UNKNOWN_OPERATOR`、型に合わない演算子または
-operand は `OPERATOR_TYPE_MISMATCH` になります。date の比較は保存される ISO 日付の順序を使います。
+operand は `OPERATOR_TYPE_MISMATCH` になります。date の比較は保存される ISO 日付の順序を使い、
+datetime の比較は UTC オフセットをまたいで瞬間で行います。
 lineage フィールドは対象外で、未知のキーは `UNKNOWN_FIELD` になります。
 `order_by` は宣言済み payload フィールド（デフォルトは昇順）、または
 `(field, "asc"|"desc")` の組を受け付け、ページカーソルと組み合わせられます。
@@ -1193,8 +1205,8 @@ MCP サーバーでは、この実行時ではなくトランスポートによ�
 | `UNKNOWN_LINK_TYPE` | An operation referenced an unregistered link type. |
 | `UNKNOWN_NAME` | A typed `BoundQuery`/`OntologyClient` call named an unregistered object, link, action, or function -- e.g. an undecorated class, a class/`LinkHandle` registered on a different `Ontology`, or a link api_name absent from this registry (typed-authoring AC7 / typed-actions AC8). Typed lookup failures use the validation kind and live here since C3 of the staged refactor so `ontary._typed_api` can raise them below the runtime modules. |
 | `UNKNOWN_OBJECT_TYPE` | An operation referenced an unregistered object type. |
-| `UNKNOWN_OPERATOR` | A mapping-form `where` clause named an operator outside the declared set: `gt`, `gte`, `lt`, `lte`, `in`, `ne`, or `contains`. |
-| `OPERATOR_TYPE_MISMATCH` | A mapping-form `where` operator is not valid for the property's declared type, or its operand is not a declared-type scalar. |
+| `UNKNOWN_OPERATOR` | A mapping-form `where` clause named an operator outside the declared set: `gt`, `gte`, `lt`, `lte`, `in`, `ne`, or `contains` -- or was an empty mapping. A mapping with several operators is validated key by key, so one unknown key refuses the whole clause. |
+| `OPERATOR_TYPE_MISMATCH` | A mapping-form `where` operator is not valid for the property's declared type (comparisons need `int`, `float`, `date`, or `datetime`; `contains` needs `str`), or its operand is not a declared-type scalar. |
 
 ### `visibility`
 

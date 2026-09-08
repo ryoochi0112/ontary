@@ -434,14 +434,18 @@ ERROR_CODES: dict[str, ErrorCodeInfo] = {
         kind="validation",
         description=(
             "A mapping-form `where` clause named an operator outside the "
-            "declared set: `gt`, `gte`, `lt`, `lte`, `in`, `ne`, or `contains`."
+            "declared set: `gt`, `gte`, `lt`, `lte`, `in`, `ne`, or `contains` "
+            "-- or was an empty mapping. A mapping with several operators is "
+            "validated key by key, so one unknown key refuses the whole clause."
         ),
     ),
     "OPERATOR_TYPE_MISMATCH": ErrorCodeInfo(
         kind="validation",
         description=(
             "A mapping-form `where` operator is not valid for the property's "
-            "declared type, or its operand is not a declared-type scalar."
+            "declared type (comparisons need `int`, `float`, `date`, or "
+            "`datetime`; `contains` needs `str`), or its operand is not a "
+            "declared-type scalar."
         ),
     ),
     "NON_NUMERIC_AGGREGATE": ErrorCodeInfo(
