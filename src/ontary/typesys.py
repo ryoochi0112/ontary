@@ -45,6 +45,32 @@ def _date_string_violation(value: str) -> str | None:
     return None
 
 
+def _datetime_string_violation(value: str) -> str | None:
+    """Why ``value`` is not a datetime storage form, or ``None``.
+
+    ``datetime.fromisoformat`` accepts a date-only string as a naive midnight,
+    so ``"2026-02-15"`` would pass as a datetime. The contract is narrower: a
+    declared datetime carries a time component. A date-only value stored under
+    a datetime property is naive by accident, and as a `where` comparison
+    operand it silently never matches an offset-aware column; both are
+    refused here, at the one check every write and read path shares. Naive
+    and offset-aware datetimes are both accepted; an ontology that mixes
+    them in one property gets no defined order between the two kinds.
+    """
+    try:
+        datetime.fromisoformat(value)
+    except ValueError:
+        return f"is not a valid ISO-8601 datetime: {value!r}"
+    try:
+        date.fromisoformat(value)
+    except ValueError:
+        return None
+    # A string `date.fromisoformat` accepts has no time component.
+    return (
+        f"is not a valid ISO-8601 datetime (a time component is required): {value!r}"
+    )
+
+
 def _to_storage_scalar(value: Any, prop_type: PropertyType) -> Any:
     """Return the JSON-safe scalar representation used by every store."""
     if (
@@ -102,7 +128,7 @@ def validate_scalar(
       never its ``datetime.datetime`` subclass) or the exact ISO storage form
       ``YYYY-MM-DD``.
     - a declared `"datetime"` value (always a `str` at this layer) parses as
-      ISO-8601.
+      ISO-8601 and carries a time component (a date-only string is a `date`).
     """
     expected_types = PYTHON_TYPES[prop_type]
     if isinstance(value, bool) and prop_type != "bool":
@@ -114,10 +140,9 @@ def validate_scalar(
     if prop_type == "date" and isinstance(value, str):
         return _date_string_violation(value)
     if prop_type == "datetime" and isinstance(value, str):
-        try:
-            datetime.fromisoformat(value)
-        except ValueError:
-            return f"is not a valid ISO-8601 datetime: {value!r}"
+        violation = _datetime_string_violation(value)
+        if violation is not None:
+            return violation
     if choices is not None and value not in choices:
         return f"expected one of {list(choices)!r}, got {value!r}"
     return None

@@ -11,6 +11,14 @@ you**.
 
 ## [Unreleased]
 
+### Changed
+
+- A declared `datetime` value must carry a time component. A date-only string
+  such as `"2026-02-15"` parsed as a naive midnight, so it was accepted on write
+  and, as a `where` comparison operand, silently never matched an offset-aware
+  column. It is now `INVALID_RECORD` on write and `OPERATOR_TYPE_MISMATCH` as an
+  operand. Naive and offset-aware datetimes are both still accepted.
+
 ## [0.12.0] — 2026-09-08
 
 ```bash

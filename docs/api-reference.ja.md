@@ -392,7 +392,9 @@ payload と lineage を分離した凍結オブジェクトです。`_object_typ
 `{"contains": "x", "ne": "x"}` は 1 つの値を除いた部分文字列一致になります。空の
 mapping は拒否されます。比較演算子は宣言済みの `int`、`float`、`date`、`datetime`
 プロパティで使えます。`date` と `datetime` の operand は、プロパティが保存するのと
-同じ ISO-8601 文字列（または `date` 値）です。4 つの比較演算子は `datetime` を瞬間
+同じ ISO-8601 文字列（または `date` 値）です。`datetime` には時刻部分が必要です。日付
+だけの文字列は、オフセット付きの列に決して一致しない naive な深夜 0 時として扱われる
+のではなく、`OPERATOR_TYPE_MISMATCH` になります。4 つの比較演算子は `datetime` を瞬間
 として比較するため、別の UTC オフセットで書いた operand も同じ時刻なら一致します。
 保存値と operand のオフセット有無が異なる（naive と aware）行は一致しません。
 `datetime` に対する `eq`、`ne`、`in` は従来どおり保存された文字列そのものと一致

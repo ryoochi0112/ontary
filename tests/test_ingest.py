@@ -640,6 +640,25 @@ def test_bulk_upsert_malformed_datetime_rejected(
     assert store.read_current("Team", "team-5") is None
 
 
+def test_bulk_upsert_date_only_datetime_rejected(
+    store: ObjectStore, registry: OntologyRegistry
+) -> None:
+    """A date-only string is a `date`, not a `datetime`; storing it under a
+    datetime property would leave a row no offset-aware range can reach."""
+    report = bulk_upsert(
+        store,
+        registry,
+        "Team",
+        [{"id": "team-7", "name": "Rockets", "joined_at": "2024-01-01"}],
+        Source(source_system="synthetic"),
+    )
+
+    assert not report.ok
+    assert "joined_at" in report.errors[0].reason
+    assert "time component" in report.errors[0].reason
+    assert store.read_current("Team", "team-7") is None
+
+
 def test_bulk_upsert_valid_datetime_accepted(
     store: ObjectStore, registry: OntologyRegistry
 ) -> None:
