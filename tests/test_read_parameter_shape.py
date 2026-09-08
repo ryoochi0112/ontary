@@ -572,7 +572,7 @@ def test_a_malformed_mapping_keeps_its_own_operator_refusals() -> None:
     guarded = GuardedQuery(store, definition.registry, definition.policy)
 
     with raises_code(ValidationFailed, "UNKNOWN_OPERATOR"):
-        guarded.count(CONSUMER, "Record", {"score": {"gt": 1, "lt": 2}})
+        guarded.count(CONSUMER, "Record", {"score": {"gt": 1, "regex": 2}})
     with raises_code(ValidationFailed, "OPERATOR_TYPE_MISMATCH"):
         guarded.count(CONSUMER, "Record", {"score": {"gt": "abc"}})
     with raises_code(ValidationFailed, "UNKNOWN_FIELD"):

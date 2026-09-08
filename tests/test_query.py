@@ -309,6 +309,17 @@ _VALID_OPERATOR_CASES = [
     ("gte", "day", date(2026, 2, 15), ["r2", "r3"]),
     ("lt", "day", date(2026, 3, 15), ["r1", "r2"]),
     ("lte", "day", date(2026, 2, 15), ["r1", "r2"]),
+    ("gt", "moment", "2026-01-15T00:00:00+00:00", ["r2", "r3"]),
+    ("gte", "moment", "2026-02-15T00:00:00+00:00", ["r2", "r3"]),
+    ("lt", "moment", "2026-03-15T00:00:00+00:00", ["r1", "r2"]),
+    ("lte", "moment", "2026-02-15T00:00:00+00:00", ["r1", "r2"]),
+    # An operand in another zone compares by instant, not by string.
+    ("gte", "moment", "2026-02-15T09:00:00+09:00", ["r2", "r3"]),
+    ("lt", "moment", "2026-02-14T19:00:00-05:00", ["r1"]),
+    # `Z` and fractional seconds are accepted operand spellings.
+    ("gte", "moment", "2026-02-15T00:00:00Z", ["r2", "r3"]),
+    ("gt", "moment", "2026-02-15T00:00:00.000001+00:00", ["r3"]),
+    ("lte", "moment", "2026-02-14T23:59:59.999999Z", ["r1"]),
     ("in", "text", ["alpha needle"], ["r1"]),
     ("in", "count", [1, 3], ["r1", "r3"]),
     ("in", "ratio", [1.5, 3.5], ["r1", "r3"]),
@@ -355,7 +366,13 @@ def test_where_operator_matrix_matches_declared_types(
         ({"text": {"regex": "needle"}}, "UNKNOWN_OPERATOR"),
         ({"text": {"gt": "needle"}}, "OPERATOR_TYPE_MISMATCH"),
         ({"flag": {"gt": False}}, "OPERATOR_TYPE_MISMATCH"),
-        ({"moment": {"gt": "2026-01-01T00:00:00+00:00"}}, "OPERATOR_TYPE_MISMATCH"),
+        ({"moment": {"gt": "not a datetime"}}, "OPERATOR_TYPE_MISMATCH"),
+        ({"moment": {"gt": 20260101}}, "OPERATOR_TYPE_MISMATCH"),
+        # A multi-operator mapping is validated per operator: one bad key
+        # refuses the whole condition, with the same codes as the one-key form.
+        ({"count": {"gte": 1, "regex": 2}}, "UNKNOWN_OPERATOR"),
+        ({"count": {"gte": 1, "lte": "2"}}, "OPERATOR_TYPE_MISMATCH"),
+        ({"count": {}}, "UNKNOWN_OPERATOR"),
         ({"data": {"contains": "kind"}}, "OPERATOR_TYPE_MISMATCH"),
         ({"count": {"in": 1}}, "OPERATOR_TYPE_MISMATCH"),
         ({"count": {"in": [True]}}, "OPERATOR_TYPE_MISMATCH"),
@@ -373,6 +390,90 @@ def test_where_operator_mismatch_is_catalogued_refusal(
 
     with raises_code(ValidationFailed, code):
         query.get_objects(_human("shelf", "shelf-1"), "Value", where=where)
+
+
+_RANGE_CASES = [
+    ({"count": {"gte": 2, "lte": 2}}, ["r2"]),
+    ({"count": {"gt": 1, "lt": 3}}, ["r2"]),
+    ({"ratio": {"gte": 1.5, "lt": 3.5}}, ["r1", "r2"]),
+    ({"day": {"gte": date(2026, 2, 15), "lt": date(2026, 3, 15)}}, ["r2"]),
+    (
+        {
+            "moment": {
+                "gte": "2026-02-15T00:00:00+00:00",
+                "lt": "2026-03-15T00:00:00+00:00",
+            }
+        },
+        ["r2"],
+    ),
+    # Every operator in the mapping must hold: a range plus an exclusion.
+    ({"count": {"gte": 1, "lte": 3, "ne": 2}}, ["r1", "r3"]),
+    ({"text": {"contains": "needle", "ne": "alpha needle"}}, ["r3"]),
+    ({"count": {"in": [1, 2, 3], "gt": 2}}, ["r3"]),
+    # Contradictory bounds select nothing rather than erroring.
+    ({"count": {"gt": 2, "lt": 2}}, []),
+]
+
+
+@pytest.mark.parametrize(("where", "expected_ids"), _RANGE_CASES)
+def test_where_condition_with_several_operators_is_their_conjunction(
+    make_registry: RegistryFactory,
+    make_policy: PolicyFactory,
+    make_store: StoreFactory,
+    where: dict[str, object],
+    expected_ids: list[str],
+) -> None:
+    """``{"gte": a, "lt": b}`` on one field is a range, not a malformed clause.
+
+    Before this, a condition mapping had to hold exactly one operator, so a
+    half-open range over one property was unwritable; a consumer had to fetch
+    one bound and filter the other client-side, past the engine's row guard.
+    """
+    query = _operator_query(make_registry, make_policy, make_store)
+
+    rows = query.get_objects(
+        _human("shelf", "shelf-1"), "Value", where=where, limit=None
+    )
+
+    assert [row.payload["id"] for row in rows] == expected_ids
+    assert query.count(_human("shelf", "shelf-1"), "Value", where=where) == len(
+        expected_ids
+    )
+
+
+def test_datetime_comparison_treats_an_incomparable_row_as_unmatched(
+    make_registry: RegistryFactory,
+    make_policy: PolicyFactory,
+    make_store: StoreFactory,
+) -> None:
+    """A naive stored datetime against an aware operand (or vice versa) is
+    not an error surfaced to the consumer: the row does not satisfy the
+    predicate, the same verdict a corrupt historical value gets."""
+    registry = _operator_registry(make_registry)
+    store = make_store(registry)
+    store.insert("Value", {"id": "naive", "moment": "2026-02-15T00:00:00"}, SRC)
+    store.insert(
+        "Value", {"id": "aware", "moment": "2026-02-15T00:00:00+00:00"}, SRC
+    )
+    policy = make_policy(levels=["team"], unscoped_types={"Value"}, min_n=1)
+    query = GuardedQuery(store, registry, policy)
+    consumer = _human("shelf", "shelf-1")
+
+    aware_bound = query.get_objects(
+        consumer,
+        "Value",
+        where={"moment": {"gte": "2026-01-01T00:00:00+00:00"}},
+        limit=None,
+    )
+    naive_bound = query.get_objects(
+        consumer,
+        "Value",
+        where={"moment": {"gte": "2026-01-01T00:00:00"}},
+        limit=None,
+    )
+
+    assert [row.payload["id"] for row in aware_bound] == ["aware"]
+    assert [row.payload["id"] for row in naive_bound] == ["naive"]
 
 
 @pytest.mark.parametrize(
@@ -2521,6 +2622,41 @@ def test_learning_shaped_where_operator_refused_on_hidden_scope_key(
         gq.aggregate(consumer, "RecordB", "score", where=where)
     with raises_code(VisibilityError, "VISIBILITY_DENIED"):
         gq.count_contributors(consumer, "RecordB", where=where)
+
+
+@pytest.mark.parametrize(
+    "condition",
+    [
+        {"gte": "secret-group", "lte": "secret-group"},
+        {"in": ["secret-group"], "ne": "other-group"},
+        {"in": ["secret-group"], "contains": "secret"},
+    ],
+)
+def test_multi_operator_where_refused_on_hidden_scope_key(
+    condition: dict[str, object],
+    make_registry: RegistryFactory,
+    make_policy: PolicyFactory,
+    make_store: StoreFactory,
+) -> None:
+    """The scope-key exemption covers a bare `eq` and a lone `in` list only.
+
+    A mapping with several operators is learning-shaped as a whole: pairing
+    an `in` with a range or a `contains` would turn the exempted supply into
+    a probe on the value, so the whole condition fails closed."""
+    registry = _shared_field_registry(make_registry)
+    _hide_record_b_group_id(registry)
+    store = make_store(registry)
+    store.insert(
+        "RecordB", {"id": "b-1", "group_id": "secret-group", "score": 1.0}, SRC
+    )
+    gq = GuardedQuery(store, registry, _shared_field_policy(make_policy))
+    consumer = _human("group", "secret-group")
+    where = {"group_id": condition}
+
+    with raises_code(VisibilityError, "VISIBILITY_DENIED"):
+        gq.get_objects(consumer, "RecordB", where=where, limit=None)
+    with raises_code(VisibilityError, "VISIBILITY_DENIED"):
+        gq.count(consumer, "RecordB", where=where)
 
 
 def test_in_non_list_where_refused_on_hidden_scope_key(

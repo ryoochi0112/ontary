@@ -84,7 +84,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from itertools import islice
 from typing import Any, Final, Generic, Literal, NoReturn, TypeVar, final, overload
 
@@ -116,6 +116,15 @@ that can hold a `dict`/`list`, and so the only one excluded.
 """
 _WHERE_OPERATORS = frozenset({"gt", "gte", "lt", "lte", "in", "ne", "contains"})
 _WHERE_COMPARISON_OPERATORS = frozenset({"gt", "gte", "lt", "lte"})
+_COMPARABLE_PROPERTY_TYPES = frozenset({"int", "float", "date", "datetime"})
+_CONJUNCTION = "and"
+"""Internal clause operator for a multi-operator condition mapping.
+
+Never a caller-facing spelling: `_compile_where_clause` emits it only for an
+``"operators"`` condition, whose operand is the tuple of compiled sub-clauses.
+It is not in `_WHERE_OPERATORS`, so ``{"and": ...}`` from a caller is still
+`UNKNOWN_OPERATOR`.
+"""
 _MIN_N_COUNT_WITHHELD = "count withheld"
 _AGGREGATE_FUNCS = ("mean", "count", "sum", "min", "max")
 
@@ -183,9 +192,12 @@ _NormalizedCondition = tuple[str, str, Any]
 """One `where` condition, snapshotted as ``(kind, operator, operand)``.
 
 ``kind`` is ``"bare"`` (the condition was not a mapping, so it is equality
-sugar), ``"operator"`` (a single-entry mapping, whose key is NOT yet known to
-be a real operator), or ``"malformed"`` (a mapping that is not a single entry,
-whose ``operand`` carries its key tuple for the refusal message).
+sugar), ``"operator"`` (a one-entry mapping, whose key is NOT yet known to
+be a real operator), ``"operators"`` (a mapping with several entries, whose
+``operand`` is the tuple of ``(key, operand)`` pairs in caller order -- the
+conjunction of those clauses, so ``{"gte": a, "lt": b}`` is a range), or
+``"malformed"`` (an empty mapping, or one with a non-``str`` key, whose
+``operand`` carries its key tuple for the refusal message).
 """
 
 _NormalizedWhere = tuple[tuple[str, _NormalizedCondition], ...]
@@ -217,12 +229,12 @@ def _normalize_where_condition(condition: Any) -> _NormalizedCondition:
     if not isinstance(condition, dict):
         return ("bare", "eq", condition)
     items = tuple(condition.items())
-    if len(items) != 1:
+    if not items or not all(isinstance(operator, str) for operator, _ in items):
         return ("malformed", "", tuple(operator for operator, _ in items))
-    operator, operand = items[0]
-    if not isinstance(operator, str):
-        return ("malformed", "", (operator,))
-    return ("operator", operator, operand)
+    if len(items) == 1:
+        operator, operand = items[0]
+        return ("operator", operator, operand)
+    return ("operators", "", items)
 
 
 def _require_where_mapping(where: object) -> None:
@@ -272,11 +284,14 @@ def _where_disclosure(
 ) -> Literal["supplied", "learned"]:
     """Classify only predicate shape for the pre-validation field gate.
 
-    Bare equality and ``in`` over an explicit list of values are supply-shaped:
-    the caller must already possess the values being named. Every other shape
-    is learning-shaped, including malformed clauses and any operand that
-    supplies no value (see `_is_supplied_value`), so hidden fields fail closed
-    before operator validation can reveal anything about them.
+    Bare equality and a LONE ``in`` over an explicit list of values are
+    supply-shaped: the caller must already possess the values being named.
+    Every other shape is learning-shaped, including malformed clauses, a
+    multi-operator mapping (even one that contains an ``in`` -- pairing it
+    with a range or a ``contains`` would turn the supply into a probe on the
+    value), and any operand that supplies no value (see `_is_supplied_value`),
+    so hidden fields fail closed before operator validation can reveal
+    anything about them.
     """
     kind, operator, operand = condition
     if kind == "bare":
@@ -331,6 +346,19 @@ def _evaluate_comparison(
         if actual_value.isoformat() != actual:
             return False
         operand_value = date.fromisoformat(operand)
+    elif prop_type == "datetime":
+        # Compared as instants, not as strings: `2026-02-15T09:00:00+09:00`
+        # and `2026-02-15T00:00:00+00:00` are the same moment. A naive
+        # stored value against an aware operand (or the reverse) has no
+        # defined order; Python raises `TypeError`, and the row is treated
+        # as unmatched below, the same verdict a corrupt value gets.
+        if not isinstance(actual, str):
+            return False
+        try:
+            actual_value = datetime.fromisoformat(actual)
+        except ValueError:
+            return False
+        operand_value = datetime.fromisoformat(operand)
     else:
         actual_value = actual
         operand_value = operand
@@ -352,6 +380,8 @@ def _evaluate_comparison(
 
 def _evaluate_where_clause(payload: dict[str, Any], clause: _WhereClause) -> bool:
     field, prop_type, operator, operand = clause
+    if operator == _CONJUNCTION:
+        return all(_evaluate_where_clause(payload, sub) for sub in operand)
     actual = payload.get(field)
     if operator == "eq":
         return bool(actual == operand)
@@ -880,13 +910,13 @@ class GuardedQuery:
         operand: Any,
     ) -> None:
         if operator in _WHERE_COMPARISON_OPERATORS:
-            if prop_type not in {"int", "float", "date"}:
+            if prop_type not in _COMPARABLE_PROPERTY_TYPES:
                 _operator_type_mismatch(
                     obj_type,
                     field,
                     operator,
                     prop_type,
-                    "comparisons require an int, float, or date property",
+                    "comparisons require an int, float, date, or datetime property",
                 )
             self._validate_where_scalar(
                 obj_type, field, operator, prop_type, operand
@@ -972,6 +1002,21 @@ class GuardedQuery:
 
         if kind == "malformed":
             _unknown_operator(obj_type, field, operand)
+        if kind == "operators":
+            # Each pair is validated as its own one-key clause, in caller
+            # order, so a bad key refuses with the same code and message it
+            # would get alone; the clauses are then AND-ed per row.
+            return (
+                field,
+                prop_type,
+                _CONJUNCTION,
+                tuple(
+                    self._compile_where_clause(
+                        obj_type, field, prop_type, ("operator", op, sub_operand)
+                    )
+                    for op, sub_operand in operand
+                ),
+            )
         if operator not in _WHERE_OPERATORS:
             _unknown_operator(obj_type, field, operator)
         self._validate_where_operator(

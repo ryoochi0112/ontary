@@ -392,9 +392,17 @@ keys.
 
 ### Filters, ordering, and bounded reads
 
-`where` accepts a bare scalar for equality or a one-key mapping with one of
-`gt`, `gte`, `lt`, `lte`, `in`, `ne`, or `contains`. Comparisons apply to
-declared `int`, `float`, or `date` properties; `in` takes a list of declared
+`where` accepts a bare scalar for equality or a mapping whose keys are drawn from
+`gt`, `gte`, `lt`, `lte`, `in`, `ne`, and `contains`. A mapping with several keys
+is their conjunction on that one field, so `{"gte": a, "lt": b}` is a half-open
+range and `{"contains": "x", "ne": "x"}` is a substring match with one value
+excluded; an empty mapping is refused. Comparisons apply to declared `int`,
+`float`, `date`, or `datetime` properties. `date` and `datetime` operands are the
+same ISO-8601 strings (or `date` values) the property stores. The four comparison
+operators treat a `datetime` as an instant, so an operand in another UTC offset
+matches by moment, not by spelling, and a stored value whose offset-awareness
+differs from the operand's (naive against aware) does not match; `eq`, `ne`, and
+`in` on a `datetime` still match the stored spelling exactly. `in` takes a list of declared
 values, `ne` applies to every declared type, and `contains` is a substring test
 for `str`. Unknown operators raise `UNKNOWN_OPERATOR`; an operator or operand
 that does not match the declared property type raises
@@ -410,10 +418,11 @@ as operators, not a value to match. Wrap it as an `in` list of one instead:
 `where={"data": {"in": [{"kind": "a"}]}}` is the equality escape.
 
 For a hidden property declared as a `DirectProperty` scope-routing key, the
-scope-key exemption applies only to a bare `eq` value and `in` over an explicit
-list. `gt`, `gte`, `lt`, `lte`, `ne`, and `contains`, plus `in` over a non-list or
-any malformed shape, are refused with `VISIBILITY_DENIED` because they let the
-caller learn a value. The operand must also actually supply a value — a `str`,
+scope-key exemption applies only to a bare `eq` value and a lone `in` over an
+explicit list. `gt`, `gte`, `lt`, `lte`, `ne`, and `contains`, plus `in` over a
+non-list, any malformed shape, and any multi-key mapping (even one that contains
+an `in`), are refused with `VISIBILITY_DENIED` because they let the caller learn
+a value. The operand must also actually supply a value — a `str`,
 `int`, `float`, `bool`, or `date` — so `None`, a list containing `None`, and an
 empty `in` list are refused too: a bare null needs no prior knowledge and would
 be a per-row null probe. Null filtering on a readable field is unchanged. Each
@@ -929,7 +938,8 @@ Neither backend carries a migration ladder, so any other stamp — higher, lower
 unstamped store that already has an `objects` table — is refused at construction with
 `STORE_VERSION_UNSUPPORTED`, naming both versions. Moving a store across schema
 versions is an explicit operator step: open it with the matching ontary version, or
-migrate the data into a fresh store.
+migrate the data into a fresh store. [storage.md](storage.md#moving-across-a-schema-version)
+gives the drop-and-recreate procedure.
 
 ---
 
@@ -1004,11 +1014,13 @@ cursor back with the same explicit `limit` to continue. `after` without an
 explicit `limit` returns `AFTER_WITHOUT_LIMIT`; values below 1 or above 1000
 return `INVALID_LIMIT`.
 
-The `where` grammar accepts a bare scalar for equality or a one-key operator
-mapping using `gt`, `gte`, `lt`, `lte`, `in`, `ne`, or `contains`. Operators are
+The `where` grammar accepts a bare scalar for equality or an operator mapping
+using `gt`, `gte`, `lt`, `lte`, `in`, `ne`, or `contains`; several operators in
+one mapping are AND-ed, so `{"gte": a, "lt": b}` is a range. Operators are
 validated against the declared property type; unknown operators raise
 `UNKNOWN_OPERATOR`, and an incompatible operator or operand raises
-`OPERATOR_TYPE_MISMATCH`. Date comparisons use the stored ISO date order.
+`OPERATOR_TYPE_MISMATCH`. Date comparisons use the stored ISO date order;
+datetime comparisons are by instant across UTC offsets.
 Lineage fields are not filterable, and an unknown key raises `UNKNOWN_FIELD`.
 `order_by` accepts a declared payload field, ascending by default, or a
 `(field, "asc"|"desc")` pair, and composes with the page cursor.
@@ -1212,8 +1224,8 @@ table below is generated from it.
 | `UNKNOWN_LINK_TYPE` | An operation referenced an unregistered link type. |
 | `UNKNOWN_NAME` | A typed `BoundQuery`/`OntologyClient` call named an unregistered object, link, action, or function -- e.g. an undecorated class, a class/`LinkHandle` registered on a different `Ontology`, or a link api_name absent from this registry (typed-authoring AC7 / typed-actions AC8). Typed lookup failures use the validation kind and live here since C3 of the staged refactor so `ontary._typed_api` can raise them below the runtime modules. |
 | `UNKNOWN_OBJECT_TYPE` | An operation referenced an unregistered object type. |
-| `UNKNOWN_OPERATOR` | A mapping-form `where` clause named an operator outside the declared set: `gt`, `gte`, `lt`, `lte`, `in`, `ne`, or `contains`. |
-| `OPERATOR_TYPE_MISMATCH` | A mapping-form `where` operator is not valid for the property's declared type, or its operand is not a declared-type scalar. |
+| `UNKNOWN_OPERATOR` | A mapping-form `where` clause named an operator outside the declared set: `gt`, `gte`, `lt`, `lte`, `in`, `ne`, or `contains` -- or was an empty mapping. A mapping with several operators is validated key by key, so one unknown key refuses the whole clause. |
+| `OPERATOR_TYPE_MISMATCH` | A mapping-form `where` operator is not valid for the property's declared type (comparisons need `int`, `float`, `date`, or `datetime`; `contains` needs `str`), or its operand is not a declared-type scalar. |
 
 ### `visibility`
 

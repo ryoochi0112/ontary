@@ -105,4 +105,37 @@ and code `STORE_VERSION_UNSUPPORTED`, naming the engine and store versions. Movi
 store across schema versions is an explicit operator step: open it with the matching
 ontary version, or migrate the data into a fresh store.
 
+### Moving across a schema version
+
+There is no in-place upgrade. The supported path is **drop and recreate**: the
+engine creates the current schema on an empty store, and the application re-ingests
+from its sources. This is the intended shape for an ontary store, which is a
+governed projection of source systems, not the system of record; `client.ingest`
+and `client.ingest_links` rebuild it. If the store holds facts that exist nowhere
+else (Action-written rows, audit history you must keep), export them with the old
+ontary version before dropping.
+
+For SQLite, move the old file aside and let the engine create a new one at the
+same path.
+
+For PostgreSQL, drop the four engine tables in the schema the store connects to
+(the `search_path` of the DSN, or `public`), then construct the store again:
+
+```sql
+DROP TABLE IF EXISTS audit_log, links, objects, schema_meta;
+```
+
+Indexes and row-level-security policies belong to those tables and go with them.
+The next `PostgresStore(...)` sees no `schema_meta`, no `objects`, creates the
+schema at the engine's `SCHEMA_VERSION`, re-applies RLS when `rls=True`, and stamps
+it. A first deployment on an empty database needs none of this: it creates the
+schema on construction.
+
+The stamp is a whole-schema fingerprint, not a release number. It changed from 9
+to 10 between the last `ontos` release and `ontary` 0.11.0, and a database stamped
+9 is refused by every ontary version. Check the engine's number with
+`ontary.store.SCHEMA_VERSION` and the store's with
+`SELECT value FROM schema_meta WHERE key = 'schema_version'` before an upgrade so
+the re-ingest is planned rather than discovered at startup.
+
 [Return to the README](../README.md) · [See the full storage API](api-reference.md#stores)

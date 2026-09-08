@@ -553,7 +553,8 @@ def _register_aggregate_tool(
                 description=(
                     "Typed operator matching on declared payload fields; bare "
                     "scalars use equality and mapping values support gt, gte, "
-                    "lt, lte, in, ne, and contains."
+                    "lt, lte, in, ne, and contains; several operators in one "
+                    "mapping are AND-ed, so {\"gte\": a, \"lt\": b} is a range."
                 )
             ),
         ] = None,
@@ -783,7 +784,9 @@ def _register_tools(
                 description=(
                     "Typed operator matching on declared payload fields; bare "
                     "scalars use equality and mapping values support gt, gte, "
-                    "lt, lte, in, ne, and contains; unknown keys raise "
+                    "lt, lte, in, ne, and contains (several operators in one "
+                    "mapping are AND-ed, so {\"gte\": a, \"lt\": b} is a "
+                    "range); unknown keys raise "
                     "UNKNOWN_FIELD."
                 )
             ),
@@ -822,7 +825,8 @@ def _register_tools(
 
         The `where` grammar is typed operator matching on declared payload fields:
         bare scalars use equality and mapping values support `gt`,
-        `gte`, `lt`, `lte`, `in`, `ne`, and `contains`; unknown keys raise `UNKNOWN_FIELD`;
+        `gte`, `lt`, `lte`, `in`, `ne`, and `contains`, AND-ed when one mapping
+        names several (`{"gte": a, "lt": b}` is a range); unknown keys raise `UNKNOWN_FIELD`;
         lineage fields are not filterable.
         `limit` defaults to 100 and has a hard maximum of 1000. `after` is the
         opaque cursor from the previous page and requires an explicit
@@ -855,7 +859,8 @@ def _register_tools(
                 description=(
                     "Typed operator matching on declared payload fields; bare "
                     "scalars use equality and mapping values support gt, gte, "
-                    "lt, lte, in, ne, and contains."
+                    "lt, lte, in, ne, and contains; several operators in one "
+                    "mapping are AND-ed, so {\"gte\": a, \"lt\": b} is a range."
                 )
             ),
         ] = None,
