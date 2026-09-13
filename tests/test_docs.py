@@ -154,6 +154,35 @@ def test_queries_document_visible_row_count_disclosure_reasoning() -> None:
     assert "`count_contributors` remains the sole privacy-counting primitive" in text
 
 
+def test_count_objects_not_min_n_gated_points_to_aggregate_count() -> None:
+    """`count_objects` docs must point readers at the released count.
+
+    A docs-only reader who sees "not min-N-gated" without a released alternative
+    right there re-derives the bypass argument from `docs/queries` history
+    (ontary#25). Pin `aggregate_objects` into the same paragraph as the
+    not-min-N-gated sentence on every page that carries it, EN and JA.
+    """
+    en_marker = "not min-N-gated"
+    ja_marker = "min-N の対象外"
+    for path, marker in (
+        (_DOCS / "api-reference.md", en_marker),
+        (_DOCS / "mcp-serving.md", en_marker),
+        (_DOCS / "api-reference.ja.md", ja_marker),
+    ):
+        text = path.read_text()
+        paragraphs = text.split("\n\n")
+        matches = [
+            p
+            for p in paragraphs
+            if "count_objects" in p and marker in re.sub(r"\s+", " ", p)
+        ]
+        assert matches, f"{path}: no paragraph pairs count_objects with {marker!r}"
+        for paragraph in matches:
+            assert "aggregate_objects" in paragraph, (
+                f"{path}: paragraph with {marker!r} does not name aggregate_objects"
+            )
+
+
 MOVED_DOC_NAMES = (
     "MinNViolation",
     "VisibilityDenied",

@@ -317,7 +317,7 @@ Action 実行器、バインド済みハンドラ — をちょうど 1 回だ�
 | `.get(obj_type, obj_id)` | `T \| StoredObject \| None` |
 | `.list(obj_type, where=None, *, limit=DEFAULT_READ_LIMIT, after=None, order_by=None)` | `list[T] \| list[StoredObject] \| TypedPage[T] \| Page` |
 | `.traverse(obj_type, link, from_id, *, reverse=False)` または `.traverse(link_cls, from_obj_or_id, *, reverse=False)` | `list[T] \| list[StoredObject]` |
-| `.aggregate(obj_type, value_field, where=None, *, func="mean")` | `float \| int` |
+| `.aggregate(obj_type, value_field=None, where=None, *, func="mean")` | `float \| int` |
 | `.aggregate_by(obj_type, value_field, group_by, where=None, *, func="mean")` | `dict[str, float \| int]` |
 | `.count(obj_type, where=None)` | `int` |
 | `.exists(obj_type, where=None)` | `bool` |
@@ -512,10 +512,18 @@ identity-revealing の拒否は双方向で対称です。
 `"mean"` です。グループなしでは `count` が `int`、その他の関数が `float` の値を返し、
 グループ付きでは各グループに対応する値を dict で返します。
 
+`func="count"` は宣言済みのどのフィールド型でも受け付けます。そのフィールドを
+持つ行数を数えるだけで、値を `float` に変換することはありません。`value_field` も
+省略（または `None` を渡す）でき、その場合は選択範囲内の可視な行すべてをカウント
+します。min-N はそれらの行の寄与者に対して（グループ付きならグループごとに）
+適用されます。`count` 以外の func で `value_field` を省略すると `INVALID_PARAMS`
+になり、メッセージは func 名を挙げて `value_field` が必須であると伝えます。
+
 両者は `where`/`group_by` の隠しフィールド検査、**異なる寄与者**に対する min-N、
-型が宣言していない `value_field` に対する `UNKNOWN_FIELD`、そして宣言済みだが
-非数値の `value_field` に対する `NON_NUMERIC_AGGREGATE`（どちらも行を 1 つも読む前に
-検査されます）を強制します。隠された `value_field` を集計できるのは、`contributor_rules` を宣言した型に
+型が宣言していない `value_field` に対する `UNKNOWN_FIELD`、そして `mean`/`sum`/`min`/`max`
+の下で宣言済みだが非数値の `value_field` に対する `NON_NUMERIC_AGGREGATE`
+（`count` は対象外です。どちらの検査も行を 1 つも読む前に行われます）を強制します。
+隠された `value_field` を集計できるのは、`contributor_rules` を宣言した型に
 対する、著者が宣言した Function から、`func="mean"` または `func="count"` を使う場合だけです。
 コンシューマーの surface — client、型付き、MCP — からこの操作を行うと
 `VisibilityError` と `VISIBILITY_DENIED` になります。`sum`、`min`、`max` は引き続き拒否されます。
@@ -998,9 +1006,14 @@ lineage フィールドは対象外で、未知のキーは `UNKNOWN_FIELD` に�
 `order_by` は宣言済み payload フィールド（デフォルトは昇順）、または
 `(field, "asc"|"desc")` の組を受け付け、ページカーソルと組み合わせられます。
 `count_objects` はコンシューマーに可視な行の件数を返し、min-N の対象外です。
+開示するのは `query_objects` が既に一覧する内容だけであり、min-N でリリース
+された件数が必要な場合は `value_field` 不要の `aggregate_objects(func="count")`
+を使ってください。
 `aggregate_objects` は `func="mean"|"count"|"sum"|"min"|"max"` を受け付け、
 デフォルトは `"mean"` です。すべての関数に同じ min-N の公開判定が適用され、
-グループ付きの空集合 `{}` も拒否されます。
+グループ付きの空集合 `{}` も拒否されます。`value_field` は `func="count"` では
+省略可能で、省略すると可視な行すべてをカウントします。それ以外の func では必須
+であり、指定がなければ `INVALID_PARAMS` になります。
 `traverse_links` は、委譲先の `OntologyClient.traverse`／`GuardedQuery.traverse` に
 `limit`／`after` とカーソルの API がないため、今回もページなしのリストです。
 `reverse=true` を渡すとリンクの target 側から辿って source 側のオブジェクトを返します。

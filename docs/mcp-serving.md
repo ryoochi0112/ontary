@@ -53,7 +53,9 @@ return `UNKNOWN_OPERATOR`; incompatible operators or operands return
 The MCP server applies a default limit of 100 and refuses
 an explicit limit above the hard maximum of 1000 with `INVALID_LIMIT`.
 `count_objects` accepts the same `where` grammar and returns the number of rows
-visible to the invoking consumer.
+visible to the invoking consumer. It is not min-N-gated: it reveals only what
+`query_objects` already lists. For a min-N-released count, use
+`aggregate_objects(func="count")`, which needs no `value_field`.
 
 `count_objects` and `aggregate_objects` are unbounded operations on this
 untrusted surface: each can scan the full underlying type to apply its matching,

@@ -11,6 +11,22 @@ you**.
 
 ## [Unreleased]
 
+### Changed
+
+- `aggregate` / `aggregate_by` / MCP `aggregate_objects`: `func="count"` now
+  accepts any declared field type (no numeric coercion) and may omit
+  `value_field` to count every visible row under min-N; every other func with
+  no `value_field` refuses with `INVALID_PARAMS`. `NON_NUMERIC_AGGREGATE` now
+  names the requested function. Resolves
+  [ontary#25](https://github.com/ryoochi0112/ontary/issues/25).
+
+### Documentation
+
+- `count_objects` (MCP tool description, `docs/api-reference.md`/`.ja.md`,
+  `docs/mcp-serving.md`) now states it is a visible-row count that is not
+  min-N-gated, and points to `aggregate_objects(func="count")` as the
+  released alternative.
+
 ## [0.13.0] — 2026-09-13
 
 ```bash
