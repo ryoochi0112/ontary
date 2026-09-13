@@ -44,10 +44,13 @@ hooks:
 
 nav:
   - Home: index.md
+  - Getting started: getting-started.md
   - Ontology design: ontology-design.md
   - API reference: api-reference.md
   - Storage: storage.md
   - MCP serving: mcp-serving.md
+  - CLI reference: cli.md
+  - Testing: testing.md
   - Compatibility: compatibility.md
   - Changelog: changelog.md
   - Releasing: releasing.md

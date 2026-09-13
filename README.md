@@ -103,15 +103,33 @@ server = build_mcp_server(ontology, store, agent)   # server.run() serves stdio
 The full `Org → Queue → Ticket → Comment` ontology with functions and a
 multi-consumer MCP server is [`examples/tickets/`](examples/tickets/).
 
+## Command line
+
+The package installs `ontary` and `ontary-mcp`.
+
+- `ontary validate pkg.module:attr` validates an ontology and reports diagnostics. Use `--json` for JSON output.
+- `ontary serve pkg.module:attr --dev [--store PATH] [--port N]` serves an ontology over localhost MCP.
+- `ontary version` prints the version.
+
+```bash
+ontary serve your_app.ontology:ontology --dev --store ./dev.sqlite --port 8000
+```
+
+`ontary-mcp` is a placeholder that exits with instructions. Full flags and
+exit codes: [CLI reference](docs/cli.md).
+
 ## Where to go
 
 | Learn about | Destination |
 | --- | --- |
 | The docs site (EN / 日本語) | https://ryoochi0112.github.io/ontary/ |
+| First ontology in ten minutes | [Getting started](docs/getting-started.md) · [日本語](docs/getting-started.ja.md) |
 | Authoring an ontology | [Ontology design guide](docs/ontology-design.md) · [日本語](docs/ontology-design.ja.md) |
 | Names and errors | [API reference](docs/api-reference.md) · [error codes](docs/api-reference.md#error-codes) · [日本語](docs/api-reference.ja.md) |
 | Storage and tenancy | [Storage, tenancy, and schema](docs/storage.md) |
 | MCP serving | [MCP serving](docs/mcp-serving.md) |
+| Command line | [CLI reference](docs/cli.md) · [日本語](docs/cli.ja.md) |
+| Testing your ontology | [Testing](docs/testing.md) · [日本語](docs/testing.ja.md) |
 | Worked recipes | [Tickets reference app](examples/tickets/README.md) |
 | Compatibility and migration | [CHANGELOG.md](CHANGELOG.md) · [Compatibility](docs/compatibility.md) |
 | Cutting a release (maintainers) | [Releasing](docs/releasing.md) |

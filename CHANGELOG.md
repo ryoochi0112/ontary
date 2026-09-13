@@ -13,6 +13,13 @@ you**.
 
 ### Documentation
 
+- Three new docs pages, English and Japanese: a getting-started tutorial
+  (`docs/getting-started.md`), the CLI reference (`docs/cli.md`: `ontary validate`,
+  `ontary serve --dev`, `ontary version`, `ontary-mcp`, exit codes), and testing an
+  ontology with `ontary.testing` (`docs/testing.md`). The tutorial's whole program
+  and the testing page's test functions are executed by `tests/test_docs.py`.
+- README gains a "Command line" section; `docs/mcp-serving.md` shows the
+  `ontary serve --dev` one-liner next to the Python builder.
 - `docs/storage.md` states which role applies the PostgreSQL RLS policies: the one
   that constructs the store on an empty database, which needs `CREATE` on the schema
   and becomes the table owner. Roles that connect later need only table DML.
