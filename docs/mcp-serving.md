@@ -19,6 +19,15 @@ server = build_mcp_server(ontology, store, consumer)
 server.run()  # stdio is the default transport
 ```
 
+Alternatively, serve the ontology from the command line:
+
+```bash
+ontary serve your_app.ontology:ontology --dev --store ./dev.sqlite --port 8000
+```
+
+The dev server binds to `127.0.0.1` on port 8000. It requires the `--dev` flag.
+The dev consumer sees unscoped rows only, unless the ontology declares matching dev scopes.
+
 This is the short form used by the README quickstart. The agent sees the same
 scope, sensitivity, row-visibility, and min-N decisions as a direct
 `OntologyClient`. Use this shape when one process intentionally represents one

@@ -117,6 +117,9 @@ NEW_ENGLISH_DOCS = tuple(
     for name in (
         "storage.md",
         "mcp-serving.md",
+        "getting-started.md",
+        "cli.md",
+        "testing.md",
     )
 )
 #: Every reader-facing docs page must be reachable from the README. The two
@@ -940,3 +943,31 @@ def test_no_doc_teaches_a_code_less_kind_class_construction() -> None:
                 f"{path.name}: sample constructs {match.group(1)} without a "
                 "code= argument, which raises TypeError as of 0.6.0"
             )
+
+
+def _python_fences(path: Path) -> list[str]:
+    return re.findall(r"```python\n(.*?)```", path.read_text(), re.DOTALL)
+
+
+def test_getting_started_whole_program_executes_verbatim() -> None:
+    """The tutorial's closing "whole program" fence is run exactly as published;
+    the per-step fragments are the same lines split up, so a drift here is a
+    drift in the tutorial."""
+    fences = _python_fences(_DOCS / "getting-started.md")
+    assert len(fences) >= 2, "getting-started.md lost its code fences"
+    namespace: dict[str, object] = {}
+    exec(compile(fences[-1], "docs/getting-started.md#whole-program", "exec"), namespace)
+    assert namespace["client"] is not None  # bound at the end of the program
+
+
+def test_testing_page_fences_form_one_passing_test_module() -> None:
+    """docs/testing.md is a pytest module split into fences: the first declares
+    the ontology, the rest are `def test_*` functions. Concatenate and run them."""
+    fences = _python_fences(_DOCS / "testing.md")
+    assert len(fences) >= 2, "testing.md lost its code fences"
+    namespace: dict[str, object] = {}
+    exec(compile("\n".join(fences), "docs/testing.md", "exec"), namespace)
+    tests = [v for k, v in namespace.items() if k.startswith("test_") and callable(v)]
+    assert len(tests) >= 3
+    for test in tests:
+        test()
