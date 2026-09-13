@@ -1440,7 +1440,7 @@ class GuardedQuery:
         self,
         consumer: Consumer,
         obj_type: str,
-        value_field: str,
+        value_field: str | None = None,
         where: dict[str, Any] | None = None,
         *,
         func: AggregateFunc = "mean",
@@ -1470,7 +1470,7 @@ class GuardedQuery:
         self,
         consumer: Consumer,
         obj_type: str,
-        value_field: str,
+        value_field: str | None,
         group_by: str,
         where: dict[str, Any] | None = None,
         *,
@@ -1732,7 +1732,7 @@ class GuardedQuery:
         self,
         consumer: Consumer,
         obj_type: str,
-        value_field: str,
+        value_field: str | None,
         where: dict[str, Any] | None,
         group_by: str | None,
         func: AggregateFunc,
@@ -1749,6 +1749,11 @@ class GuardedQuery:
         if func not in _AGGREGATE_FUNCS:
             raise ValidationFailed(
                 f"aggregate func must be one of {list(_AGGREGATE_FUNCS)!r}, got {func!r}",
+                code="INVALID_PARAMS",
+            )
+        if value_field is None and func != "count":
+            raise ValidationFailed(
+                f"value_field is required for func={func!r}",
                 code="INVALID_PARAMS",
             )
 
@@ -1814,7 +1819,7 @@ class GuardedQuery:
         # positive in the one log an auditor trusts. `_disclosures` is the
         # sink `OntologyClient.call_function` reads back, threaded by
         # reference exactly as `capability_accesses` is -- see that method.
-        releasing = self._value_field_gate(
+        releasing = value_field is not None and self._value_field_gate(
             consumer,
             obj_type,
             value_field,
@@ -1843,7 +1848,10 @@ class GuardedQuery:
         # before any row is iterated/coerced -- a field whose values merely
         # happen to look numeric on some rows can never sneak past the
         # type contract.
-        prop_type = self._property_type(obj_type, value_field)
+        prop_type = (
+            self._property_type(obj_type, value_field)
+            if value_field is not None else None
+        )
         # Existence, checked here and not earlier for the reason the block
         # above states: below every visibility gate, so a denial the consumer
         # is not entitled to see is never pre-empted by a complaint about a
@@ -1852,7 +1860,7 @@ class GuardedQuery:
         # `UNKNOWN_FIELD` for it would leak "no such field" about a field that
         # exists AND make that gate unreachable (Track B's M9, for `group_by`).
         #
-        # `None` here means "no such declared property" and nothing else: the
+        # For a supplied field, `None` means "no such declared property": the
         # unregistered-type case `_property_type` also swallows is already
         # impossible, because `get_object_type` ran un-caught at the top of
         # this method. The old guard `prop_type is not None` let an undeclared
@@ -1865,7 +1873,7 @@ class GuardedQuery:
         # and `group_by` all refuse such a name; `value_field` was the only
         # identifier parameter on the read surface that did not, and the
         # TYPED overload already refused it (`_validate_field_name`).
-        if prop_type is None:
+        if value_field is not None and prop_type is None:
             raise ValidationFailed(
                 f"{obj_type}: value_field names unknown field(s) "
                 f"[{value_field!r}]",
@@ -1887,9 +1895,10 @@ class GuardedQuery:
         )
 
         min_n = self._policy.min_n
+        subject = obj_type if value_field is None else f"{obj_type}.{value_field}"
         if not visible:
             raise VisibilityError(
-                _min_n_violation_message(f"{obj_type}.{value_field}", min_n),
+                _min_n_violation_message(subject, min_n),
                 code="MIN_N_VIOLATION",
             )
 
@@ -1923,20 +1932,26 @@ class GuardedQuery:
             # release that one person's value as the "mean" (and, under
             # `func="count"`, release how many people answered). The floor and
             # the released number must describe the same population.
-            value_rows = [r for r in group_rows if value_field in r.payload]
+            value_rows = (
+                group_rows if value_field is None
+                else [r for r in group_rows if value_field in r.payload]
+            )
             contributor_count = self._contributor_count(obj_type, value_rows)
             passed = contributor_count >= min_n
             if not passed:
                 shown_key = "<redacted>" if group_key_hidden else repr(key)
+                group_subject = (
+                    subject if value_field is None and not group_by
+                    else f"{subject} group {shown_key}"
+                )
                 raise VisibilityError(
-                    _min_n_violation_message(
-                        f"{obj_type}.{value_field} group {shown_key}", min_n
-                    ),
+                    _min_n_violation_message(group_subject, min_n),
                     code="MIN_N_VIOLATION",
                 )
             if func == "count":
                 aggregate_value: AggregateValue = len(value_rows)
             else:
+                assert value_field is not None  # validated before any row read
                 values = [float(r.payload[value_field]) for r in value_rows]
                 if func == "sum":
                     aggregate_value = sum(values)
@@ -1950,14 +1965,9 @@ class GuardedQuery:
                 self._release_group(
                     out, released_from, obj_type, group_by, key, aggregate_value
                 )
-            else:
-                self._record_disclosure(
-                    _disclosures, releasing, obj_type, value_field
-                )
-                return aggregate_value
-
-        self._record_disclosure(_disclosures, releasing, obj_type, value_field)
-        return out
+        if value_field is not None:
+            self._record_disclosure(_disclosures, releasing, obj_type, value_field)
+        return out if group_by else aggregate_value
 
     @staticmethod
     def _release_group(

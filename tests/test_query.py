@@ -4096,6 +4096,105 @@ def test_aggregate_count_str_counts_visible_value_rows_with_contributor_floor(
         assert gq.aggregate(consumer, "Reading", "label", func="count") == 4
 
 
+@pytest.mark.parametrize("contributors", [2, 3])
+def test_aggregate_count_without_value_field_counts_visible_rows(
+    contributors: int,
+    make_registry: RegistryFactory,
+    make_policy: PolicyFactory,
+    make_store: StoreFactory,
+) -> None:
+    registry = _contributor_registry(make_registry)
+    store = make_store(registry)
+    _seed_two_shelves(store)
+    for i in range(3):
+        store.insert("Reader", {"id": f"reader-{i}"}, SRC)
+    for i in range(4):
+        # No numeric field is carried; repeated contributors still add rows.
+        store.insert("Reading", {"id": f"r{i}", "shelf_id": "shelf-1"}, SRC)
+        store.create_link("byReader", f"r{i}", f"reader-{i % contributors}")
+    store.insert("Reading", {"id": "outside", "shelf_id": "shelf-2"}, SRC)
+    store.create_link("byReader", "outside", "reader-2")
+    query = GuardedQuery(store, registry, _contributor_policy(make_policy))
+    consumer = _human("shelf", "shelf-1")
+
+    if contributors == 3:
+        result = query.aggregate(consumer, "Reading", func="count")
+        assert type(result) is int
+        assert result == 4
+    else:
+        with raises_code(VisibilityError, "MIN_N_VIOLATION") as exc_info:
+            query.aggregate(consumer, "Reading", func="count")
+        message = str(exc_info.value)
+        assert message.startswith("Reading")
+        assert "None" not in message
+        assert "2" not in message
+        assert "4" not in message
+        for prop_def in registry.get_object_type("Reading").properties:
+            assert prop_def.name not in message
+
+
+def test_aggregate_count_without_value_field_empty_selection(
+    make_registry: RegistryFactory,
+    make_policy: PolicyFactory,
+    make_store: StoreFactory,
+) -> None:
+    query, consumer, _ = _distinct_contributor_aggregate_query(
+        make_registry, make_policy, make_store
+    )
+    with raises_code(VisibilityError, "MIN_N_VIOLATION") as exc_info:
+        query.aggregate(consumer, "Reading", where={"id": "absent"}, func="count")
+    message = str(exc_info.value)
+    assert message.startswith("Reading")
+    assert "None" not in message
+    assert "0" not in message
+    assert "id" not in message
+    assert "score" not in message
+
+
+@pytest.mark.parametrize("func", ["mean", "sum"])
+@pytest.mark.parametrize("explicit_none", [False, True])
+def test_aggregate_without_value_field_refuses_before_row_read(
+    func: str,
+    explicit_none: bool,
+    monkeypatch: pytest.MonkeyPatch,
+    make_registry: RegistryFactory,
+    make_policy: PolicyFactory,
+    make_store: StoreFactory,
+) -> None:
+    registry = _contributor_registry(make_registry)
+    store = make_store(registry)
+    query = GuardedQuery(store, registry, _contributor_policy(make_policy))
+
+    def refuse_row_read(*args: object, **kwargs: object) -> None:
+        pytest.fail("invalid aggregate parameters must be refused before row reads")
+
+    monkeypatch.setattr(store, "read_all", refuse_row_read)
+    monkeypatch.setattr(store, "read_current", refuse_row_read)
+    kwargs = {"value_field": None} if explicit_none else {}
+    with raises_code(ValidationFailed, "INVALID_PARAMS") as exc_info:
+        query.aggregate(_human("shelf", "shelf-1"), "Reading", func=func, **kwargs)
+    assert "value_field" in str(exc_info.value)
+    assert func in str(exc_info.value)
+
+
+@pytest.mark.parametrize("author_dispatch", [None, _AUTHOR_DISPATCH])
+def test_aggregate_count_without_value_field_records_no_hidden_disclosure(
+    author_dispatch: _AuthorDispatch | None,
+    make_registry: RegistryFactory,
+    make_policy: PolicyFactory,
+    make_store: StoreFactory,
+) -> None:
+    query, consumer, _ = _distinct_contributor_aggregate_query(
+        make_registry, make_policy, make_store
+    )
+    disclosures: list[tuple[str, str]] = []
+    assert query.aggregate(
+        consumer, "Reading", func="count",
+        _author_dispatch=author_dispatch, _disclosures=disclosures,
+    ) == 3
+    assert disclosures == []
+
+
 def test_aggregate_bool_declared_type_raises_coded_error(
     make_policy: PolicyFactory,
     make_store: StoreFactory,

@@ -778,6 +778,24 @@ class TestTypedAggregate:
         assert client.aggregate(Ticket, "priority", func="count") == 3
 
 
+    def test_aggregate_typed_count_without_value_field(self) -> None:
+        client, Ticket, _, _, _, _ = _linked_client(_human_consumer())
+        client.ingest("Ticket", [
+            {"id": f"t{i}", "subject": "same", "priority": 1} for i in range(3)
+        ], SRC)
+        result = client.aggregate(Ticket, func="count")
+        assert type(result) is int
+        assert result == 3
+        assert client.aggregate_by(Ticket, None, "subject", func="count") == {"same": 3}
+
+    def test_aggregate_typed_mean_without_value_field_refuses(self) -> None:
+        client, Ticket, _, _, _, _ = _linked_client(_human_consumer())
+        with raises_code(ValidationFailed, "INVALID_PARAMS") as exc_info:
+            client.aggregate(Ticket, func="mean")
+        assert "value_field" in str(exc_info.value)
+        assert "mean" in str(exc_info.value)
+
+
 def _build_counting_ontology() -> tuple[Ontology, type[OntologyObject]]:
     """A team-scoped `Note` at the default `min_n=3`, declaring no
     `contributor_rules` -- so this also drives the row-count fallback

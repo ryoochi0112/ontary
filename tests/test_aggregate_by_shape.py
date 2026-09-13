@@ -132,6 +132,30 @@ def _mcp_aggregate(
 
 
 @pytest.mark.parametrize("surface", ["GuardedQuery", "OntologyClient", "BoundQuery"])
+def test_grouped_count_without_value_field_gates_each_group(surface: str) -> None:
+    definition, _Record, store = _build(min_n=3)
+    _seed(store, [
+        {"id": f"r{i}", "score": float(i), "group_id": "large" if i < 3 else "small"}
+        for i in range(5)
+    ])
+    aggregate_by = _surfaces(definition, store)[surface]
+    assert aggregate_by(
+        "Record", None, "group_id", where={"group_id": "large"}, func="count"
+    ) == {"large": 3}
+    with raises_code(VisibilityError, "MIN_N_VIOLATION") as exc_info:
+        aggregate_by("Record", None, "group_id", func="count")
+    message = str(exc_info.value)
+    assert message.startswith("Record group 'small'")
+    assert "None" not in message
+    assert "score" not in message
+    assert "2" not in message
+    _seed(store, [{"id": "r5", "score": 5.0, "group_id": "small"}])
+    assert aggregate_by("Record", None, "group_id", func="count") == {
+        "large": 3, "small": 3,
+    }
+
+
+@pytest.mark.parametrize("surface", ["GuardedQuery", "OntologyClient", "BoundQuery"])
 def test_unknown_group_by_refuses_instead_of_collapsing_to_one_group(
     surface: str,
 ) -> None:
