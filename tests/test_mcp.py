@@ -607,6 +607,69 @@ def test_aggregate_objects_invalid_function_is_structured(func: object) -> None:
     assert payload["error"]["kind"] == "validation"
 
 
+def test_aggregate_objects_count_without_value_field_returns_released_count() -> None:
+    """`func="count"` with no `value_field` counts every visible row --
+    the min-N-released alternative `count_objects`'s description points
+    to (spec `count-min-n-discoverability.md` §2 item 2)."""
+    server, store = _build_server(_librarian())
+    store.insert("Book", {"id": "book-2", "shelf_id": "shelf-1"}, SRC)
+
+    payload = _call(
+        server,
+        "aggregate_objects",
+        {"obj_type": "Book", "func": "count"},
+    )
+
+    assert payload == {"result": 2}
+
+
+def test_aggregate_objects_count_without_value_field_is_min_n_gated() -> None:
+    """Below the dedicated policy's `min_n=3`, `func="count"` with no
+    `value_field` still refuses with a structured `MIN_N_VIOLATION` -- it
+    is released, not a bypass."""
+    server = _build_min_n_server(_librarian())
+
+    payload = _call(
+        server,
+        "aggregate_objects",
+        {"obj_type": "Book", "where": {"shelf_id": "shelf-1"}, "func": "count"},
+    )
+
+    assert payload["error"]["code"] == "MIN_N_VIOLATION"
+    assert payload["error"]["kind"] == "visibility"
+    assert "result" not in payload
+
+
+def test_aggregate_objects_mean_without_value_field_is_invalid_params() -> None:
+    server, _store = _build_server(_librarian())
+
+    payload = _call(
+        server,
+        "aggregate_objects",
+        {"obj_type": "Book", "func": "mean"},
+    )
+
+    assert payload["error"]["code"] == "INVALID_PARAMS"
+    assert payload["error"]["kind"] == "validation"
+    assert "value_field" in payload["error"]["message"]
+    assert "mean" in payload["error"]["message"]
+
+
+def test_aggregate_objects_counts_a_declared_string_field() -> None:
+    """`func="count"` over a declared `str` field (`title`) counts rows
+    carrying it, with no float coercion (spec §2 item 1)."""
+    server, store = _build_server(_librarian())
+    store.insert("Book", {"id": "book-2", "shelf_id": "shelf-1"}, SRC)  # no title
+
+    payload = _call(
+        server,
+        "aggregate_objects",
+        {"obj_type": "Book", "value_field": "title", "func": "count"},
+    )
+
+    assert payload == {"result": 1}
+
+
 def _build_many_books_server(count: int) -> tuple[MCPServer, ObjectStore]:
     """Build the shared library fixture with exactly `count` visible books."""
     server, store = _build_server(_librarian())
@@ -740,6 +803,32 @@ def test_query_objects_description_and_schema_state_where_and_pagination_contrac
     where_description = query_tool.input_schema["properties"]["where"]["description"]
     assert "Typed operator matching on declared payload fields" in where_description
     assert "unknown keys raise UNKNOWN_FIELD" in where_description
+
+
+def test_count_objects_description_points_to_the_released_alternative() -> None:
+    """The `count_objects` description an AI reads back from `list_tools`
+    must name it as a visible-row count that is not min-N-gated, and point
+    to `aggregate_objects(func="count")` as the released alternative (spec
+    `count-min-n-discoverability.md` §2 item 4)."""
+    server, _ = _build_server(_librarian())
+    count_tool = next(
+        tool for tool in asyncio.run(server.list_tools()) if tool.name == "count_objects"
+    )
+    description = count_tool.description
+    assert description is not None
+    assert "not min-N-gated" in description
+    assert "aggregate_objects" in description
+
+
+def test_aggregate_objects_value_field_schema_mentions_count() -> None:
+    server, _ = _build_server(_librarian())
+    aggregate_tool = next(
+        tool for tool in asyncio.run(server.list_tools()) if tool.name == "aggregate_objects"
+    )
+    value_field_description = aggregate_tool.input_schema["properties"]["value_field"][
+        "description"
+    ]
+    assert "count" in value_field_description
 
 
 def test_query_objects_has_no_unbounded_mcp_parameter_combination() -> None:

@@ -506,20 +506,44 @@ def _aggregate_objects(
     """Validate one MCP aggregate request and delegate to the client seam."""
     client = resolve_client()
     checked_obj_type = _tool_string("obj_type", obj_type)
-    checked_value_field = _tool_string("value_field", value_field)
+    checked_value_field = _tool_optional_string("value_field", value_field)
     checked_group_by = _tool_optional_string("group_by", group_by)
     checked_where = _tool_optional_object("where", where)
     checked_func = cast(AggregateFunc, _tool_string("func", func))
+    # `value_field` is optional only for func="count" (spec
+    # `count-min-n-discoverability.md` §2 item 2); for every other func a
+    # `None` value_field is invalid and must reach the engine's
+    # `INVALID_PARAMS` refusal rather than be rejected here. The typed
+    # `OntologyClient.aggregate(_by)` overloads narrow `value_field` to
+    # `str` outside `func="count"`, so the `cast` below only tells mypy
+    # what the runtime already lets flow through -- the engine, not this
+    # cast, is what refuses a genuinely missing `value_field`.
+    if checked_func == "count":
+        if checked_group_by is None:
+            return client.aggregate(
+                checked_obj_type,
+                checked_value_field,
+                checked_where,
+                func=checked_func,
+            )
+        return client.aggregate_by(
+            checked_obj_type,
+            checked_value_field,
+            checked_group_by,
+            checked_where,
+            func=checked_func,
+        )
+    checked_required_value_field = cast(str, checked_value_field)
     if checked_group_by is None:
         return client.aggregate(
             checked_obj_type,
-            checked_value_field,
+            checked_required_value_field,
             checked_where,
             func=checked_func,
         )
     return client.aggregate_by(
         checked_obj_type,
-        checked_value_field,
+        checked_required_value_field,
         checked_group_by,
         checked_where,
         func=checked_func,
@@ -536,7 +560,17 @@ def _register_aggregate_tool(
     @server.tool(annotations=read_only)
     async def aggregate_objects(
         obj_type: _ToolString = None,
-        value_field: _ToolString = None,
+        value_field: Annotated[
+            str | None,
+            SkipValidation(),
+            Field(
+                description=(
+                    "Declared payload field to reduce. Optional for "
+                    "func=\"count\": omit it to count every visible row "
+                    "instead of rows carrying a specific field."
+                )
+            ),
+        ] = None,
         group_by: Annotated[
             str | None,
             SkipValidation(),
@@ -567,10 +601,13 @@ def _register_aggregate_tool(
         """Aggregate a visible selection with min-N release discipline.
 
         ``func`` defaults to ``mean`` and accepts ``count``, ``sum``, ``min``,
-        and ``max``. Supplying ``group_by`` returns one released value per
-        group; an empty selection refuses with ``MIN_N_VIOLATION`` in both
-        grouped and ungrouped forms. ``where`` uses the same typed JSON
-        operator grammar as ``query_objects``.
+        and ``max``. ``value_field`` is required for every func except
+        ``count``, where it is optional: omit it to get a min-N-released
+        count of every visible row, or supply a declared field to count
+        only rows carrying it. Supplying ``group_by`` returns one released
+        value per group; an empty selection refuses with
+        ``MIN_N_VIOLATION`` in both grouped and ungrouped forms. ``where``
+        uses the same typed JSON operator grammar as ``query_objects``.
         """
         return _run(
             lambda: _aggregate_objects(
@@ -870,6 +907,11 @@ def _register_tools(
         This delegates to ``OntologyClient.count`` so the Python and MCP
         surfaces share field gates, the T7 operator evaluator, scope, and row
         visibility. A fully scoped-away selection returns zero.
+
+        This is a visible-row count and is not min-N-gated: it reveals only
+        what ``query_objects`` already lists. For a min-N-released count
+        call ``aggregate_objects`` with ``func="count"`` (no ``value_field``
+        needed).
         """
         return _run(
             lambda: resolve_client().count(
