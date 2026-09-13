@@ -456,7 +456,8 @@ ERROR_CODES: dict[str, ErrorCodeInfo] = {
             "such as str/json/datetime/bool). It is checked against the "
             "declared type before rows are iterated or coerced, so values that "
             "merely look numeric cannot bypass the type contract (spec "
-            "`m35-sdk-refactor` §6 AC7)."
+            '`m35-sdk-refactor` §6 AC7). `func="count"` is exempt and accepts '
+            "any declared type."
         ),
     ),
     "PAGE_NOT_ITERABLE": ErrorCodeInfo(

@@ -4053,6 +4053,49 @@ def test_aggregate_non_numeric_declared_type_raises_coded_error(
         gq.aggregate(human, "Book", "id")
 
 
+@pytest.mark.parametrize("label_contributors", [2, 3])
+def test_aggregate_count_str_counts_visible_value_rows_with_contributor_floor(
+    label_contributors: int,
+    make_registry: RegistryFactory,
+    make_policy: PolicyFactory,
+    make_store: StoreFactory,
+) -> None:
+    registry = _contributor_registry(make_registry)
+    registry.get_object_type("Reading").properties.append(
+        PropertyDef(name="label", type="str", required=False)
+    )
+    store = make_store(registry)
+    _seed_two_shelves(store)
+    for i in range(4):
+        store.insert("Reader", {"id": f"reader-{i}"}, SRC)
+        payload = {"id": f"r{i}", "shelf_id": "shelf-1", "score": 4.0}
+        if i < label_contributors:
+            payload["label"] = "non-numeric label"
+        store.insert("Reading", payload, SRC)
+        store.create_link("byReader", f"r{i}", f"reader-{i}")
+    # A second answer from reader-0 counts as a row, not a new contributor.
+    store.insert(
+        "Reading",
+        {"id": "repeat", "shelf_id": "shelf-1", "score": 4.0, "label": "again"},
+        SRC,
+    )
+    store.create_link("byReader", "repeat", "reader-0")
+    store.insert(
+        "Reading",
+        {"id": "outside", "shelf_id": "shelf-2", "score": 4.0, "label": "outside"},
+        SRC,
+    )
+    store.create_link("byReader", "outside", "reader-3")
+    gq = GuardedQuery(store, registry, _contributor_policy(make_policy))
+    consumer = _human("shelf", "shelf-1")
+
+    if label_contributors == 2:
+        with raises_code(VisibilityError, "MIN_N_VIOLATION"):
+            gq.aggregate(consumer, "Reading", "label", func="count")
+    else:
+        assert gq.aggregate(consumer, "Reading", "label", func="count") == 4
+
+
 def test_aggregate_bool_declared_type_raises_coded_error(
     make_policy: PolicyFactory,
     make_store: StoreFactory,

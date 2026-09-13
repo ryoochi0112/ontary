@@ -330,15 +330,17 @@ def test_a_hidden_value_field_still_refuses_on_visibility_not_existence() -> Non
         guarded.aggregate(CONSUMER, "Record", "secret")
 
 
-def test_a_non_numeric_declared_value_field_keeps_its_own_refusal() -> None:
+@pytest.mark.parametrize("func", ["sum", "mean"])
+def test_a_non_numeric_declared_value_field_keeps_its_own_refusal(func: str) -> None:
     """`NON_NUMERIC_AGGREGATE` is a different complaint from "no such field"
     and must not be collapsed into the new one."""
     definition, _Record, store = _build(min_n=1)
     _seed(store, _declared_rows())
     guarded = GuardedQuery(store, definition.registry, definition.policy)
 
-    with raises_code(ValidationFailed, "NON_NUMERIC_AGGREGATE"):
-        guarded.aggregate(CONSUMER, "Record", "label")
+    with raises_code(ValidationFailed, "NON_NUMERIC_AGGREGATE") as exc:
+        guarded.aggregate(CONSUMER, "Record", "label", func=func)
+    assert f"cannot compute a {func} over it" in str(exc.value)
     with raises_code(ValidationFailed, "NON_NUMERIC_AGGREGATE"):
         guarded.aggregate(CONSUMER, "Record", "bucket")
 

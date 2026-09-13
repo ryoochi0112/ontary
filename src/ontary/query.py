@@ -1871,10 +1871,10 @@ class GuardedQuery:
                 f"[{value_field!r}]",
                 code="UNKNOWN_FIELD",
             )
-        if prop_type not in _NUMERIC_PROPERTY_TYPES:
+        if func != "count" and prop_type not in _NUMERIC_PROPERTY_TYPES:
             raise ValidationFailed(
                 f"{obj_type}.{value_field} is declared {prop_type!r}, not "
-                "numeric (int/float) -- aggregate cannot compute a mean "
+                f"numeric (int/float) -- aggregate cannot compute a {func} "
                 "over it",
                 code="NON_NUMERIC_AGGREGATE",
             )
@@ -1934,17 +1934,18 @@ class GuardedQuery:
                     ),
                     code="MIN_N_VIOLATION",
                 )
-            values = [float(r.payload[value_field]) for r in value_rows]
             if func == "count":
-                aggregate_value: AggregateValue = len(values)
-            elif func == "sum":
-                aggregate_value = sum(values)
-            elif func == "min":
-                aggregate_value = min(values, default=0.0)
-            elif func == "max":
-                aggregate_value = max(values, default=0.0)
+                aggregate_value: AggregateValue = len(value_rows)
             else:
-                aggregate_value = sum(values) / len(values) if values else 0.0
+                values = [float(r.payload[value_field]) for r in value_rows]
+                if func == "sum":
+                    aggregate_value = sum(values)
+                elif func == "min":
+                    aggregate_value = min(values, default=0.0)
+                elif func == "max":
+                    aggregate_value = max(values, default=0.0)
+                else:
+                    aggregate_value = sum(values) / len(values) if values else 0.0
             if group_by:
                 self._release_group(
                     out, released_from, obj_type, group_by, key, aggregate_value
