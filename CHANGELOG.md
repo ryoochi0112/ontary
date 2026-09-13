@@ -11,6 +11,16 @@ you**.
 
 ## [Unreleased]
 
+## [0.13.0] — 2026-09-13
+
+```bash
+uv add "ontary @ git+https://github.com/ryoochi0112/ontary@v0.13.0"
+```
+
+Three new docs pages (getting-started, CLI reference, testing; EN and JA) and one
+tightening: a declared `datetime` must carry a time component, so date-only
+strings that 0.12.0 accepted on write are now refused.
+
 ### Documentation
 
 - Three new docs pages, English and Japanese: a getting-started tutorial
