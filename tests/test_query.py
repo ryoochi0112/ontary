@@ -3987,6 +3987,41 @@ def test_aggregate_ai_usable_false_value_field_denied_for_ai(
     assert gq.aggregate(human, "Book", "internal_score") == pytest.approx(4.0)
 
 
+@pytest.mark.parametrize("surface", ["GuardedQuery", "BoundQuery"])
+def test_aggregate_count_with_a_supplied_hidden_value_field_is_denied(
+    surface: str,
+    make_registry: RegistryFactory,
+    make_policy: PolicyFactory,
+    make_store: StoreFactory,
+) -> None:
+    # `func="count"` may omit `value_field`, but a SUPPLIED hidden field must
+    # still be refused: counting how many rows carry `internal_score` would
+    # leak that the field exists and is populated (ontary#27 item 1).
+    registry = _library_registry(make_registry)
+    store = make_store(registry)
+    _seed_two_shelves(store)
+    for i in range(3):
+        store.insert(
+            "Book",
+            {"id": f"book-{i}", "shelf_id": "shelf-1", "internal_score": 4.0},
+            SRC,
+        )
+    gq = GuardedQuery(store, registry, _library_policy(make_policy))
+    ai = _ai("shelf", "shelf-1")
+    aggregate = (
+        (lambda *a, **k: gq.aggregate(ai, *a, **k))
+        if surface == "GuardedQuery"
+        else BoundQuery(gq, ai).aggregate
+    )
+
+    with raises_code(VisibilityError, "VISIBILITY_DENIED"):
+        aggregate("Book", "internal_score", func="count")
+
+    # The same field for a human (internal_score is human_visible) counts.
+    human = _human("shelf", "shelf-1")
+    assert gq.aggregate(human, "Book", "internal_score", func="count") == 3
+
+
 def test_aggregate_human_visible_false_value_field_denied_for_human(
     make_registry: RegistryFactory,
     make_policy: PolicyFactory,
@@ -4151,7 +4186,26 @@ def test_aggregate_count_without_value_field_empty_selection(
     assert "score" not in message
 
 
-@pytest.mark.parametrize("func", ["mean", "sum"])
+def test_ungrouped_min_n_message_with_a_supplied_field_names_no_group(
+    make_registry: RegistryFactory,
+    make_policy: PolicyFactory,
+    make_store: StoreFactory,
+) -> None:
+    # An ungrouped aggregate has no group, so its refusal must not read
+    # `Reading.score group None` (ontary#27 item 2). The `value_field=None`
+    # spelling already gets this right; the supplied-field spelling did not.
+    query, consumer, _ = _distinct_contributor_aggregate_query(
+        make_registry, make_policy, make_store
+    )
+    with raises_code(VisibilityError, "MIN_N_VIOLATION") as exc_info:
+        query.aggregate(consumer, "Reading", "score", where={"id": "r0"})
+    message = str(exc_info.value)
+    assert message.startswith("Reading.score: ")
+    assert "group" not in message
+    assert "None" not in message
+
+
+@pytest.mark.parametrize("func", ["mean", "sum", "min", "max"])
 @pytest.mark.parametrize("explicit_none", [False, True])
 def test_aggregate_without_value_field_refuses_before_row_read(
     func: str,

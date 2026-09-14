@@ -41,7 +41,7 @@ from ontary import (
 )
 from ontary.authoring import Ontology, OntologyObject, prop
 from ontary.client import OntologyClient, OntologyRuntime
-from ontary.errors import VisibilityError
+from ontary.errors import ValidationFailed, VisibilityError
 
 
 class _InlineCapabilityProvider(Protocol):
@@ -313,6 +313,23 @@ def test_aggregate_count_without_value_field_infers_int() -> None:
     )
     assert_type(string_groups, dict[str, int])
     assert string_groups == {"urgent": 2}
+
+
+def test_aggregate_without_value_field_is_rejected_for_float_funcs() -> None:
+    # The float overloads keep `value_field: str` required, so omitting it
+    # outside `func="count"` is a type error, not a runtime-only
+    # `INVALID_PARAMS`. `warn_unused_ignores` (part of `--strict`) turns each
+    # ignore below into a failure the moment an overload starts accepting
+    # the call, which is what pins the negative case (ontary#27 item 3).
+    client, _store, _ids = _client_with_extra_queue_a_tickets()
+    with raises_code(ValidationFailed, "INVALID_PARAMS"):
+        client.aggregate(Ticket, func="mean")  # type: ignore[call-overload]
+    with raises_code(ValidationFailed, "INVALID_PARAMS"):
+        client.aggregate("Ticket", func="mean")  # type: ignore[call-overload]
+    with raises_code(ValidationFailed, "INVALID_PARAMS"):
+        client.aggregate_by(Ticket, None, "status", func="sum")  # type: ignore[call-overload]
+    with raises_code(ValidationFailed, "INVALID_PARAMS"):
+        client.aggregate_by("Ticket", None, "status", func="sum")  # type: ignore[call-overload]
 
 
 def test_typed_execute_accepts_positional_and_keyword_forms() -> None:
