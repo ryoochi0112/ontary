@@ -1447,7 +1447,13 @@ class GuardedQuery:
         _author_dispatch: _AuthorDispatch | None = None,
         _disclosures: list[tuple[str, str]] | None = None,
     ) -> AggregateValue:
-        """Reduce `value_field` over every visible row after min-N release."""
+        """Reduce `value_field` over every visible row after min-N release.
+
+        Under `func="count"` `value_field` may be `None`: then every
+        visible row is counted and min-N is measured over those rows'
+        contributors. Any other func with no `value_field` refuses with
+        `INVALID_PARAMS` before a row is read.
+        """
         result = self._aggregate(
             consumer,
             obj_type,
@@ -1478,7 +1484,8 @@ class GuardedQuery:
         _author_dispatch: _AuthorDispatch | None = None,
         _disclosures: list[tuple[str, str]] | None = None,
     ) -> dict[str, AggregateValue]:
-        """Reduce `value_field` once per distinct `group_by` value.
+        """Reduce `value_field` once per distinct `group_by` value (or, under
+        `func="count"` with `value_field=None`, count each group's rows).
 
         `group_by` must be non-empty: `_aggregate` branches on `group_by`'s
         TRUTHINESS (it is the one shared body backing both `aggregate` and
@@ -1940,9 +1947,11 @@ class GuardedQuery:
             passed = contributor_count >= min_n
             if not passed:
                 shown_key = "<redacted>" if group_key_hidden else repr(key)
+                # Ungrouped: every row shares the one `None` key, so naming
+                # it would read `X.field group None`. Only a real `group_by`
+                # has a group to name.
                 group_subject = (
-                    subject if value_field is None and not group_by
-                    else f"{subject} group {shown_key}"
+                    f"{subject} group {shown_key}" if group_by else subject
                 )
                 raise VisibilityError(
                     _min_n_violation_message(group_subject, min_n),

@@ -515,35 +515,21 @@ def _aggregate_objects(
     # `None` value_field is invalid and must reach the engine's
     # `INVALID_PARAMS` refusal rather than be rejected here. The typed
     # `OntologyClient.aggregate(_by)` overloads narrow `value_field` to
-    # `str` outside `func="count"`, so the `cast` below only tells mypy
-    # what the runtime already lets flow through -- the engine, not this
-    # cast, is what refuses a genuinely missing `value_field`.
-    if checked_func == "count":
-        if checked_group_by is None:
-            return client.aggregate(
-                checked_obj_type,
-                checked_value_field,
-                checked_where,
-                func=checked_func,
-            )
-        return client.aggregate_by(
-            checked_obj_type,
-            checked_value_field,
-            checked_group_by,
-            checked_where,
-            func=checked_func,
-        )
-    checked_required_value_field = cast(str, checked_value_field)
+    # `str` outside `func="count"`, a func-dependent rule that cannot be
+    # expressed on a runtime `AggregateFunc`; typing the field as `Any`
+    # hands the decision to the engine, which is the only place that
+    # refuses a genuinely missing `value_field`.
+    engine_value_field: Any = checked_value_field
     if checked_group_by is None:
         return client.aggregate(
             checked_obj_type,
-            checked_required_value_field,
+            engine_value_field,
             checked_where,
             func=checked_func,
         )
     return client.aggregate_by(
         checked_obj_type,
-        checked_required_value_field,
+        engine_value_field,
         checked_group_by,
         checked_where,
         func=checked_func,

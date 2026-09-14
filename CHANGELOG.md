@@ -11,6 +11,13 @@ you**.
 
 ## [Unreleased]
 
+### Fixed
+
+- An ungrouped `aggregate` that misses min-N with a supplied `value_field` no
+  longer reports `<type>.<field> group None`; only a real `group_by` names a
+  group in the `MIN_N_VIOLATION` message. Review backlog from
+  [ontary#27](https://github.com/ryoochi0112/ontary/issues/27).
+
 ## [0.14.0] — 2026-09-14
 
 ```bash

@@ -539,7 +539,7 @@ def test_unregistered_object_type_agrees_with_the_where_form() -> None:
 # refusal under test -- the gate itself must be what fires.
 
 
-@pytest.mark.parametrize("surface", ["GuardedQuery", "OntologyClient"])
+@pytest.mark.parametrize("surface", ["GuardedQuery", "OntologyClient", "BoundQuery"])
 def test_count_with_no_value_field_still_gates_a_hidden_where_predicate(
     surface: str,
 ) -> None:
@@ -574,7 +574,7 @@ def test_count_with_no_value_field_still_gates_a_hidden_where_predicate_over_mcp
     assert payload["error"]["code"] == "VISIBILITY_DENIED"
 
 
-@pytest.mark.parametrize("surface", ["GuardedQuery", "OntologyClient"])
+@pytest.mark.parametrize("surface", ["GuardedQuery", "OntologyClient", "BoundQuery"])
 def test_grouped_count_with_no_value_field_still_gates_a_hidden_where_predicate(
     surface: str,
 ) -> None:
@@ -628,7 +628,7 @@ def test_grouped_count_with_no_value_field_still_gates_a_hidden_where_predicate_
     assert payload["error"]["code"] == "VISIBILITY_DENIED"
 
 
-@pytest.mark.parametrize("surface", ["GuardedQuery", "OntologyClient"])
+@pytest.mark.parametrize("surface", ["GuardedQuery", "OntologyClient", "BoundQuery"])
 def test_grouped_count_with_no_value_field_still_gates_a_hidden_group_by(
     surface: str,
 ) -> None:
