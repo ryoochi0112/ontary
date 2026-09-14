@@ -11,6 +11,16 @@ you**.
 
 ## [Unreleased]
 
+## [0.14.0] — 2026-09-14
+
+```bash
+uv add "ontary @ git+https://github.com/ryoochi0112/ontary@v0.14.0"
+```
+
+One ergonomics change: `aggregate(func="count")` no longer needs a `value_field`
+and accepts any declared field type, so it is the released, min-N-gated count.
+`count_objects` is unchanged but now documented as not min-N-gated.
+
 ### Changed
 
 - `aggregate` / `aggregate_by` / MCP `aggregate_objects`: `func="count"` now
