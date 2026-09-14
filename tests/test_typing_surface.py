@@ -295,6 +295,26 @@ def test_typed_aggregate_by_matches_string_form() -> None:
     assert typed_result == {"urgent": 25.0}  # pins the where= narrowing the group set
 
 
+def test_aggregate_count_without_value_field_infers_int() -> None:
+    client, _store, _ids = _client_with_extra_queue_a_tickets()
+    typed_result = client.aggregate(Ticket, where={"status": "urgent"}, func="count")
+    assert_type(typed_result, int)
+    assert typed_result == 2
+    string_result = client.aggregate("Ticket", where={"status": "urgent"}, func="count")
+    assert_type(string_result, int)
+    assert string_result == 2
+    typed_groups = client.aggregate_by(
+        Ticket, None, "status", where={"status": "urgent"}, func="count"
+    )
+    assert_type(typed_groups, dict[str, int])
+    assert typed_groups == {"urgent": 2}
+    string_groups = client.aggregate_by(
+        "Ticket", None, "status", where={"status": "urgent"}, func="count"
+    )
+    assert_type(string_groups, dict[str, int])
+    assert string_groups == {"urgent": 2}
+
+
 def test_typed_execute_accepts_positional_and_keyword_forms() -> None:
     # README's "typed client.execute(EscalateTicket(ticket_id=...))" claim
     # (spec typed-actions.md AC5) -- the params INSTANCE is accepted

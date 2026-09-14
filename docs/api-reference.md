@@ -323,7 +323,7 @@ and builds a single-use runtime internally.
 | `.get(obj_type, obj_id)` | `T \| StoredObject \| None` |
 | `.list(obj_type, where=None, *, limit=DEFAULT_READ_LIMIT, after=None, order_by=None)` | `list[T] \| list[StoredObject] \| TypedPage[T] \| Page` |
 | `.traverse(obj_type, link, from_id, *, reverse=False)` or `.traverse(link_cls, from_obj_or_id, *, reverse=False)` | `list[T] \| list[StoredObject]` |
-| `.aggregate(obj_type, value_field, where=None, *, func="mean")` | `float \| int` |
+| `.aggregate(obj_type, value_field=None, where=None, *, func="mean")` | `float \| int` |
 | `.aggregate_by(obj_type, value_field, group_by, where=None, *, func="mean")` | `dict[str, float \| int]` |
 | `.count(obj_type, where=None)` | `int` |
 | `.exists(obj_type, where=None)` | `bool` |
@@ -525,10 +525,17 @@ Ungrouped aggregation returns a plain numeric value: `count` is an `int` and
 the other functions return `float`. Grouped aggregation returns the corresponding
 value per group in a `dict`.
 
+`func="count"` accepts any declared field type — it counts the rows carrying
+that field and never coerces the values to `float`. Its `value_field` may also
+be omitted (or passed as `None`) to count every visible row in the selection,
+min-N gated over those rows' contributors (per group, when grouped); omitting
+`value_field` for any other func raises `INVALID_PARAMS`, naming the func and
+saying `value_field` is required.
+
 Both enforce hidden-field checks on `where`/`group_by`, min-N over **distinct
 contributors**, `UNKNOWN_FIELD` for a `value_field` the type does not declare, and
-`NON_NUMERIC_AGGREGATE` for a declared but non-numeric one (both checked before
-any row is read). A hidden `value_field` may be aggregated only from an
+`NON_NUMERIC_AGGREGATE` for a declared but non-numeric one under `mean`/`sum`/`min`/`max`
+(`count` is exempt; both checks run before any row is read). A hidden `value_field` may be aggregated only from an
 author-declared Function, over a type declaring `contributor_rules`, and only with
 `func="mean"` or `func="count"`. From a consumer surface — client, typed, or MCP —
 that operation raises `VisibilityError` with `VISIBILITY_DENIED`; `sum`, `min`, and
@@ -1027,9 +1034,13 @@ Lineage fields are not filterable, and an unknown key raises `UNKNOWN_FIELD`.
 `order_by` accepts a declared payload field, ascending by default, or a
 `(field, "asc"|"desc")` pair, and composes with the page cursor.
 `count_objects` returns the number of rows visible to the consumer and is not
-min-N-gated. `aggregate_objects` accepts `func="mean"|"count"|"sum"|"min"|"max"`
+min-N-gated. It reveals only what `query_objects` already lists; for a min-N-released
+count use `aggregate_objects(func="count")`, which needs no `value_field`.
+`aggregate_objects` accepts `func="mean"|"count"|"sum"|"min"|"max"`
 with `"mean"` as the default; every function keeps the same min-N release
-discipline, including refusal of grouped-empty `{}` selections.
+discipline, including refusal of grouped-empty `{}` selections. `value_field` is
+optional for `func="count"` — omitting it counts every visible row; every other
+func requires it and raises `INVALID_PARAMS` if it is missing.
 `traverse_links` remains an unpaged list because the underlying
 `OntologyClient.traverse`/`GuardedQuery.traverse` API has no `limit`/`after`
 cursor surface to delegate to. Pass `reverse=true` to traverse from the link's
@@ -1215,7 +1226,7 @@ table below is generated from it.
 | `INVALID_PARAMS` | A call's parameters failed declared-shape validation: an action's params, or a read parameter whose SHAPE is wrong -- an `order_by` that is neither a field name nor a (field, direction) pair, or a `where=` that is not a mapping of field name to condition. A parameter naming something that does not exist is `UNKNOWN_FIELD` instead; this code is about the shape, not the name. |
 | `INVALID_RECORD` | A bulk_upsert record failed declared-shape validation (missing primary key, missing required property, unknown property, or a value that does not match its declared type). The validation kind carries the SAME `INVALID_RECORD` code that `bulk_upsert` already reports: from a caller's point of view, a record not matching the declaration is one failure regardless of which write path noticed. This closes the M9 hole where only ingest checked: `Store.insert`/`update` and therefore `ActionContext.insert`/`update` could commit a row missing a required property or carrying a wrong-typed value, report success, and leave the typed reader unable to hydrate it. The same code wraps a Pydantic `ValidationError` while hydrating a stored `OntologyObject` payload (for example, a non-ISO datetime string), never surfacing a bare traceback; a stored row failing declared-shape validation on read-back is the same failure class ingest carries on write. |
 | `LINK_NOT_FOUND` | A link closure found no matching live link. |
-| `NON_NUMERIC_AGGREGATE` | `GuardedQuery.aggregate`'s `value_field` is declared a non-numeric `PropertyType` (anything other than `int`/`float`, such as str/json/datetime/bool). It is checked against the declared type before rows are iterated or coerced, so values that merely look numeric cannot bypass the type contract (spec `m35-sdk-refactor` §6 AC7). |
+| `NON_NUMERIC_AGGREGATE` | `GuardedQuery.aggregate`'s `value_field` is declared a non-numeric `PropertyType` (anything other than `int`/`float`, such as str/json/datetime/bool). It is checked against the declared type before rows are iterated or coerced, so values that merely look numeric cannot bypass the type contract (spec `m35-sdk-refactor` §6 AC7). `func="count"` is exempt and accepts any declared type. |
 | `OBJECT_NOT_FOUND` | An update targeted a non-existent object. |
 | `OBJECT_RETIRE_NOT_FOUND` | A retirement targeted an object with no stored row. |
 | `ONTOLOGY_INVALID` | `OntologyRegistry.validate()` rejected a declaration because its cross-references were invalid. |

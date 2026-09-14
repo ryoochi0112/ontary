@@ -466,7 +466,7 @@ class _TypedReadMixin:
     def aggregate(
         self,
         obj_type: type[T],
-        value_field: str,
+        value_field: str | None = None,
         where: dict[str, Any] | None = None,
         *,
         func: Literal["count"],
@@ -484,7 +484,7 @@ class _TypedReadMixin:
     def aggregate(
         self,
         obj_type: str,
-        value_field: str,
+        value_field: str | None = None,
         where: dict[str, Any] | None = None,
         *,
         func: Literal["count"],
@@ -492,7 +492,7 @@ class _TypedReadMixin:
     def aggregate(
         self,
         obj_type: type[T] | str,
-        value_field: str,
+        value_field: str | None = None,
         where: dict[str, Any] | None = None,
         *,
         func: AggregateFunc = "mean",
@@ -512,7 +512,8 @@ class _TypedReadMixin:
                 _disclosures=self._disclosures,
             )
         api_name = self._api_name_for(obj_type)
-        self._validate_field_name(obj_type, value_field, "value_field")
+        if value_field is not None:
+            self._validate_field_name(obj_type, value_field, "value_field")
         self._validate_where_keys(obj_type, where)
         return self._query.aggregate(
             self._consumer,
@@ -538,7 +539,7 @@ class _TypedReadMixin:
     def aggregate_by(
         self,
         obj_type: type[T],
-        value_field: str,
+        value_field: str | None,
         group_by: str,
         where: dict[str, Any] | None = None,
         *,
@@ -558,7 +559,7 @@ class _TypedReadMixin:
     def aggregate_by(
         self,
         obj_type: str,
-        value_field: str,
+        value_field: str | None,
         group_by: str,
         where: dict[str, Any] | None = None,
         *,
@@ -567,7 +568,7 @@ class _TypedReadMixin:
     def aggregate_by(
         self,
         obj_type: type[T] | str,
-        value_field: str,
+        value_field: str | None,
         group_by: str,
         where: dict[str, Any] | None = None,
         *,
@@ -590,7 +591,8 @@ class _TypedReadMixin:
             )
         else:
             api_name = self._api_name_for(obj_type)
-            self._validate_field_name(obj_type, value_field, "value_field")
+            if value_field is not None:
+                self._validate_field_name(obj_type, value_field, "value_field")
             self._validate_where_keys(obj_type, where)
             self._validate_field_name(obj_type, group_by, "group_by")
             result = self._query.aggregate_by(
