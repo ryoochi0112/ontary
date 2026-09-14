@@ -128,6 +128,20 @@ def _mcp_aggregate(
     return json.loads(result.content[0].text)
 
 
+def _ungrouped_surfaces(
+    definition: OntologyDef, store: ObjectStore
+) -> dict[str, Any]:
+    """The ungrouped counterpart to `_surfaces`, for `aggregate` (not
+    `aggregate_by`)."""
+    guarded = GuardedQuery(store, definition.registry, definition.policy)
+    client = OntologyClient(definition, store, CONSUMER)
+    return {
+        "GuardedQuery": lambda *a, **k: guarded.aggregate(CONSUMER, *a, **k),
+        "OntologyClient": client.aggregate,
+        "BoundQuery": BoundQuery(guarded, CONSUMER).aggregate,
+    }
+
+
 # -- B1: an unknown `group_by` is refused, not silently collapsed ------------
 
 
@@ -512,3 +526,138 @@ def test_unregistered_object_type_agrees_with_the_where_form() -> None:
     ):
         with raises_code(ValidationFailed, "UNKNOWN_OBJECT_TYPE"):
             call()
+
+
+# -- T5: `func="count"` with `value_field=None` does not skip the hidden-
+# field gates. `_where_gate` and the `group_by` hidden-field check inside
+# `GuardedQuery._aggregate` both run unconditionally today, before either
+# reads `value_field`; a plausible-looking "count has no value_field to hide
+# behind" fix would make them conditional on `value_field is not None`
+# instead, which would let a `where=` predicate or a `group_by` naming a
+# hidden field slip through the moment no field is being reduced. Every case
+# below seeds `min_n=1` so `MIN_N_VIOLATION` cannot be mistaken for the
+# refusal under test -- the gate itself must be what fires.
+
+
+@pytest.mark.parametrize("surface", ["GuardedQuery", "OntologyClient"])
+def test_count_with_no_value_field_still_gates_a_hidden_where_predicate(
+    surface: str,
+) -> None:
+    definition, _Record, store = _build(min_n=1)
+    _seed(
+        store,
+        [{"id": f"r{i}", "score": float(i), "secret": 9.0} for i in range(3)],
+    )
+    aggregate = _ungrouped_surfaces(definition, store)[surface]
+
+    with raises_code(VisibilityError, "VISIBILITY_DENIED"):
+        aggregate("Record", None, where={"secret": 9.0}, func="count")
+
+
+def test_count_with_no_value_field_still_gates_a_hidden_where_predicate_over_mcp() -> (
+    None
+):
+    definition, _Record, store = _build(min_n=1)
+    _seed(
+        store,
+        [{"id": f"r{i}", "score": float(i), "secret": 9.0} for i in range(3)],
+    )
+
+    payload = _mcp_aggregate(
+        definition,
+        store,
+        obj_type="Record",
+        func="count",
+        where={"secret": 9.0},
+    )
+
+    assert payload["error"]["code"] == "VISIBILITY_DENIED"
+
+
+@pytest.mark.parametrize("surface", ["GuardedQuery", "OntologyClient"])
+def test_grouped_count_with_no_value_field_still_gates_a_hidden_where_predicate(
+    surface: str,
+) -> None:
+    definition, _Record, store = _build(min_n=1)
+    _seed(
+        store,
+        [
+            {
+                "id": f"r{i}",
+                "score": float(i),
+                "group_id": "g1",
+                "secret": 9.0,
+            }
+            for i in range(3)
+        ],
+    )
+    aggregate_by = _surfaces(definition, store)[surface]
+
+    with raises_code(VisibilityError, "VISIBILITY_DENIED"):
+        aggregate_by(
+            "Record", None, "group_id", where={"secret": 9.0}, func="count"
+        )
+
+
+def test_grouped_count_with_no_value_field_still_gates_a_hidden_where_predicate_over_mcp() -> (
+    None
+):
+    definition, _Record, store = _build(min_n=1)
+    _seed(
+        store,
+        [
+            {
+                "id": f"r{i}",
+                "score": float(i),
+                "group_id": "g1",
+                "secret": 9.0,
+            }
+            for i in range(3)
+        ],
+    )
+
+    payload = _mcp_aggregate(
+        definition,
+        store,
+        obj_type="Record",
+        group_by="group_id",
+        func="count",
+        where={"secret": 9.0},
+    )
+
+    assert payload["error"]["code"] == "VISIBILITY_DENIED"
+
+
+@pytest.mark.parametrize("surface", ["GuardedQuery", "OntologyClient"])
+def test_grouped_count_with_no_value_field_still_gates_a_hidden_group_by(
+    surface: str,
+) -> None:
+    definition, _Record, store = _build(min_n=1)
+    _seed(
+        store,
+        [{"id": f"r{i}", "score": float(i), "secret": 9.0} for i in range(3)],
+    )
+    aggregate_by = _surfaces(definition, store)[surface]
+
+    with raises_code(VisibilityError, "VISIBILITY_DENIED"):
+        aggregate_by("Record", None, "secret", func="count")
+
+
+def test_grouped_count_with_no_value_field_still_gates_a_hidden_group_by_over_mcp() -> (
+    None
+):
+    definition, _Record, store = _build(min_n=1)
+    _seed(
+        store,
+        [{"id": f"r{i}", "score": float(i), "secret": 9.0} for i in range(3)],
+    )
+
+    payload = _mcp_aggregate(
+        definition,
+        store,
+        obj_type="Record",
+        group_by="secret",
+        func="count",
+    )
+
+    assert payload["error"]["code"] == "VISIBILITY_DENIED"
