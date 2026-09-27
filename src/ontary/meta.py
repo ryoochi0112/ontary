@@ -17,7 +17,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, model_validator
 
 from ontary.errors import ValidationFailed
-from ontary.typesys import PropertyType, normalize_choice_values, validate_scalar
+from ontary.typesys import PropertyType, choice_value, struct_value, validate_scalar
 
 __all__ = [
     "PropertyType",
@@ -178,20 +178,23 @@ class ObjectTypeDef(BaseModel):
         carries no per-property defaults of its own).
         """
         if isinstance(self.owned, dict):
-            return normalize_choice_payload(self, self.owned)
+            return normalize_declared_payload(self, self.owned)
         return {}
 
 
-def normalize_choice_payload(
+def normalize_declared_payload(
     obj_def: "ObjectTypeDef", payload: Mapping[str, Any]
 ) -> dict[str, Any]:
-    """Copy ``payload`` with each `choices`-declared property's ``Enum``
-    member replaced by its value (#42; see `typesys.choice_value`). Every
-    write entry runs this FIRST, before the primary key is read and before
-    `declared_shape_violation`."""
-    return normalize_choice_values(
-        payload, {prop.name: prop.choices for prop in obj_def.properties}
-    )
+    """Normalize declared choices and structs before write validation."""
+    declarations = {prop.name: prop for prop in obj_def.properties}
+    normalized: dict[str, Any] = {}
+    for name, value in payload.items():
+        declared = declarations.get(name)
+        if declared is not None and declared.type == "struct" and declared.fields is not None:
+            normalized[name] = struct_value(value, declared.fields)
+        else:
+            normalized[name] = choice_value(value, declared.choices if declared is not None else None)
+    return normalized
 
 
 def declared_shape_violation(
@@ -246,8 +249,11 @@ def declared_shape_violation(
             continue
         if value is None:
             continue
-        mismatch = validate_scalar(value, declared.type, declared.choices)
+        mismatch = validate_scalar(value, declared.type, declared.choices, fields=declared.fields)
         if mismatch is not None:
+            if declared.type == "struct" and ": " in mismatch:
+                inner, mismatch = mismatch.split(": ", 1)
+                key = f"{key}.{inner}"
             return f"property {key!r} {mismatch}"
     return None
 
@@ -582,8 +588,11 @@ class OntologyRegistry:
                             "property is required"
                         )
                     continue
-                mismatch = validate_scalar(default, prop.type, prop.choices)
+                mismatch = validate_scalar(default, prop.type, prop.choices, fields=prop.fields)
                 if mismatch is not None:
+                    if prop.type == "struct" and ": " in mismatch:
+                        inner, mismatch = mismatch.split(": ", 1)
+                        prop_name = f"{prop_name}.{inner}"
                     errors.append(
                         f"ObjectTypeDef {obj.api_name!r}: owned property "
                         f"{prop_name!r} default {mismatch}"
