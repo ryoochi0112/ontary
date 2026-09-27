@@ -723,6 +723,7 @@ class PostgresStore:
                     fields.kind,
                     self._tenant,
                     fields.principal,
+                    fields.unscoped_params,
                 ),
                 dialect="postgres",
             )

@@ -373,6 +373,7 @@ class ActionExecutor:
         params_dict: dict[str, Any],
         params_cls: type[BaseModel] | None,
         invocation_id: str,
+        unscoped_params: list[str],
     ) -> BaseModel | None:
         """Typed-invocation path (spec §6/AC5): a params class turns the
         already-validated dict into a model instance BEFORE the
@@ -393,6 +394,7 @@ class ActionExecutor:
                 params_dict,
                 f"{action_name!r}: params failed validation: {exc}",
                 invocation_id,
+                unscoped_params=unscoped_params,
             )
 
     def _preflight_capabilities(
@@ -403,6 +405,7 @@ class ActionExecutor:
         params_dict: dict[str, Any],
         invocation_id: str,
         capability_providers: Mapping[CapabilityHandle[Any], object] | None,
+        unscoped_params: list[str],
     ) -> dict[CapabilityHandle[Any], object]:
         """Every declared capability must have a provider bound BEFORE the
         transaction opens; a gap is audited (outcome "error") and raised."""
@@ -421,6 +424,7 @@ class ActionExecutor:
                         params_dict,
                         invocation_id=invocation_id,
                         outcome="error",
+                        unscoped_params=unscoped_params,
                     )
                 )
                 raise PreconditionFailed(
@@ -492,10 +496,19 @@ class ActionExecutor:
         self._validate_params_json_safe(
             consumer, action_name, action_def, params_dict, invocation_id
         )
-        self._enforce_scope(consumer, action_name, action_def, params_dict, invocation_id)
+        unscoped_params = self._enforce_scope(
+            consumer, action_name, action_def, params_dict, invocation_id
+        )
 
         params_obj = self._coerce_typed_params(
-            consumer, action_name, action_def, params, params_dict, params_cls, invocation_id
+            consumer,
+            action_name,
+            action_def,
+            params,
+            params_dict,
+            params_cls,
+            invocation_id,
+            unscoped_params,
         )
 
         providers = self._preflight_capabilities(
@@ -505,6 +518,7 @@ class ActionExecutor:
             params_dict,
             invocation_id,
             capability_providers,
+            unscoped_params,
         )
 
         capability_accesses: list[CapabilityAccessRecord] = []
@@ -522,6 +536,7 @@ class ActionExecutor:
                 providers,
                 capability_accesses,
                 invocation_id,
+                unscoped_params,
             )
         except Exception as exc:
             # Audit write happens after any transaction rollback so it
@@ -545,6 +560,7 @@ class ActionExecutor:
                     invocation_id=invocation_id,
                     outcome=outcome,
                     capability_accesses=capability_accesses,
+                    unscoped_params=unscoped_params,
                 )
             )
             raise
@@ -564,6 +580,7 @@ class ActionExecutor:
         providers: Mapping[CapabilityHandle[Any], object],
         capability_accesses: list[CapabilityAccessRecord],
         invocation_id: str,
+        unscoped_params: list[str],
     ) -> dict[str, Any]:
         """The engine-owned transaction: handler call under write capture
         and the "ok" audit entry -- all inside ONE store transaction (spec
@@ -612,6 +629,7 @@ class ActionExecutor:
                 ts=emitted_at,
                 writes=list(writes),
                 capability_accesses=capability_accesses,
+                unscoped_params=unscoped_params,
             )
             self._store.append_audit(pending_entry)
         return result
@@ -626,6 +644,7 @@ class ActionExecutor:
         invocation_id: str | None,
         *,
         code: str,
+        unscoped_params: list[str] | None = None,
     ) -> NoReturn:
         """Audit a denied attempt (outcome "denied") and raise. Shared by
         the role check ("PERMISSION_DENIED") and the scope check
@@ -639,6 +658,7 @@ class ActionExecutor:
                 params,
                 invocation_id=invocation_id,
                 outcome="denied",
+                unscoped_params=list(unscoped_params or []),
             )
         )
         raise PermissionDenied(message, code=code)
@@ -651,6 +671,8 @@ class ActionExecutor:
         params: dict[str, Any],
         message: str,
         invocation_id: str | None,
+        *,
+        unscoped_params: list[str] | None = None,
     ) -> NoReturn:
         """Audit a rejected attempt before any handler ran (outcome
         "error") -- used for basic parameter validation failures, which are
@@ -663,6 +685,7 @@ class ActionExecutor:
                 params,
                 invocation_id=invocation_id,
                 outcome="error",
+                unscoped_params=list(unscoped_params or []),
             )
         )
         raise ActionError(message, code="INVALID_PARAMS")
@@ -824,10 +847,12 @@ class ActionExecutor:
         action_def: ActionTypeDef,
         params: dict[str, Any],
         invocation_id: str | None,
-    ) -> None:
+    ) -> list[str]:
         """Deny-by-default scope enforcement, driven by each declared
         `ActionParameterDef.scope_semantics` / `.refers_to` rather than any
         hardcoded parameter or object-type name (see module docstring).
+        Returns the names of the `target` parameters that skipped the gate
+        because they refer to an unscoped type, for the audit trail.
 
         - `scope_semantics="target"`: only enforced if the named object
           actually EXISTS -- has ever been stored, retired rows included (a
@@ -835,9 +860,26 @@ class ActionExecutor:
           precondition check, audited "error", never a scope denial).
         - `scope_semantics="scope"`: always enforced when the param is
           present -- it names a scope object directly, existence aside.
+        - A `target` that refers to a `scope="unscoped"` type (#35) has no
+          owning scope to cover, so the action's `roles=` is its only gate.
+          It is skipped here and named in the returned list. The gate's own
+          denials and every audit entry written after the gate carry it. A `scope`
+          parameter may not refer to an unscoped type; `ScopePolicy.validate`
+          refuses that declaration, and here it would resolve no scope and
+          deny.
         """
+        # Decided up front from the declaration, not in loop order, so an
+        # entry denied on an EARLIER scoped parameter still names every
+        # parameter that is exempt from the gate.
+        unscoped_params = [
+            param.name
+            for param in self._param_rules(action_def)
+            if param.name in params
+            and param.scope_semantics == "target"
+            and param.refers_to in self._policy.unscoped_types
+        ]
         for param in self._param_rules(action_def):
-            if param.name not in params:
+            if param.name not in params or param.name in unscoped_params:
                 continue
             obj_id = params[param.name]
             if not isinstance(obj_id, str):
@@ -856,6 +898,7 @@ class ActionExecutor:
                     f"to enforce scope, got {type(obj_id).__name__}",
                     invocation_id,
                     code="SCOPE_DENIED",
+                    unscoped_params=unscoped_params,
                 )
             if param.refers_to is None:
                 raise InternalError(
@@ -897,7 +940,9 @@ class ActionExecutor:
                     f"{obj_id!r}",
                     invocation_id,
                     code="SCOPE_DENIED",
+                    unscoped_params=unscoped_params,
                 )
+        return unscoped_params
 
     @staticmethod
     def _param_rules(action_def: ActionTypeDef) -> list[ActionParameterDef]:

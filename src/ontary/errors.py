@@ -320,8 +320,9 @@ ERROR_CODES: dict[str, ErrorCodeInfo] = {
         description=(
             "A ScopePolicy declaration is unusable: a rule references an "
             "undeclared object type, link type, or scope level; a type "
-            "declares an empty contributor rule list; or a type is listed "
-            "in unscoped_types while also declaring scope rules."
+            "declares an empty contributor rule list; a type is listed "
+            "in unscoped_types while also declaring scope rules; or an "
+            "action's scope parameter refers to an unscoped type."
         ),
     ),
     "FUNCTION_ERROR": ErrorCodeInfo(

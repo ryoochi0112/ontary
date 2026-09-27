@@ -107,6 +107,11 @@ class AuditEntry(BaseModel):
     # denied/error/rolled-back attempts, since nothing was committed.
     writes: list[WriteRecord] = Field(default_factory=list)
     capability_accesses: list[CapabilityAccessRecord] = Field(default_factory=list)
+    # Scope-bearing `target` parameters that passed the scope gate WITHOUT a
+    # scope check because they refer to a `scope="unscoped"` type (#35): the
+    # action's `roles=` was their only gate. Empty when every scope-bearing
+    # parameter was scope-checked, and on entries written before the gate ran.
+    unscoped_params: list[str] = Field(default_factory=list)
 
 
 def _placeholder(value: Any) -> dict[str, str]:

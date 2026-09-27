@@ -616,6 +616,7 @@ class ObjectStore(SqliteSchemaGate):
                     fields.kind,
                     self._tenant,
                     fields.principal,
+                    fields.unscoped_params,
                 ),
                 dialect="sqlite",
             )

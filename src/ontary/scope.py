@@ -211,6 +211,38 @@ def incoherent_scope_declarations(
     ]
 
 
+def unscoped_scope_parameter_declarations(
+    policy: "ScopePolicy", registry: OntologyRegistry
+) -> list[tuple[str, int, str]]:
+    """`(action, parameter index, message)` for every `scope` parameter
+    that refers to an unscoped type.
+
+    THE one definition of this rule (#35), shared by `ScopePolicy.validate`
+    and `ontary.diagnose`. A `target` parameter on an unscoped type skips the
+    action scope gate and leaves `roles=` as its only gate. A `scope`
+    parameter names the scope the consumer must cover, and an unscoped type
+    has none, so the gate could only ever deny. Refusing the declaration
+    surfaces that at build time instead of as a runtime `SCOPE_DENIED`.
+    """
+    found: list[tuple[str, int, str]] = []
+    for api_name, action in sorted(registry.action_types.items()):
+        for index, param in enumerate(action.parameters):
+            if param.scope_semantics == "scope" and param.refers_to in policy.unscoped_types:
+                found.append(
+                    (
+                        api_name,
+                        index,
+                        f"ActionTypeDef {api_name!r} parameter {param.name!r}: "
+                        f"scope_semantics 'scope' refers to {param.refers_to!r}, "
+                        "which is in ScopePolicy.unscoped_types -- an unscoped "
+                        "type owns no scope for a consumer to cover. Use "
+                        "scope_semantics 'target', or route the type with a "
+                        "scope rule",
+                    )
+                )
+    return found
+
+
 class ScopePolicy(BaseModel):
     """A complete, per-ontology declaration of how owning scope resolves.
 
@@ -292,6 +324,10 @@ class ScopePolicy(BaseModel):
                 )
 
         errors.extend(incoherent_scope_declarations(self))
+        errors.extend(
+            message
+            for _, _, message in unscoped_scope_parameter_declarations(self, registry)
+        )
 
         for obj_type in self.row_visibility:
             if obj_type not in registry.object_types:

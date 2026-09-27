@@ -2704,6 +2704,7 @@ def test_audit_entries_round_trip_every_field(store: Store) -> None:
         outcome="ok",
         writes=[WriteRecord(op="create", object_type="Widget", object_id="w-1")],
         capability_accesses=[CapabilityAccessRecord(api_name="llm", count=3)],
+        unscoped_params=["product_id"],
     )
     store.append_audit(entry)
 
