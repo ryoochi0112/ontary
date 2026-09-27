@@ -302,8 +302,9 @@ def bulk_link(
 ) -> IngestReport:
     """Create links for each (from_id, to_id) pair; per-pair rejection.
 
-    Cardinality violations (and unknown link types) are surfaced per-pair in
-    the returned report rather than aborting the whole batch. `source` is
+    Cardinality violations, endpoints with no live row
+    (`LINK_ENDPOINT_NOT_FOUND`, #36), and unknown link types are surfaced
+    per-pair in the returned report rather than aborting the whole batch. `source` is
     accepted for symmetry with `bulk_upsert` and future lineage-on-links
     support; the current store schema does not persist link lineage.
 
@@ -362,6 +363,14 @@ def bulk_link(
                 raise
             report.errors.append(
                 IngestError(index=i, reason=str(exc), code="CARDINALITY_VIOLATION")
+            )
+        except ValidationFailed as exc:
+            # #36: an endpoint with no live row is a per-pair rejection like
+            # cardinality -- the rest of the batch still lands.
+            if exc.code != "LINK_ENDPOINT_NOT_FOUND":
+                raise
+            report.errors.append(
+                IngestError(index=i, reason=str(exc), code="LINK_ENDPOINT_NOT_FOUND")
             )
         else:
             report.inserted_ids.append(f"{from_id}->{to_id}")

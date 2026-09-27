@@ -176,6 +176,14 @@ ERROR_CODES: dict[str, ErrorCodeInfo] = {
         kind="validation",
         description="A link closure found no matching live link.",
     ),
+    "LINK_ENDPOINT_NOT_FOUND": ErrorCodeInfo(
+        kind="validation",
+        description=(
+            "A link creation named an endpoint id with no live row of the "
+            "link type's declared endpoint type -- missing or retired; a "
+            "link needs a live object at both ends."
+        ),
+    ),
     "CARDINALITY_VIOLATION": ErrorCodeInfo(
         kind="conflict",
         description=(

@@ -25,6 +25,14 @@ you**.
   that skipped the gate. A `scope_ref(...)` parameter may not refer to an
   unscoped type; `validate()` and `diagnose()` report it as `SCOPE_POLICY_ERROR`.
   Fixes [ontary#35](https://github.com/ryoochi0112/ontary/issues/35).
+- **Breaking (behaviour):** a link now needs a live object at both ends.
+  `Store.create_link`, and therefore `ActionContext.create_link` and
+  `client.ingest_links`, refuse an endpoint id that is missing, retired, or live
+  only as another type with the new code `LINK_ENDPOINT_NOT_FOUND` (kind
+  `validation`), checked before cardinality. `ingest_links` reports it per pair
+  and still commits the other pairs. Before, such a link was stored dangling.
+  Ingest objects before their links. Fixes
+  [ontary#36](https://github.com/ryoochi0112/ontary/issues/36).
 
 ## [0.15.0] — 2026-09-27
 

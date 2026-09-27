@@ -599,7 +599,7 @@ the action's own `Source`.
 | --- | --- |
 | `.insert(obj_type, payload) -> str` | Create. A payload omitting the type's primary key gets one auto-minted from the runtime's `id_factory`; a primary key that is already live is refused with `OBJECT_ALREADY_EXISTS` |
 | `.update(obj_type, obj_id, changes)` | Update. A change that gives the primary key a different value is refused with `PRIMARY_KEY_IMMUTABLE` |
-| `.create_link(link_api_name, from_id, to_id)` | Link |
+| `.create_link(link_api_name, from_id, to_id)` | Link. Both ids must be live objects of the link's declared endpoint types, or the call is refused with `LINK_ENDPOINT_NOT_FOUND` |
 | `.retire(obj_type, obj_id)` | Retire the object and cascade-close every live link that references the object on the side its link type declares for that object type |
 | `.unlink(link_api_name, from_id, to_id)` | Close one live link |
 | `.read_current(obj_type, obj_id) -> StoredObject \| None` | Read |
@@ -827,6 +827,13 @@ with `ConflictError` and code `OBJECT_ALREADY_EXISTS`; the store is left unchang
 An object has at most one live row, and the SQL backends back this with a partial
 unique index. A retired object's id may be inserted again, which starts a new live row.
 
+`create_link` needs a live object at both ends. Each id is looked up under the link
+type's declared `from_type` / `to_type`; an id that is missing, retired, or live only
+as some other type is refused with `ValidationFailed` and code
+`LINK_ENDPOINT_NOT_FOUND`, and no link row is written. The endpoints are checked
+before cardinality. An object inserted earlier in the same action transaction counts
+as live.
+
 A primary key is immutable. `update` refuses a change that gives the primary key a
 different value with `ValidationFailed` and code `PRIMARY_KEY_IMMUTABLE`, and the store
 is left unchanged. This keeps the store id and the payload primary key equal. Repeating
@@ -996,7 +1003,10 @@ return the report without raising, preserving the report-returning behavior.
 validated against declared shape: a missing primary key, a missing required property,
 an unknown property, or a type mismatch yields `INVALID_RECORD`. Writing an
 ontology-owned type raises `OWNED_TYPE_REFUSED`; supplying an ontology-owned property
-raises `OWNED_PROPERTY_REFUSED`.
+raises `OWNED_PROPERTY_REFUSED`. A link pair whose endpoint has no live row of the
+declared endpoint type is rejected per pair with `LINK_ENDPOINT_NOT_FOUND`, like a
+cardinality violation; the other pairs still land, so ingest objects before their
+links.
 
 ---
 
@@ -1243,6 +1253,7 @@ table below is generated from it.
 | `STALE_CURSOR` | An ordered walk's cursor resolved to a row that is no longer current; restart the ordered walk from the first page. |
 | `INVALID_PARAMS` | A call's parameters failed declared-shape validation: an action's params, or a read parameter whose SHAPE is wrong -- an `order_by` that is neither a field name nor a (field, direction) pair, or a `where=` that is not a mapping of field name to condition. A parameter naming something that does not exist is `UNKNOWN_FIELD` instead; this code is about the shape, not the name. |
 | `INVALID_RECORD` | A bulk_upsert record failed declared-shape validation (missing primary key, missing required property, unknown property, or a value that does not match its declared type). The validation kind carries the SAME `INVALID_RECORD` code that `bulk_upsert` already reports: from a caller's point of view, a record not matching the declaration is one failure regardless of which write path noticed. This closes the M9 hole where only ingest checked: `Store.insert`/`update` and therefore `ActionContext.insert`/`update` could commit a row missing a required property or carrying a wrong-typed value, report success, and leave the typed reader unable to hydrate it. The same code wraps a Pydantic `ValidationError` while hydrating a stored `OntologyObject` payload (for example, a non-ISO datetime string), never surfacing a bare traceback; a stored row failing declared-shape validation on read-back is the same failure class ingest carries on write. |
+| `LINK_ENDPOINT_NOT_FOUND` | A link creation named an endpoint id with no live row of the link type's declared endpoint type -- missing or retired; a link needs a live object at both ends. |
 | `LINK_NOT_FOUND` | A link closure found no matching live link. |
 | `NON_NUMERIC_AGGREGATE` | `GuardedQuery.aggregate`'s `value_field` is declared a non-numeric `PropertyType` (anything other than `int`/`float`, such as str/json/datetime/bool). It is checked against the declared type before rows are iterated or coerced, so values that merely look numeric cannot bypass the type contract (spec `m35-sdk-refactor` §6 AC7). `func="count"` is exempt and accepts any declared type. |
 | `OBJECT_NOT_FOUND` | An update targeted a non-existent object. |
@@ -1266,7 +1277,7 @@ table below is generated from it.
 | `MIN_N_VIOLATION` | An aggregate would be computed over fewer than min_n distinct contributors. |
 | `VISIBILITY_DENIED` | A single-object read/write targeted an object outside the consumer's scope. |
 
-*48 codes across 7 kinds.*
+*49 codes across 7 kinds.*
 
 ---
 

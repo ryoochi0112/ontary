@@ -530,6 +530,11 @@ def test_bulk_upsert_partial_batch_no_silent_writes(
 def test_bulk_link_cardinality_violation_reported_per_pair(
     store: ObjectStore, registry: OntologyRegistry
 ) -> None:
+    src = Source(source_system="synthetic")
+    for team in ("team-1", "team-2"):
+        store.insert("Team", {"id": team, "name": team}, src)
+    for dept in ("dept-a", "dept-b"):
+        store.insert("Department", {"id": dept, "name": dept}, src)
     report = bulk_link(
         store,
         registry,
@@ -548,6 +553,35 @@ def test_bulk_link_cardinality_violation_reported_per_pair(
     assert len(report.inserted_ids) == 2
     assert store.links_from("belongsToDepartment", "team-1") == ["dept-a"]
     assert store.links_from("belongsToDepartment", "team-2") == ["dept-a"]
+
+
+def test_bulk_link_missing_endpoint_reported_per_pair(
+    store: ObjectStore, registry: OntologyRegistry
+) -> None:
+    """#36: a pair whose endpoint has no live row is rejected per pair with
+    `LINK_ENDPOINT_NOT_FOUND`; the good pairs around it still land."""
+    src = Source(source_system="synthetic")
+    store.insert("Team", {"id": "team-1", "name": "T1"}, src)
+    store.insert("Team", {"id": "team-2", "name": "T2"}, src)
+    store.insert("Department", {"id": "dept-a", "name": "A"}, src)
+
+    report = bulk_link(
+        store,
+        registry,
+        "belongsToDepartment",
+        [
+            ("team-1", "dept-a"),
+            ("team-1", "dept-missing"),  # no such Department
+            ("team-missing", "dept-a"),  # no such Team
+            ("team-2", "dept-a"),
+        ],
+        src,
+    )
+
+    assert [e.index for e in report.errors] == [1, 2]
+    assert {e.code for e in report.errors} == {"LINK_ENDPOINT_NOT_FOUND"}
+    assert report.inserted_ids == ["team-1->dept-a", "team-2->dept-a"]
+    assert store.links_to("belongsToDepartment", "dept-a") == ["team-1", "team-2"]
 
 
 def test_bulk_link_unknown_link_type_rejected(

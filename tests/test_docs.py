@@ -119,6 +119,7 @@ ADDED_SINCE_080_ERROR_CODES = frozenset(
     {
         "OBJECT_ALREADY_EXISTS",
         "PRIMARY_KEY_IMMUTABLE",
+        "LINK_ENDPOINT_NOT_FOUND",
     }
 )
 NEW_ENGLISH_DOCS = tuple(

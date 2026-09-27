@@ -31,6 +31,7 @@ from ontary.meta import Cardinality, OntologyRegistry
 from ontary.store import _sql
 from ontary.store._shared import (
     WriteCapture,
+    check_link_endpoints,
     check_link_removal_authority,
     check_link_write_authority,
     check_object_removal_authority,
@@ -485,6 +486,14 @@ class ObjectStore(SqliteSchemaGate):
     def create_link(self, link_type: str, from_id: str, to_id: str) -> None:
         link_def = check_link_write_authority(
             self._registry, link_type, capturing=self._write_capture.active
+        )
+        check_link_endpoints(
+            link_def,
+            link_type,
+            from_id,
+            to_id,
+            read_current=self.read_current,
+            read_last=self.read_last,
         )
 
         if link_def.cardinality in (Cardinality.ONE_TO_ONE, Cardinality.MANY_TO_ONE):

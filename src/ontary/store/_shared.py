@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import datetime
 from typing import Any, NamedTuple, Protocol
@@ -166,6 +166,43 @@ def object_already_exists(object_type: str, obj_id: str) -> ConflictError:
         "retire it before inserting the same primary key again",
         code="OBJECT_ALREADY_EXISTS",
     )
+
+
+def check_link_endpoints(
+    link_def: LinkTypeDef,
+    link_type: str,
+    from_id: str,
+    to_id: str,
+    *,
+    read_current: Callable[[str, str], StoredObject | None],
+    read_last: Callable[[str, str], StoredObject | None],
+) -> None:
+    """Refuse a link whose endpoint has no live row (#36).
+
+    Each side is looked up under the link type's DECLARED endpoint type, so
+    an id that is live as some other type is still not an endpoint. The
+    `from` side is checked first, then `to`; both before cardinality. A
+    retired endpoint is refused with the same code -- it is not a live
+    endpoint either -- and the message says "retired", because the remedy
+    (never retry) differs from a typo or an out-of-order ingest.
+
+    The reads are injected rather than performed here so this module stays
+    storage-free: each backend passes its own `read_current`/`read_last`,
+    which run on the backend's transaction connection and therefore see
+    an object inserted earlier in the same action transaction.
+    """
+    for side, endpoint_type, obj_id in (
+        ("from", link_def.from_type, from_id),
+        ("to", link_def.to_type, to_id),
+    ):
+        if read_current(endpoint_type, obj_id) is not None:
+            continue
+        state = "is retired" if read_last(endpoint_type, obj_id) is not None else "does not exist"
+        raise ValidationFailed(
+            f"{link_type}: {side}_id {obj_id!r} {state} as a live "
+            f"{endpoint_type} -- a link needs a live object at both ends",
+            code="LINK_ENDPOINT_NOT_FOUND",
+        )
 
 
 def live_link_not_found(
