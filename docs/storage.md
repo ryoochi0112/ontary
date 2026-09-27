@@ -143,10 +143,10 @@ schema on construction.
 
 The stamp is a whole-schema fingerprint, not a release number. It changed from 9
 to 10 between the last `ontos` release and `ontary` 0.11.0, and a database stamped
-9 is refused by every ontary version. It changed from 10 to 11 after 0.14.0, when
+9 is refused by every ontary version. It changed from 10 to 11 in 0.15.0, when
 the `idx_objects_live_id` partial unique index made "at most one live row per
-primary key" a storage constraint; a store stamped 10 is refused by later
-versions and is rebuilt by re-ingest like any other schema move. Check the engine's number with
+primary key" a storage constraint; a store stamped 10 is refused by 0.15.0
+and later and is rebuilt by re-ingest like any other schema move. Check the engine's number with
 `ontary.store.SCHEMA_VERSION` and the store's with
 `SELECT value FROM schema_meta WHERE key = 'schema_version'` before an upgrade so
 the re-ingest is planned rather than discovered at startup.

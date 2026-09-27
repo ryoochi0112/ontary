@@ -11,6 +11,16 @@ you**.
 
 ## [Unreleased]
 
+## [0.15.0] — 2026-09-27
+
+```bash
+uv add "ontary @ git+https://github.com/ryoochi0112/ontary@v0.15.0"
+```
+
+A primary key now identifies exactly one live object. `insert` refuses a live
+duplicate and `update` refuses a primary-key change, each with a new catalogued
+code. This bumps the store schema to v11, so a v10 store must be re-ingested.
+
 ### Changed
 
 - **Breaking (store schema):** `SCHEMA_VERSION` is now 11. The new
