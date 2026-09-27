@@ -11,6 +11,18 @@ you**.
 
 ## [Unreleased]
 
+## [0.17.0] — 2026-09-27
+
+```bash
+uv add "ontary @ git+https://github.com/ryoochi0112/ontary@v0.17.0"
+```
+
+This release makes action handlers typed. A handler reads and writes through the
+ontology's own classes and link handles, and `mypy` checks every field it touches.
+The string `ActionContext` members still work but warn, and they are removed in
+0.18.0. Every non-`ok` audit entry now records its target and error code. The store
+schema moves to v13, so a v12 store must be re-ingested.
+
 ### Added
 
 - A typed `ActionContext` surface. `ctx.get(Order, id) -> Order | None`,
