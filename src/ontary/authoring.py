@@ -17,6 +17,7 @@ import builtins
 import types
 from collections.abc import Callable, Mapping, Sequence
 from datetime import date, datetime
+from enum import Enum
 from typing import (
     Any,
     Literal,
@@ -155,9 +156,47 @@ def _property_type_for(annotation: Any, field_name: str, class_name: str) -> Pro
     raise ValidationFailed(
         f"{class_name}.{field_name}: unmappable annotation {annotation!r} "
         "(accepted: str, int, float, bool, datetime.date, datetime.datetime, dict[...], "
-        "list[...], Any -- or override with prop(property_type=...))",
+        "list[...], Any, a string Enum or Literal[...] -- or override with "
+        "prop(property_type=...))",
         code="ONTOLOGY_INVALID",
     )
+
+
+def _choice_members(
+    annotation: Any, field_name: str, class_name: str
+) -> tuple[str, ...] | None:
+    """The string values a choice annotation allows, or ``None`` when
+    ``annotation`` is not an ``Enum`` subclass or a ``Literal[...]`` (#42).
+
+    An ``Enum`` contributes its member values in declaration order; a
+    ``Literal`` contributes its arguments. Either maps to ``type="str"`` plus
+    ``choices``, so every member must be a string.
+    """
+    if isinstance(annotation, type) and issubclass(annotation, Enum):
+        members: tuple[Any, ...] = tuple(member.value for member in annotation)
+    elif get_origin(annotation) is Literal:
+        members = get_args(annotation)
+    else:
+        return None
+    non_strings = [member for member in members if not isinstance(member, str)]
+    if non_strings:
+        raise ValidationFailed(
+            f"{class_name}.{field_name}: choice annotation {annotation!r} has "
+            f"non-string members {non_strings!r} -- a choice property stores "
+            "string values, so give every Enum member or Literal argument a "
+            "string value",
+            code="ONTOLOGY_INVALID",
+        )
+    return members
+
+
+def _refuse_double_choices(meta: dict[str, Any], field_name: str, class_name: str) -> None:
+    if meta.get("choices") is not None:
+        raise ValidationFailed(
+            f"{class_name}.{field_name}: the Enum/Literal annotation already "
+            "declares the choices -- drop prop(choices=...)",
+            code="ONTOLOGY_INVALID",
+        )
 
 
 def _repair_optional_default(field_info: Any, is_optional: bool) -> bool:
@@ -203,10 +242,22 @@ def _derive_properties(cls: type["OntologyObject"]) -> tuple[list[PropertyDef], 
 
         meta = _field_ontary_meta(field_info.json_schema_extra)
         annotation, is_optional = _unwrap_optional(field_info.annotation)
-        property_type = meta.get("property_type") or _property_type_for(
-            annotation, field_name, cls.__name__
-        )
-        choices = meta.get("choices")
+        choices = _choice_members(annotation, field_name, cls.__name__)
+        if choices is not None:
+            _refuse_double_choices(meta, field_name, cls.__name__)
+            if meta.get("primary_key"):
+                raise ValidationFailed(
+                    f"{cls.__name__}.{field_name}: a choice annotation cannot be "
+                    "the primary key -- a choice is a value, not an identity; "
+                    "annotate the primary key as str",
+                    code="ONTOLOGY_INVALID",
+                )
+            property_type: PropertyType = meta.get("property_type") or "str"
+        else:
+            property_type = meta.get("property_type") or _property_type_for(
+                annotation, field_name, cls.__name__
+            )
+            choices = meta.get("choices")
         sensitivity = meta.get("sensitivity") or Sensitivity()
         restricted = not sensitivity.human_visible or not sensitivity.ai_usable
         if restricted and not is_optional:
@@ -357,9 +408,14 @@ def _derive_action_params(
                 refers_to_cls, registry, f"{cls.__name__}.{field_name}'s marker class"
             )
             property_type: PropertyType = "str"
+            choices = None
         else:
             refers_to = None
-            property_type = _property_type_for(annotation, field_name, cls.__name__)
+            choices = _choice_members(annotation, field_name, cls.__name__)
+            if choices is not None:
+                property_type = "str"
+            else:
+                property_type = _property_type_for(annotation, field_name, cls.__name__)
 
         required = meta.get("required")
         if required is None:
@@ -369,6 +425,7 @@ def _derive_action_params(
             ActionParameterDef(
                 name=field_name,
                 type=property_type,
+                choices=choices,
                 required=required,
                 refers_to=refers_to,
                 scope_semantics=scope_semantics,

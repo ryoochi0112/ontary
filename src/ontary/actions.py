@@ -38,7 +38,7 @@ from ontary.model import CapabilityHandle, LinkHandle, OntologyObject, hydrate
 from ontary.scope import ScopePolicy, resolve_owning_scope
 from ontary.security import Consumer, covers_scope
 from ontary.store import AuditEntry, Source, Store, StoredObject
-from ontary.typesys import _to_storage_scalar, validate_scalar
+from ontary.typesys import _to_storage_scalar, choice_value, validate_scalar
 
 TypedHandler = Callable[["ActionContext", BaseModel], dict[str, Any]]
 P = TypeVar("P")
@@ -973,17 +973,24 @@ class ActionExecutor:
         converted to the same ISO spelling the store would persist, so it
         survives the JSON round-trip check (#38); a naive `datetime` is left
         as-is for `_validate_params` to refuse with a message that says so.
+        An ``Enum`` member under a `choices`-declared parameter is unwrapped
+        to its value first (#42; `typesys.choice_value`), so validation, the
+        audit trail, and a dict handler all see the plain string.
         """
         if isinstance(params, BaseModel):
             return params.model_dump(mode="json")
         declared = {p.name: p for p in action_def.parameters}
+        unwrapped = {
+            name: choice_value(value, declared[name].choices) if name in declared else value
+            for name, value in params.items()
+        }
         return {
             name: _to_storage_scalar(value, declared[name].type)
             if name in declared
             and value is not None
             and validate_scalar(value, declared[name].type) is None
             else value
-            for name, value in params.items()
+            for name, value in unwrapped.items()
         }
 
     def _validate_typed_datetime_params(
@@ -1167,8 +1174,8 @@ class ActionExecutor:
         declared `param.type` (delegates to `typesys.validate_scalar`, the
         single source of truth for `PropertyType` -> python-type checks,
         including the bool-is-not-int guard and ISO-8601 datetime
-        parsing)."""
-        return validate_scalar(value, param.type)
+        parsing) or outside its declared `choices` (#42)."""
+        return validate_scalar(value, param.type, param.choices)
 
     def _enforce_scope(
         self,

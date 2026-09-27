@@ -10,7 +10,9 @@ the only place either lives.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import date, datetime
+from enum import Enum
 from typing import Any, Literal
 
 PropertyType = Literal[
@@ -105,6 +107,35 @@ def _to_storage_scalar(value: Any, prop_type: PropertyType) -> Any:
     ):
         return value.isoformat()
     return value
+
+
+def choice_value(value: Any, choices: tuple[str, ...] | None) -> Any:
+    """The plain value a choice declaration stores for ``value`` (#42).
+
+    An ``Enum`` member is unwrapped to its ``.value`` **only** when the
+    target declares ``choices``; a declaration without ``choices`` sees the
+    member unchanged, so ``validate_scalar`` refuses it exactly as before.
+    Every other value passes through untouched. This is the single place an
+    ``Enum`` member becomes a stored value: every entry path (store insert
+    and update, ingest, a where operand, dict-form action params, owned
+    defaults) applies it once, BEFORE validation and before the object id is
+    read, so the value that is validated, the value that is persisted, and
+    the id derived from it are the same value.
+    """
+    if choices is not None and isinstance(value, Enum):
+        return value.value
+    return value
+
+
+def normalize_choice_values(
+    payload: Mapping[str, Any],
+    choices_by_name: Mapping[str, tuple[str, ...] | None],
+) -> dict[str, Any]:
+    """Copy ``payload`` with `choice_value` applied per declared name."""
+    return {
+        name: choice_value(value, choices_by_name.get(name))
+        for name, value in payload.items()
+    }
 
 
 def _storage_scalar_violation(

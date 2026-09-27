@@ -618,6 +618,7 @@ def _object_type_payload(defn: ObjectTypeDef) -> dict[str, Any]:
             {
                 "name": p.name,
                 "type": p.type,
+                "choices": None if p.choices is None else list(p.choices),
                 "required": p.required,
                 "ai_usable": p.sensitivity.ai_usable,
                 "human_visible": p.sensitivity.human_visible,
@@ -651,6 +652,7 @@ def _action_type_payload(defn: ActionTypeDef) -> dict[str, Any]:
             {
                 "name": p.name,
                 "type": p.type,
+                "choices": None if p.choices is None else list(p.choices),
                 "required": p.required,
                 "refers_to": p.refers_to,
                 "scope_semantics": p.scope_semantics,

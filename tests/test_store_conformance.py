@@ -33,8 +33,9 @@ import threading
 import uuid
 from collections.abc import Callable
 from datetime import date, datetime, timedelta, timezone
+from enum import Enum, StrEnum
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 from conftest import raises_code
@@ -700,6 +701,209 @@ def test_choices_update_rejects_out_of_set_value_without_changing_row(
     stored = store.read_current("Ticket", "ticket-1")
     assert stored is not None
     assert stored.payload["status"] == "open"
+
+
+class _ChoiceStatus(StrEnum):
+    OPEN = "open"
+    CLOSED = "closed"
+
+
+class _ChoicePriority(Enum):
+    LOW = "low"
+    HIGH = "high"
+
+
+def _choice_annotation_ontology() -> tuple[Ontology, type[OntologyObject]]:
+    ontology = Ontology("choice-annotation-conformance", scope_levels=["org"], min_n=1)
+
+    @ontology.object(layer="L0", scope="unscoped")
+    class Ticket(OntologyObject):
+        id: str = prop(primary_key=True)
+        status: _ChoiceStatus
+        priority: _ChoicePriority | None = None
+        kind: Literal["bug", "task"] = "task"
+
+    ontology.validate()
+    return ontology, Ticket
+
+
+def test_enum_and_literal_choices_round_trip_through_every_backend(
+    store_factory: StoreFactory,
+) -> None:
+    """#42: an Enum member written to the store is persisted as its plain
+    string value, hydrates back to the member, and filters by member."""
+    ontology, Ticket = _choice_annotation_ontology()
+    store = store_factory(ontology.registry)
+    client = OntologyClient(ontology, store, _choices_consumer())
+    source = Source(source_system="test")
+
+    store.insert(
+        "Ticket",
+        {
+            "id": "t1",
+            "status": _ChoiceStatus.OPEN,
+            "priority": _ChoicePriority.HIGH,
+            "kind": "task",
+        },
+        source,
+    )
+    store.insert("Ticket", {"id": "t2", "status": "closed", "kind": "bug"}, source)
+    store.update("Ticket", "t2", {"priority": _ChoicePriority.LOW}, source)
+
+    stored = store.read_current("Ticket", "t1")
+    assert stored is not None
+    assert stored.payload["status"] == "open"
+    assert type(stored.payload["status"]) is str
+    assert stored.payload["priority"] == "high"
+    assert type(stored.payload["priority"]) is str
+    updated = store.read_current("Ticket", "t2")
+    assert updated is not None
+    assert type(updated.payload["priority"]) is str
+
+    hydrated = client.get(Ticket, "t1")
+    assert hydrated is not None
+    assert hydrated.status is _ChoiceStatus.OPEN
+    assert hydrated.priority is _ChoicePriority.HIGH
+    assert hydrated.kind == "task"
+
+    closed = client.list(Ticket, {"status": _ChoiceStatus.CLOSED}, limit=None)
+    assert [ticket.id for ticket in closed] == ["t2"]
+    low = client.list(Ticket, {"priority": _ChoicePriority.LOW}, limit=None)
+    assert [ticket.id for ticket in low] == ["t2"]
+
+    with raises_code(ValidationFailed, "INVALID_RECORD"):
+        store.insert("Ticket", {"id": "t3", "status": "pending", "kind": "bug"}, source)
+    with raises_code(ValidationFailed, "INVALID_RECORD"):
+        store.insert("Ticket", {"id": "t4", "status": "open", "kind": "epic"}, source)
+
+
+class _PlainChoice(Enum):
+    """A plain `Enum` with string values: NOT a `str`, so a property without
+    `choices` refuses it exactly as `main` does (#42 I1)."""
+
+    A = "a"
+    B = "b"
+
+
+def _plain_str_ontology() -> tuple[Ontology, type[OntologyObject]]:
+    ontology = Ontology("plain-str-conformance", scope_levels=["org"], min_n=1)
+
+    @ontology.object(layer="L0", scope="unscoped")
+    class Thing(OntologyObject):
+        id: str = prop(primary_key=True)
+        name: str
+
+    ontology.validate()
+    return ontology, Thing
+
+
+def _assert_no_row_under_either_spelling(store: Store, obj_type: str) -> None:
+    assert store.read_current(obj_type, "a") is None
+    assert store.read_current(obj_type, "_PlainChoice.A") is None
+
+
+def test_enum_member_is_refused_where_no_choices_are_declared(
+    store_factory: StoreFactory,
+) -> None:
+    """#42 I1 (no widening): a plain `Enum` member on a property WITHOUT
+    `choices` is refused with the same code `main` used, on every path --
+    insert (pk and non-pk), update, ingest, and a where operand -- and
+    leaves no row under either id spelling."""
+    ontology, Thing = _plain_str_ontology()
+    store = store_factory(ontology.registry)
+    client = OntologyClient(ontology, store, _choices_consumer())
+    source = Source(source_system="test")
+
+    with raises_code(ValidationFailed, "INVALID_RECORD"):
+        store.insert("Thing", {"id": _PlainChoice.A, "name": "n"}, source)
+    _assert_no_row_under_either_spelling(store, "Thing")
+
+    with raises_code(ValidationFailed, "INVALID_RECORD"):
+        store.insert("Thing", {"id": "t", "name": _PlainChoice.A}, source)
+    assert store.read_current("Thing", "t") is None
+
+    store.insert("Thing", {"id": "t", "name": "n"}, source)
+    with raises_code(ValidationFailed, "INVALID_RECORD"):
+        store.update("Thing", "t", {"name": _PlainChoice.A}, source)
+    stored = store.read_current("Thing", "t")
+    assert stored is not None
+    assert stored.payload["name"] == "n"
+
+    report = client.ingest(
+        "Thing", [{"id": _PlainChoice.A, "name": "n"}], source, on_error="report"
+    )
+    assert not report.ok
+    assert "expected type 'str', got _PlainChoice" in str(report.errors[0])
+    _assert_no_row_under_either_spelling(store, "Thing")
+
+    with raises_code(ValidationFailed, "OPERATOR_TYPE_MISMATCH"):
+        client.list(Thing, {"name": _PlainChoice.A}, limit=None)
+
+
+def _choices_primary_key_ontology() -> tuple[Ontology, type[OntologyObject]]:
+    ontology = Ontology("choices-pk-conformance", scope_levels=["org"], min_n=1)
+
+    @ontology.object(layer="L0", scope="unscoped")
+    class Thing(OntologyObject):
+        code: str = prop(primary_key=True, choices=["a", "b"])
+        name: str
+
+    ontology.validate()
+    return ontology, Thing
+
+
+def test_enum_member_on_a_choices_primary_key_is_keyed_on_its_value(
+    store_factory: StoreFactory,
+) -> None:
+    """#42 I2 (one value): a `choices`-declared primary key given an `Enum`
+    member is validated, persisted, and keyed on the plain string value --
+    the same value everywhere -- on insert, ingest, and update."""
+    ontology, _Thing = _choices_primary_key_ontology()
+    store = store_factory(ontology.registry)
+    client = OntologyClient(ontology, store, _choices_consumer())
+    source = Source(source_system="test")
+
+    store.insert("Thing", {"code": _PlainChoice.A, "name": "n"}, source)
+    stored = store.read_current("Thing", "a")
+    assert stored is not None
+    assert stored.payload["code"] == "a"
+    assert type(stored.payload["code"]) is str
+    assert store.read_current("Thing", "_PlainChoice.A") is None
+
+    report = client.ingest("Thing", [{"code": _PlainChoice.B, "name": "n"}], source)
+    assert report.ok
+    assert report.inserted_ids == ["b"]
+    ingested = store.read_current("Thing", "b")
+    assert ingested is not None
+    assert ingested.payload["code"] == "b"
+    assert type(ingested.payload["code"]) is str
+    assert store.read_current("Thing", "_PlainChoice.B") is None
+
+    store.update("Thing", "a", {"name": "renamed"}, source)
+    updated = store.read_current("Thing", "a")
+    assert updated is not None
+    assert updated.payload["name"] == "renamed"
+    assert updated.payload["code"] == "a"
+
+
+def test_where_operand_outside_the_choices_is_not_refused(
+    store_factory: StoreFactory,
+) -> None:
+    """#42 I5 (no new where-filter refusals): a `where` operand outside a
+    property's `choices` is only unwrapped, never membership-checked -- an
+    out-of-set `eq` matches no rows and an `in` list matches its in-set
+    members only, exactly as on `main`."""
+    ontology, Ticket = _choices_ontology()
+    store = store_factory(ontology.registry)
+    client = OntologyClient(ontology, store, _choices_consumer())
+    source = Source(source_system="test")
+    store.insert("Ticket", {"id": "ticket-open", "status": "open"}, source)
+    store.insert("Ticket", {"id": "ticket-closed", "status": "closed"}, source)
+
+    assert client.list(Ticket, {"status": "pending"}, limit=None) == []
+    matched = client.list(Ticket, {"status": {"in": ["pending", "open"]}}, limit=None)
+    assert [ticket.id for ticket in matched] == ["ticket-open"]
+    assert client.list(Ticket, {"status": {"ne": "pending"}}, limit=None) != []
 
 
 def test_choices_hydration_rejects_persisted_out_of_set_value(

@@ -128,6 +128,19 @@ security review.
 
 *Source: Palantir, "Ontology design: Structural guidance".*
 
+### Choice properties
+
+A fact that takes one of a fixed set of values, such as a ticket's status, is a
+choice property: annotate it with a string Enum or a Literal. The `PropertyDef` then
+declares the allowed values, and every write path enforces them. Do not accept free
+text and check the value inside each action.
+
+A choice is a value, not an entity. When the values need their own attributes,
+lifecycle, or security, or people add new values as part of the operation, model
+them as an `ObjectTypeDef` and link to it with a `LinkTypeDef` instead. Changing the
+set of choices is a schema change. Removing a value leaves stored rows that the
+narrower declaration refuses on read, so plan that change like any other migration.
+
 ### Interfaces
 
 Foundry interfaces define a common contract across object types. **No equivalent

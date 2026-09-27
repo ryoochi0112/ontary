@@ -251,7 +251,7 @@ Two attributes are attached by the engine on a read, and are **not** model field
 `redacted_fields` is what distinguishes "hidden from you" from "genuinely stored as
 `None`" — a visible-but-absent optional field is `None` too, but never appears here.
 
-#### `prop(*, primary_key=False, sensitivity=None, scope_level=None, required=None, property_type=None, **field_kwargs)`
+#### `prop(*, primary_key=False, sensitivity=None, scope_level=None, required=None, property_type=None, choices=None, **field_kwargs)`
 
 `pydantic.Field(...)` plus ontology metadata. Unrecognized kwargs pass straight
 through to `Field`, so `prop(default=None, description="...")` behaves as expected.
@@ -261,6 +261,51 @@ keep working on the same class.
 > **A property with restricted `sensitivity` must be declared `X | None`.** The
 > decorator raises a coded validation error at class-registration time otherwise —
 > because a redacted read has to be able to return `None` for it.
+
+`choices=["open", "closed"]` limits a `str` property to those values. Every write
+path refuses any other value.
+
+#### Choice properties: `Enum` and `Literal`
+
+Annotate a property with a string-valued `Enum` (for example a `StrEnum`) or a
+`Literal[...]` of strings. It declares the same shape as `str` plus `choices`: the
+`PropertyDef` has `type="str"`, and its `choices` are the member values in
+declaration order.
+
+```python
+class Status(StrEnum):
+    OPEN = "open"
+    CLOSED = "closed"
+
+
+@ontology.object(layer="L0", scope="unscoped")
+class Ticket(OntologyObject):
+    id: str = prop(primary_key=True)
+    status: Status
+    kind: Literal["bug", "task"]
+```
+
+- **Storage.** The store keeps the member's string value. Every write path accepts
+  an `Enum` member or its value: `ingest`, `ctx.create`, `ctx.save`, action
+  parameters, and `where` filters. Any other value is refused (`INVALID_RECORD` on
+  a write, `INVALID_PARAMS` on an action). A `where` filter does not refuse a value
+  outside the choices; it matches no rows.
+- **Only where `choices` are declared.** An `Enum` member is unwrapped to its value
+  by the declaration, not by its Python type. A `prop(choices=...)` property accepts
+  a member whose value is one of its choices, because it is the same declaration. A
+  plain `str` property without `choices` still refuses an `Enum` member
+  (`INVALID_RECORD` on a write, `OPERATOR_TYPE_MISMATCH` in a `where` filter), as
+  it did before.
+- **Reads.** A typed read returns the `Enum` member, or the `Literal` string, so
+  `mypy` narrows the field. A dict read, an MCP result, and an `aggregate_by` key
+  return the plain string.
+- **Action parameters.** The same annotations on an `ActionParams` field set
+  `choices` on its `ActionParameterDef`, and the typed handler receives the member.
+- **MCP.** `list_object_types` and `list_action_types` list the allowed values
+  under `choices` (`null` when a property or parameter has none).
+- **Refused at declaration** (`ONTOLOGY_INVALID`): a member that is not a string,
+  such as an `IntEnum` or `Literal[1, 2]`; a choice annotation combined with
+  `prop(choices=...)`; and a choice annotation on the primary key.
 
 #### Field markers: `ref`, `target`, `scope_ref`
 
@@ -1239,10 +1284,10 @@ data-driven ontologies; most authors should use `Ontology`.
 | Type | Key fields |
 | --- | --- |
 | `ObjectTypeDef` | `api_name`, `display_name`, `description`, `layer`, `properties`, `primary_key`, `owned` |
-| `PropertyDef` | `name`, `type`, `required`, `sensitivity`, `scope_level` |
+| `PropertyDef` | `name`, `type`, `choices`, `required`, `sensitivity`, `scope_level` |
 | `LinkTypeDef` | `api_name`, `from_type`, `to_type`, `cardinality`, `description`, `identity_revealing`, `owned` |
 | `ActionTypeDef` | `api_name`, `display_name`, `target_type`, `executable_by_roles`, `description`, `parameters`, `capabilities` |
-| `ActionParameterDef` | `name`, `type`, `required`, `refers_to`, `scope_semantics` |
+| `ActionParameterDef` | `name`, `type`, `choices`, `required`, `refers_to`, `scope_semantics` |
 | `FunctionDef` | `api_name`, `description`, `input_description`, `output_description`, `capabilities` |
 | `Sensitivity` | `ai_usable`, `human_visible` |
 
