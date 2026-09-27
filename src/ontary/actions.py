@@ -23,7 +23,7 @@ from pydantic import BaseModel, ValidationError
 
 from ontary._runtime import default_clock, default_id_factory
 from ontary._typed_api import resolve_capability
-from ontary.audit import CapabilityAccessRecord
+from ontary.audit import CapabilityAccessRecord, _audit_error_code
 from ontary.errors import (
     ConflictError,
     InternalError,
@@ -321,20 +321,22 @@ class ActionExecutor:
         self,
         consumer: Consumer,
         action_name: str,
-        target_type: str,
+        action_def: ActionTypeDef,
         params: dict[str, Any],
         *,
         invocation_id: str | None,
         outcome: str,
-        target_id: str | None = None,
         **extra: Any,
     ) -> AuditEntry:
         """THE one literal `AuditEntry(...)` construction in the executor
         (C4 of the staged refactor) -- every denied/error/pending/follow-up
         entry goes through here, so the consumer -> actor/role/principal
         stamping cannot drift between sites (and the audit-principal AST
-        guard has one site to verify instead of seven). `extra` carries the
-        per-site fields (`ts`, `writes`, `capability_accesses`)."""
+        guard has one site to verify instead of seven). `target_id` is
+        resolved here from the declared target parameter, so a denied or
+        error entry names the requested target exactly as the ok entry does
+        (#49). `extra` carries the per-site fields (`ts`, `writes`,
+        `capability_accesses`, `unscoped_params`, `error_code`)."""
         if "ts" not in extra:
             extra["ts"] = self._clock()
         return AuditEntry(
@@ -343,8 +345,8 @@ class ActionExecutor:
             role=consumer.role,
             principal=consumer.principal,
             action=action_name,
-            target_type=target_type,
-            target_id=target_id,
+            target_type=action_def.target_type,
+            target_id=self._resolve_target_id(action_def, params),
             params=params,
             outcome=outcome,
             **extra,
@@ -426,11 +428,12 @@ class ActionExecutor:
                     self._audit_entry(
                         consumer,
                         action_name,
-                        action_def.target_type,
+                        action_def,
                         params_dict,
                         invocation_id=invocation_id,
                         outcome="error",
                         unscoped_params=unscoped_params,
+                        error_code="CAPABILITY_NOT_PROVIDED",
                     )
                 )
                 raise PreconditionFailed(
@@ -523,14 +526,12 @@ class ActionExecutor:
         )
 
         capability_accesses: list[CapabilityAccessRecord] = []
-        target_id = self._resolve_target_id(action_def, params_dict)
         try:
             result = self._run_transaction(
                 consumer,
                 action_name,
                 action_def,
                 params_dict,
-                target_id,
                 fn,
                 params_cls,
                 params_obj,
@@ -556,12 +557,13 @@ class ActionExecutor:
                 self._audit_entry(
                     consumer,
                     action_name,
-                    action_def.target_type,
+                    action_def,
                     params_dict,
                     invocation_id=invocation_id,
                     outcome=outcome,
                     capability_accesses=capability_accesses,
                     unscoped_params=unscoped_params,
+                    error_code=_audit_error_code(exc),
                 )
             )
             raise
@@ -574,7 +576,6 @@ class ActionExecutor:
         action_name: str,
         action_def: ActionTypeDef,
         params_dict: dict[str, Any],
-        target_id: str | None,
         fn: Callable[..., dict[str, Any]],
         params_cls: type[BaseModel] | None,
         params_obj: BaseModel | None,
@@ -619,11 +620,10 @@ class ActionExecutor:
             pending_entry = self._audit_entry(
                 consumer,
                 action_name,
-                action_def.target_type,
+                action_def,
                 params_dict,
                 invocation_id=invocation_id,
                 outcome="ok",
-                target_id=target_id,
                 # Read once, after the handler returned and the write capture
                 # closed, so the entry's `ts` is the instant the action's work
                 # finished rather than a second clock read further down.
@@ -655,11 +655,12 @@ class ActionExecutor:
             self._audit_entry(
                 consumer,
                 action_name,
-                action_def.target_type,
+                action_def,
                 params,
                 invocation_id=invocation_id,
                 outcome="denied",
                 unscoped_params=list(unscoped_params or []),
+                error_code=code,
             )
         )
         raise PermissionDenied(message, code=code)
@@ -682,11 +683,12 @@ class ActionExecutor:
             self._audit_entry(
                 consumer,
                 action_name,
-                action_def.target_type,
+                action_def,
                 params,
                 invocation_id=invocation_id,
                 outcome="error",
                 unscoped_params=list(unscoped_params or []),
+                error_code="INVALID_PARAMS",
             )
         )
         raise ActionError(message, code="INVALID_PARAMS")
@@ -872,7 +874,7 @@ class ActionExecutor:
     def _resolve_target_id(
         action_def: ActionTypeDef, params: dict[str, Any]
     ) -> str | None:
-        """The applied-audit entry's `target_id` (AC11): the value of the
+        """Every action audit entry's `target_id` (AC11, #49): the value of the
         action's declared target parameter -- the `ActionParameterDef` with
         `scope_semantics="target"`, else the first param whose `refers_to`
         matches `action_def.target_type` -- never a guess at the handler's

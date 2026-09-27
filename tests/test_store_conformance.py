@@ -2988,14 +2988,18 @@ def test_audit_entries_round_trip_every_field(store: Store) -> None:
         target_type="Ticket",
         target_id="ticket-9",
         params={"a": 1},
-        outcome="ok",
+        outcome="error",
         writes=[WriteRecord(op="create", object_type="Widget", object_id="w-1")],
         capability_accesses=[CapabilityAccessRecord(api_name="llm", count=3)],
         unscoped_params=["product_id"],
+        error_code="PRECONDITION_FAILED",
     )
     store.append_audit(entry)
 
     got = store.audit_entries()[0]
+    # #49: pinned by name too, so the loop below cannot pass vacuously
+    # before `error_code` is a declared field.
+    assert got.error_code == "PRECONDITION_FAILED"
     for field in AuditEntry.model_fields:
         assert getattr(got, field) == getattr(entry, field), field
 
