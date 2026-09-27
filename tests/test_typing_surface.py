@@ -562,3 +562,27 @@ def test_paged_row_is_not_on_the_front_door() -> None:
     # never on a consumer-visible model (AC8) -- and must never be exported
     # from the `ontary` front door.
     assert not hasattr(ontary, "PagedRow")
+
+
+def test_misspelled_authoring_literals_are_type_errors() -> None:
+    # ontary#39: `cardinality` and `scope` are `Literal`-typed, so a typo is a
+    # mypy error, not only a runtime `ONTOLOGY_INVALID`. `warn_unused_ignores`
+    # pins the negative case (same device as the aggregate test above): the
+    # ignore fails mypy the moment the annotation starts accepting the typo.
+    ontology = Ontology(name="typing-39", scope_levels=["org"])
+
+    @ontology.object(layer="L0", scope="unscoped")
+    class Left(OntologyObject):
+        id: str = prop(primary_key=True)
+
+    @ontology.object(layer="L0", scope="unscoped")
+    class Right(OntologyObject):
+        id: str = prop(primary_key=True)
+
+    with raises_code(ValidationFailed, "ONTOLOGY_INVALID"):
+        ontology.link("leftRight", Left, Right, "MANY_TO_MNY")  # type: ignore[arg-type]
+    with raises_code(ValidationFailed, "ONTOLOGY_INVALID"):
+
+        @ontology.object(layer="L0", scope="unscpoed")  # type: ignore[arg-type]
+        class Typo(OntologyObject):
+            id: str = prop(primary_key=True)

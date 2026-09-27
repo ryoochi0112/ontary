@@ -343,8 +343,12 @@ ERROR_CODES: dict[str, ErrorCodeInfo] = {
     "ONTOLOGY_INVALID": ErrorCodeInfo(
         kind="validation",
         description=(
-            "`OntologyRegistry.validate()` rejected a declaration because its "
-            "cross-references were invalid."
+            "A declaration was rejected: `validate()` found invalid "
+            "cross-references, or an authoring call (`@ontology.object(...)`, "
+            "`ontology.link(...)`, `.definition`) refused a kwarg of the wrong "
+            "shape: a misspelled `scope`/`cardinality` literal, a rule not "
+            "wrapped in a list, a non-callable `row_visibility`, empty "
+            "`scope_levels`, or `min_n` below 1."
         ),
     ),
     "AUTHORITY_ERROR": ErrorCodeInfo(

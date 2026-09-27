@@ -838,3 +838,184 @@ def test_front_door_exports() -> None:
     assert FrontDoorOntology is Ontology
     assert FrontDoorOntologyObject is OntologyObject
     assert front_door_prop is prop
+
+
+class TestAuthoringMistakesAreOntologyInvalid:
+    """ontary#39: a typo or wrong shape in an authoring kwarg surfaces as
+    `ValidationFailed(code="ONTOLOGY_INVALID")` naming the class (or link),
+    the kwarg, what was given, and the accepted forms -- refused at
+    decoration / call time, never as a bare `ValueError` or a raw pydantic
+    `ValidationError` from deep inside the engine."""
+
+    @staticmethod
+    def _two_unscoped(ontology: Ontology) -> tuple[type[OntologyObject], type[OntologyObject]]:
+        @ontology.object(layer="L0", scope="unscoped")
+        class A(OntologyObject):
+            id: str = prop(primary_key=True)
+
+        @ontology.object(layer="L0", scope="unscoped")
+        class B(OntologyObject):
+            id: str = prop(primary_key=True)
+
+        return A, B
+
+    def test_misspelled_cardinality_is_ontology_invalid(self) -> None:
+        ontology = Ontology(name="t", scope_levels=["org"])
+        a, b = self._two_unscoped(ontology)
+
+        with raises_code(ValidationFailed, "ONTOLOGY_INVALID") as exc_info:
+            ontology.link("ab", a, b, "MANY_TO_MNY")
+        message = str(exc_info.value)
+        assert "'ab'" in message
+        assert "MANY_TO_MNY" in message
+        for name in ("ONE_TO_ONE", "ONE_TO_MANY", "MANY_TO_ONE", "MANY_TO_MANY"):
+            assert name in message
+        # Nothing was registered by the refused call.
+        assert "ab" not in ontology.registry.link_types
+
+    def test_cardinality_still_accepts_member_and_its_name(self) -> None:
+        ontology = Ontology(name="t", scope_levels=["org"])
+        a, b = self._two_unscoped(ontology)
+        ontology.link("ab", a, b, Cardinality.MANY_TO_ONE)
+        ontology.link("ba", b, a, "ONE_TO_MANY")
+        assert ontology.registry.link_types["ba"].cardinality is Cardinality.ONE_TO_MANY
+
+    def test_misspelled_scope_literal_is_ontology_invalid_at_decoration(self) -> None:
+        ontology = Ontology(name="t", scope_levels=["org"])
+
+        with raises_code(ValidationFailed, "ONTOLOGY_INVALID") as exc_info:
+
+            @ontology.object(layer="L0", scope="unscpoed")
+            class Thing(OntologyObject):
+                id: str = prop(primary_key=True)
+
+        message = str(exc_info.value)
+        assert "'Thing'" in message
+        assert "scope=" in message
+        assert "'unscpoed'" in message
+        assert '"unscoped"' in message
+        assert "ScopeRule" in message
+        # Refused before registration: the class is not on the ontology.
+        assert "Thing" not in ontology.registry.object_types
+
+    def test_scope_of_wrong_type_is_ontology_invalid_at_decoration(self) -> None:
+        ontology = Ontology(name="t", scope_levels=["org"])
+
+        with raises_code(ValidationFailed, "ONTOLOGY_INVALID") as exc_info:
+
+            @ontology.object(layer="L0", scope=SelfScope(level="org"))
+            class Thing(OntologyObject):
+                id: str = prop(primary_key=True)
+
+        message = str(exc_info.value)
+        assert "'Thing'" in message
+        assert "scope=" in message
+        assert "SelfScope" in message  # what was given
+        assert "list" in message  # the accepted form
+
+    def test_scope_list_with_non_rule_element_is_ontology_invalid(self) -> None:
+        ontology = Ontology(name="t", scope_levels=["org"])
+
+        with raises_code(ValidationFailed, "ONTOLOGY_INVALID") as exc_info:
+
+            @ontology.object(
+                layer="L0",
+                scope=[DirectProperty(level="org", property_name="org_id"), "org"],
+            )
+            class Thing(OntologyObject):
+                id: str = prop(primary_key=True)
+                org_id: str
+
+        message = str(exc_info.value)
+        assert "'Thing'" in message
+        assert "scope=" in message
+        assert "'org'" in message  # the offending element, not the whole list
+        assert "ScopeRule" in message
+
+    def test_scope_accepts_any_sequence_of_rules(self) -> None:
+        ontology = Ontology(name="t", scope_levels=["org"])
+        rules = (SelfScope(level="org"),)
+
+        @ontology.object(layer="L0", scope=rules)
+        class Thing(OntologyObject):
+            id: str = prop(primary_key=True)
+
+        assert ontology.definition.policy.rules == {"Thing": [SelfScope(level="org")]}
+
+    def test_contributor_shape_checked_at_decoration(self) -> None:
+        ontology = Ontology(name="t", scope_levels=["org"])
+
+        with raises_code(ValidationFailed, "ONTOLOGY_INVALID") as exc_info:
+
+            @ontology.object(
+                layer="L0", scope="unscoped", contributor=SelfScope(level="org")
+            )
+            class Thing(OntologyObject):
+                id: str = prop(primary_key=True)
+
+        message = str(exc_info.value)
+        assert "'Thing'" in message
+        assert "contributor=" in message
+        assert "SelfScope" in message
+        assert "list" in message
+
+    def test_contributor_unscoped_points_at_scope_kwarg(self) -> None:
+        ontology = Ontology(name="t", scope_levels=["org"])
+
+        with raises_code(ValidationFailed, "ONTOLOGY_INVALID") as exc_info:
+
+            @ontology.object(layer="L0", scope="unscoped", contributor="unscoped")
+            class Thing(OntologyObject):
+                id: str = prop(primary_key=True)
+
+        message = str(exc_info.value)
+        assert "contributor=" in message
+        assert "'unscoped'" in message
+        assert "scope=" in message  # the kwarg the author probably meant
+
+    def test_row_visibility_must_be_callable(self) -> None:
+        ontology = Ontology(name="t", scope_levels=["org"])
+
+        with raises_code(ValidationFailed, "ONTOLOGY_INVALID") as exc_info:
+
+            @ontology.object(layer="L0", scope="unscoped", row_visibility="hide")
+            class Thing(OntologyObject):
+                id: str = prop(primary_key=True)
+
+        message = str(exc_info.value)
+        assert "'Thing'" in message
+        assert "row_visibility=" in message
+        assert "'hide'" in message
+        assert "callable" in message
+
+    def test_empty_scope_levels_is_ontology_invalid(self) -> None:
+        ontology = Ontology(name="t", scope_levels=[])
+        self._two_unscoped(ontology)
+
+        with raises_code(ValidationFailed, "ONTOLOGY_INVALID") as exc_info:
+            ontology.definition
+        message = str(exc_info.value)
+        assert "'t'" in message
+        assert "scope_levels" in message
+        assert "empty" in message
+
+    def test_duplicate_scope_levels_is_ontology_invalid(self) -> None:
+        ontology = Ontology(name="t", scope_levels=["org", "org"])
+        self._two_unscoped(ontology)
+
+        with raises_code(ValidationFailed, "ONTOLOGY_INVALID") as exc_info:
+            ontology.definition
+        message = str(exc_info.value)
+        assert "scope_levels" in message
+        assert "duplicate" in message
+
+    def test_min_n_below_one_is_ontology_invalid(self) -> None:
+        ontology = Ontology(name="t", scope_levels=["org"], min_n=0)
+        self._two_unscoped(ontology)
+
+        with raises_code(ValidationFailed, "ONTOLOGY_INVALID") as exc_info:
+            ontology.definition
+        message = str(exc_info.value)
+        assert "'t'" in message
+        assert "min_n=0" in message
+        assert ">= 1" in message

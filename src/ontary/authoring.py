@@ -28,7 +28,7 @@ from typing import (
     overload,
 )
 
-from pydantic import Field
+from pydantic import Field, ValidationError
 
 from ontary.actions import ActionContext, TypedHandler
 from ontary.client import OntologyRuntime
@@ -384,6 +384,64 @@ _F = TypeVar("_F", bound=OntologyObject)
 _ProviderT_co = TypeVar("_ProviderT_co", covariant=True)
 
 
+# The four `Cardinality` member names, spelled out so a misspelled string is a
+# mypy error at the call site (ontary#39) -- runtime still accepts any `str`
+# that names a member, only the annotation narrows.
+CardinalityName = Literal["ONE_TO_ONE", "ONE_TO_MANY", "MANY_TO_ONE", "MANY_TO_MANY"]
+
+_SCOPE_RULE_TYPES: tuple[type, ...] = get_args(ScopeRule)
+_SCOPE_RULE_NAMES = ", ".join(t.__name__ for t in _SCOPE_RULE_TYPES)
+
+
+def _refuse_kwarg(cls_name: str, kwarg: str, given: object, accepted: str) -> ValidationFailed:
+    return ValidationFailed(
+        f"{cls_name!r}: {kwarg}={given!r} is not accepted by "
+        f"@ontology.object(...); {kwarg}= takes {accepted}",
+        code="ONTOLOGY_INVALID",
+    )
+
+
+def _check_rule_sequence(cls_name: str, kwarg: str, given: object, accepted: str) -> None:
+    """Refuse anything but a non-str sequence whose every element is a
+    `ScopeRule`; name the offending element when one element is wrong."""
+    if isinstance(given, (str, bytes)) or not isinstance(given, Sequence):
+        hint = f"; wrap a single rule in a list: {kwarg}=[{given!r}]" if isinstance(
+            given, _SCOPE_RULE_TYPES
+        ) else ""
+        raise _refuse_kwarg(cls_name, kwarg, given, accepted + hint)
+    for element in given:
+        if not isinstance(element, _SCOPE_RULE_TYPES):
+            raise ValidationFailed(
+                f"{cls_name!r}: {kwarg}= element {element!r} is not a ScopeRule "
+                f"({_SCOPE_RULE_NAMES}); {kwarg}= takes {accepted}",
+                code="ONTOLOGY_INVALID",
+            )
+
+
+def _check_scope_kwargs(
+    cls_name: str, scope: object, contributor: object, row_visibility: object
+) -> None:
+    """Shape-check the `scope`/`contributor`/`row_visibility` kwargs at
+    decoration time (ontary#39) so a typo is refused where it was written,
+    with `ONTOLOGY_INVALID`, instead of surfacing later from `.definition`
+    as a raw pydantic error deep inside `ScopePolicy`."""
+    rules_accepted = f"a list of ScopeRule ({_SCOPE_RULE_NAMES})"
+    if scope is not None and scope != "unscoped":
+        _check_rule_sequence(
+            cls_name, "scope", scope, f'the literal "unscoped" or {rules_accepted}'
+        )
+    if contributor is not None:
+        hint = ' (did you mean scope="unscoped"?)' if contributor == "unscoped" else ""
+        _check_rule_sequence(cls_name, "contributor", contributor, rules_accepted + hint)
+    if row_visibility is not None and not callable(row_visibility):
+        raise _refuse_kwarg(
+            cls_name,
+            "row_visibility",
+            row_visibility,
+            "a callable (store, consumer, obj_type, row) -> bool",
+        )
+
+
 class Ontology:
     """Authoring facade: accumulates an `OntologyRegistry` plus, per
     registered class, its derived `ObjectTypeDef` and the scope/
@@ -511,17 +569,20 @@ class Ontology:
         api_name: str | None = None,
         description: str | None = None,
         display_name: str | None = None,
-        scope: Any = None,
-        contributor: Any = None,
-        row_visibility: Any = None,
+        scope: Literal["unscoped"] | Sequence[ScopeRule] | None = None,
+        contributor: Sequence[ScopeRule] | None = None,
+        row_visibility: RowVisibilityFn | None = None,
     ) -> Callable[[type[_C]], type[_C]]:
         """Derives an `ObjectTypeDef` from `model_fields` and registers it.
-        `scope`/`contributor`/`row_visibility` are stored per-class and
-        assembled into the `ScopePolicy` lazily, by `.definition`.
+        `scope`/`contributor`/`row_visibility` are shape-checked at decoration
+        time (a typo raises `ValidationFailed` with code `ONTOLOGY_INVALID`
+        naming the class and the kwarg), then stored per-class and assembled
+        into the `ScopePolicy` lazily, by `.definition`.
         """
 
         def decorator(cls: type[_C]) -> type[_C]:
             self._check_not_frozen(f"object type {cls.__name__!r}")
+            _check_scope_kwargs(cls.__name__, scope, contributor, row_visibility)
             existing_registry = cls.__dict__.get("_ontary_registry")
             if existing_registry is not None and existing_registry is not self.registry:
                 raise ValidationFailed(
@@ -571,7 +632,7 @@ class Ontology:
         api_name: str,
         from_cls: type[_F],
         to_cls: type[_T],
-        cardinality: Cardinality | str,
+        cardinality: Cardinality | CardinalityName,
         *,
         description: str | None = None,
         identity_revealing: bool = False,
@@ -579,13 +640,25 @@ class Ontology:
     ) -> LinkHandle[_F, _T]:
         """Derives + registers a `LinkTypeDef` between two classes already
         registered on THIS ontology (raises `ValidationFailed` with code
-        `ONTOLOGY_INVALID` for a class registered elsewhere or not at all) and returns a
+        `ONTOLOGY_INVALID` for a class registered elsewhere or not at all, or
+        for a `cardinality` that names no `Cardinality` member) and returns a
         `LinkHandle` for statically-typed traversal.
         """
         self._check_not_frozen(f"link {api_name!r}")
         from_type = self._registered_api_name(from_cls)
         to_type = self._registered_api_name(to_cls)
-        card = cardinality if isinstance(cardinality, Cardinality) else Cardinality(cardinality)
+        if isinstance(cardinality, Cardinality):
+            card = cardinality
+        else:
+            try:
+                card = Cardinality(cardinality)
+            except ValueError:
+                valid = ", ".join(member.value for member in Cardinality)
+                raise ValidationFailed(
+                    f"link {api_name!r}: cardinality={cardinality!r} is not a "
+                    f"Cardinality; pass a Cardinality member or one of {valid}",
+                    code="ONTOLOGY_INVALID",
+                ) from None
         link_def = LinkTypeDef(
             api_name=api_name,
             from_type=from_type,
@@ -755,14 +828,33 @@ class Ontology:
             if fn is not None:
                 row_visibility[api_name] = fn
 
-        return ScopePolicy(
-            levels=self.scope_levels,
-            unscoped_types=unscoped_types,
-            rules=rules,
-            contributor_rules=contributor_rules,
-            row_visibility=row_visibility,
-            min_n=self.min_n,
-        )
+        try:
+            return ScopePolicy(
+                levels=self.scope_levels,
+                unscoped_types=unscoped_types,
+                rules=rules,
+                contributor_rules=contributor_rules,
+                row_visibility=row_visibility,
+                min_n=self.min_n,
+            )
+        except ValidationError as exc:
+            # Only `Ontology(...)`'s own kwargs can fail here: `scope_levels`
+            # (empty / duplicated) and `min_n` (< 1). Per-class kwargs were
+            # already shape-checked at decoration (`_check_scope_kwargs`).
+            raise ValidationFailed(
+                f"Ontology {self.name!r}: "
+                + "; ".join(self._describe_policy_error(err) for err in exc.errors()),
+                code="ONTOLOGY_INVALID",
+            ) from None
+
+    def _describe_policy_error(self, err: Mapping[str, Any]) -> str:
+        field = err["loc"][0] if err["loc"] else "?"
+        if field == "levels":
+            detail = str(err["msg"]).removeprefix("Value error, ")
+            return f"scope_levels={self.scope_levels!r} rejected: {detail}"
+        if field == "min_n":
+            return f"min_n={self.min_n!r} rejected: min_n must be >= 1"
+        return f"{field}: {err['msg']}"
 
     @property
     def definition(self) -> OntologyDef:

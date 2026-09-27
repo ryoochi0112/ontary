@@ -152,6 +152,9 @@ SDK 利用者向けのテストヘルパーは `make_store`、`consumer`、`rais
 | `scope_levels` | `list[str]` | 自分で決める階層（粗い方を後ろに）。例: `["queue", "org"]`。組み込みのレベルは存在しません。 |
 | `min_n` | `int` = `3` | 集計に必要な異なる寄与者数の下限。 |
 
+空または重複した `scope_levels`、1 未満の `min_n` は、`.definition` を最初に
+構築した時点で `ValidationFailed`（`ONTOLOGY_INVALID`）として拒否されます。
+
 宣言用メソッド（`link` 以外はデコレータ）:
 
 | メソッド | 役割 |
@@ -168,7 +171,7 @@ SDK 利用者向けのテストヘルパーは `make_store`、`consumer`、`rais
 `object`/`link`/`action`/`function` 呼び出しは例外になります。すべての宣言を終えた
 あとに 1 回だけ呼んでください。
 
-#### `@ontology.object(*, layer, owned=False, api_name=None, description=None, display_name=None, scope=None, contributor=None, row_visibility=None)`
+#### `@ontology.object(*, layer, owned=False, api_name=None, description=None, display_name=None, scope: Literal["unscoped"] | Sequence[ScopeRule] | None = None, contributor: Sequence[ScopeRule] | None = None, row_visibility: RowVisibilityFn | None = None)`
 
 デコレート対象の `OntologyObject` サブクラスを登録します。
 
@@ -185,10 +188,18 @@ SDK 利用者向けのテストヘルパーは `make_store`、`consumer`、`rais
 - **`row_visibility`** — `(store, consumer, obj_id, payload) -> bool`。スコープの上に
   重ねる行単位の追加ゲート。
 
-#### `ontology.link(api_name, from_cls, to_cls, cardinality, *, description=None, identity_revealing=False, owned=False) -> LinkHandle`
+`scope`・`contributor`・`row_visibility` はデコレート時に形を検査します。
+`"unscoped"` の綴り間違い、リストで包んでいない単一ルール、callable でない
+`row_visibility` は、その場で `ValidationFailed`（`ONTOLOGY_INVALID`）になります。
+メッセージにはクラス名・引数名・渡された値・受け付ける形が入ります。`Literal`
+注釈により、綴り間違いの文字列は mypy でもエラーになります。
+
+#### `ontology.link(api_name, from_cls, to_cls, cardinality: Cardinality | Literal["ONE_TO_ONE", "ONE_TO_MANY", "MANY_TO_ONE", "MANY_TO_MANY"], *, description=None, identity_revealing=False, owned=False) -> LinkHandle`
 
 `cardinality` は `Cardinality` 列挙体のメンバー、またはその名前文字列:
-`ONE_TO_ONE`、`ONE_TO_MANY`、`MANY_TO_ONE`、`MANY_TO_MANY`。
+`ONE_TO_ONE`、`ONE_TO_MANY`、`MANY_TO_ONE`、`MANY_TO_MANY`。それ以外の文字列は
+`ValidationFailed`（`ONTOLOGY_INVALID`）で拒否され、メッセージにこの 4 つの名前が
+列挙されます。`Literal` 注釈により、綴り間違いは mypy でもエラーになります。
 
 `identity_revealing=True` は、**人間**コンシューマーからの traverse を拒否することを
 意味します（AI コンシューマーは辿れます）。返される `LinkHandle` を
@@ -1256,7 +1267,7 @@ MCP サーバーでは、この実行時ではなくトランスポートによ�
 | `OBJECT_NOT_FOUND` | An update targeted a non-existent object. |
 | `OBJECT_RETIRE_NOT_FOUND` | A retirement targeted an object with no stored row. |
 | `PRIMARY_KEY_IMMUTABLE` | An update tried to change an object's primary key; a primary key is immutable, so retire the object and insert a new one instead. |
-| `ONTOLOGY_INVALID` | `OntologyRegistry.validate()` rejected a declaration because its cross-references were invalid. |
+| `ONTOLOGY_INVALID` | A declaration was rejected: `validate()` found invalid cross-references, or an authoring call (`@ontology.object(...)`, `ontology.link(...)`, `.definition`) refused a kwarg of the wrong shape: a misspelled `scope`/`cardinality` literal, a rule not wrapped in a list, a non-callable `row_visibility`, empty `scope_levels`, or `min_n` below 1. |
 | `SCOPE_POLICY_ERROR` | A ScopePolicy declaration is unusable: a rule references an undeclared object type, link type, or scope level; a type declares an empty contributor rule list; a type is listed in unscoped_types while also declaring scope rules; or an action's scope parameter refers to an unscoped type. |
 | `UNDECLARED_CAPABILITY` | A handler requested a capability its action or function did not declare. |
 | `UNKNOWN_ACTION` | An action name is unregistered on the OntologyRegistry, or has no handler bound to it. |

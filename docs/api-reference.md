@@ -156,6 +156,9 @@ declared handlers, then hands out runtimes.
 | `scope_levels` | `list[str]` | Your own hierarchy, coarsest last — e.g. `["queue", "org"]`. There are no built-in levels. |
 | `min_n` | `int` = `3` | Minimum distinct contributors for any aggregate. |
 
+An empty or duplicated `scope_levels`, or `min_n` below 1, is refused with
+`ValidationFailed` (`ONTOLOGY_INVALID`) when `.definition` is first built.
+
 Declaration methods, all decorators except `link`:
 
 | Method | Purpose |
@@ -172,7 +175,7 @@ Declaration methods, all decorators except `link`:
 `object`/`link`/`action`/`function` call raises. Call it once, after every
 declaration.
 
-#### `@ontology.object(*, layer, owned=False, api_name=None, description=None, display_name=None, scope=None, contributor=None, row_visibility=None)`
+#### `@ontology.object(*, layer, owned=False, api_name=None, description=None, display_name=None, scope: Literal["unscoped"] | Sequence[ScopeRule] | None = None, contributor: Sequence[ScopeRule] | None = None, row_visibility: RowVisibilityFn | None = None)`
 
 Registers the decorated `OntologyObject` subclass.
 
@@ -191,10 +194,18 @@ Registers the decorated `OntologyObject` subclass.
 - **`row_visibility`** — `(store, consumer, obj_id, payload) -> bool`, an extra
   per-row gate applied on top of scope.
 
-#### `ontology.link(api_name, from_cls, to_cls, cardinality, *, description=None, identity_revealing=False, owned=False) -> LinkHandle`
+`scope`, `contributor`, and `row_visibility` are shape-checked when the class is
+decorated. A misspelled `"unscoped"`, a single rule not wrapped in a list, or a
+non-callable `row_visibility` raises `ValidationFailed` (`ONTOLOGY_INVALID`) right
+there, naming the class, the kwarg, what was given, and the accepted forms. The
+`Literal` annotation makes the misspelled string a mypy error as well.
+
+#### `ontology.link(api_name, from_cls, to_cls, cardinality: Cardinality | Literal["ONE_TO_ONE", "ONE_TO_MANY", "MANY_TO_ONE", "MANY_TO_MANY"], *, description=None, identity_revealing=False, owned=False) -> LinkHandle`
 
 `cardinality` is a `Cardinality` enum member or its string name:
-`ONE_TO_ONE`, `ONE_TO_MANY`, `MANY_TO_ONE`, `MANY_TO_MANY`.
+`ONE_TO_ONE`, `ONE_TO_MANY`, `MANY_TO_ONE`, `MANY_TO_MANY`. Any other string is
+refused with `ValidationFailed` (`ONTOLOGY_INVALID`) listing those four names, and
+the `Literal` annotation makes the typo a mypy error as well.
 
 `identity_revealing=True` means a **human** consumer is refused the traversal
 outright (AI consumers may still follow it). The returned `LinkHandle` is what you
@@ -1275,7 +1286,7 @@ table below is generated from it.
 | `OBJECT_NOT_FOUND` | An update targeted a non-existent object. |
 | `OBJECT_RETIRE_NOT_FOUND` | A retirement targeted an object with no stored row. |
 | `PRIMARY_KEY_IMMUTABLE` | An update tried to change an object's primary key; a primary key is immutable, so retire the object and insert a new one instead. |
-| `ONTOLOGY_INVALID` | `OntologyRegistry.validate()` rejected a declaration because its cross-references were invalid. |
+| `ONTOLOGY_INVALID` | A declaration was rejected: `validate()` found invalid cross-references, or an authoring call (`@ontology.object(...)`, `ontology.link(...)`, `.definition`) refused a kwarg of the wrong shape: a misspelled `scope`/`cardinality` literal, a rule not wrapped in a list, a non-callable `row_visibility`, empty `scope_levels`, or `min_n` below 1. |
 | `SCOPE_POLICY_ERROR` | A ScopePolicy declaration is unusable: a rule references an undeclared object type, link type, or scope level; a type declares an empty contributor rule list; a type is listed in unscoped_types while also declaring scope rules; or an action's scope parameter refers to an unscoped type. |
 | `UNDECLARED_CAPABILITY` | A handler requested a capability its action or function did not declare. |
 | `UNKNOWN_ACTION` | An action name is unregistered on the OntologyRegistry, or has no handler bound to it. |
