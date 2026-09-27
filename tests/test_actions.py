@@ -4859,6 +4859,8 @@ def test_action_context_unlink_requires_action_transaction(
         action_types=ACTION_TYPES,
     )
     store = make_store(registry)
+    _seed_shelves(store)
+    store.insert("Book", {"id": "book-1"}, SRC)
     store.create_link("onShelf", "book-1", "shelf-1")
     ctx = ActionContext(
         store,

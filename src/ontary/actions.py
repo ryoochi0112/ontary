@@ -176,7 +176,13 @@ class ActionContext:
         self._store.update(obj_type, obj_id, changes, self._source)
 
     def create_link(self, link_api_name: str, from_id: str, to_id: str) -> None:
-        """Create a link between two existing objects."""
+        """Create a link between two live objects.
+
+        Both ids must have a live row of the link type's declared endpoint
+        type -- an object this action inserted earlier in the same
+        transaction counts -- or the store refuses with
+        `LINK_ENDPOINT_NOT_FOUND` (#36) and writes nothing.
+        """
         self._store.create_link(link_api_name, from_id, to_id)
 
     def _require_action_transaction(self, operation: str) -> None:

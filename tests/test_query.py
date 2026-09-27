@@ -1114,7 +1114,13 @@ def test_guarded_read_hides_row_when_absent_parent_id_matches_scanned_row(
     store = make_store(registry)
     store.insert("Book", {"id": "book-x"}, SRC)
     store.insert("Book", {"id": "book-y"}, SRC)
+    # A Shelf sharing the Book's id, retired after the link is made (#36 no
+    # longer lets a link point at a never-inserted id): `read_current("Shelf",
+    # "book-x")` is None, but a lookup that dropped `obj_type` would find the
+    # live Book and disclose `book-y`.
+    store.insert("Shelf", {"id": "book-x"}, SRC)
     store.create_link("onShelf", "book-y", "book-x")
+    store.retire_object("Shelf", "book-x")
     query = GuardedQuery(store, registry, _library_policy(make_policy))
 
     rows = query.get_objects(_human("shelf", "book-x"), "Book", limit=None)

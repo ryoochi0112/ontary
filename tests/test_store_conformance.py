@@ -1955,7 +1955,17 @@ def test_read_page_unregistered_object_type_returns_empty_not_raise(store: Store
 # -- links + cardinality ----------------------------------------------------
 
 
+def _seed_teams_and_departments(store: Store, *ids: str) -> None:
+    """Insert live `Team`/`Department` rows for the fixed ids the link tests
+    use; since #36 a link needs a live object at both ends."""
+    src = Source(source_system="synthetic")
+    for obj_id in ids:
+        obj_type = "Team" if obj_id.startswith("team-") else "Department"
+        store.insert(obj_type, {"id": obj_id, "name": obj_id}, src)
+
+
 def test_create_link_and_links_from_links_to(store: Store) -> None:
+    _seed_teams_and_departments(store, "team-1", "team-2", "dept-a")
     store.create_link("belongsToDepartment", "team-1", "dept-a")
     store.create_link("belongsToDepartment", "team-2", "dept-a")
 
@@ -1967,10 +1977,77 @@ def test_create_link_and_links_from_links_to(store: Store) -> None:
     assert store.links_from("belongsToDepartment", "team-unknown") == []
 
 
+def test_create_link_refuses_a_missing_from_endpoint(store: Store) -> None:
+    """#36: a link to an id that has no live row of the declared endpoint
+    type is refused with `LINK_ENDPOINT_NOT_FOUND`, and nothing is written."""
+    src = Source(source_system="synthetic")
+    department_id = store.insert("Department", {"name": "Ops"}, src)
+
+    with raises_code(ValidationFailed, "LINK_ENDPOINT_NOT_FOUND") as excinfo:
+        store.create_link("belongsToDepartment", "team-missing", department_id)
+
+    assert "Team" in str(excinfo.value)
+    assert "team-missing" in str(excinfo.value)
+    assert store.links_to("belongsToDepartment", department_id) == []
+
+
+def test_create_link_refuses_a_missing_to_endpoint(store: Store) -> None:
+    src = Source(source_system="synthetic")
+    team_id = store.insert("Team", {"name": "Rockets"}, src)
+
+    with raises_code(ValidationFailed, "LINK_ENDPOINT_NOT_FOUND") as excinfo:
+        store.create_link("belongsToDepartment", team_id, "dept-missing")
+
+    assert "Department" in str(excinfo.value)
+    assert "dept-missing" in str(excinfo.value)
+    assert store.links_from("belongsToDepartment", team_id) == []
+
+
+def test_create_link_refuses_a_retired_endpoint(store: Store) -> None:
+    """A retired object is not a live endpoint either: same code, and the
+    message says so, because the remedy differs from a typo."""
+    src = Source(source_system="synthetic")
+    department_id = store.insert("Department", {"name": "Ops"}, src)
+    team_id = store.insert("Team", {"name": "Rockets"}, src)
+    store.retire_object("Team", team_id)
+
+    with raises_code(ValidationFailed, "LINK_ENDPOINT_NOT_FOUND") as excinfo:
+        store.create_link("belongsToDepartment", team_id, department_id)
+
+    assert "retired" in str(excinfo.value)
+    assert store.links_to("belongsToDepartment", department_id) == []
+
+
+def test_create_link_checks_endpoints_before_cardinality(store: Store) -> None:
+    """Order is frozen: an endpoint that does not exist is reported as such
+    even when the same write would also break cardinality."""
+    src = Source(source_system="synthetic")
+    department_id = store.insert("Department", {"name": "Ops"}, src)
+    team_id = store.insert("Team", {"name": "Rockets"}, src)
+    store.create_link("belongsToDepartment", team_id, department_id)
+
+    with raises_code(ValidationFailed, "LINK_ENDPOINT_NOT_FOUND"):
+        store.create_link("belongsToDepartment", team_id, "dept-missing")
+
+
+def test_create_link_accepts_an_endpoint_of_the_wrong_type_id_only_if_live(
+    store: Store,
+) -> None:
+    """The check is per declared endpoint TYPE: an id that is live as a
+    Company is not a live Department, so `to_type` is what is looked up."""
+    src = Source(source_system="synthetic")
+    team_id = store.insert("Team", {"name": "Rockets"}, src)
+    company_id = store.insert("Company", {"name": "Acme"}, src)
+
+    with raises_code(ValidationFailed, "LINK_ENDPOINT_NOT_FOUND"):
+        store.create_link("belongsToDepartment", team_id, company_id)
+
+
 def test_create_link_many_to_one_second_parent_raises_cardinality(
     store: Store,
 ) -> None:
     """A MANY_TO_ONE from_id cannot point at two distinct targets."""
+    _seed_teams_and_departments(store, "team-1", "team-2", "dept-a", "dept-b")
     store.create_link("belongsToDepartment", "team-1", "dept-a")
 
     with raises_code(ConflictError, "CARDINALITY_VIOLATION"):
@@ -1981,6 +2058,7 @@ def test_create_link_many_to_one_second_parent_raises_cardinality(
 
 
 def test_close_link_closes_live_row_without_inserting(store: Store) -> None:
+    _seed_teams_and_departments(store, "team-1", "dept-a")
     store.create_link("belongsToDepartment", "team-1", "dept-a")
 
     assert store.close_link("belongsToDepartment", "team-1", "dept-a") is True
@@ -2000,6 +2078,7 @@ def test_close_link_missing_live_link_raises_coded_refusal(store: Store) -> None
 def test_close_link_then_create_link_repoints_one_to_one(
     one_to_one_store: Store,
 ) -> None:
+    _seed_teams_and_departments(one_to_one_store, "team-1", "dept-a", "dept-b")
     one_to_one_store.create_link("assignedDepartment", "team-1", "dept-a")
 
     with raises_code(ConflictError, "CARDINALITY_VIOLATION"):
@@ -2020,6 +2099,7 @@ def test_create_link_one_to_many_second_from_id_to_same_target_raises_cardinalit
     cardinality check) is the one that fires here: a *different* from_id
     targeting an already-linked to_id must raise, while the *same* from_id
     linking to further, distinct to_ids must not."""
+    _seed_teams_and_departments(one_to_many_store, "team-1", "team-2", "dept-a", "dept-b")
     one_to_many_store.create_link("hasTeam", "dept-a", "team-1")
 
     with raises_code(ConflictError, "CARDINALITY_VIOLATION"):
@@ -2123,7 +2203,15 @@ def test_capture_refuses_create_link_on_non_owned_link_type(
     assert writes == []
 
 
+def _seed_authority_endpoints(store: Store) -> None:
+    src = Source(source_system="connector")
+    store.insert("Ticket", {"id": "ticket-1", "status": "open"}, src)
+    store.insert("Company", {"id": "company-1", "name": "Acme"}, src)
+    store.insert("Escalation", {"id": "esc-1", "reason": "slow"}, src)
+
+
 def test_capture_allows_owned_link_and_records_write(authority_store: Store) -> None:
+    _seed_authority_endpoints(authority_store)
     with authority_store.capture_action_writes() as writes:
         authority_store.create_link("ownedLink", "esc-1", "ticket-1")
 
@@ -2162,6 +2250,7 @@ def test_capture_refuses_retire_on_source_backed_type(
 
 
 def test_capture_records_unlink_write(authority_store: Store) -> None:
+    _seed_authority_endpoints(authority_store)
     authority_store.create_link("ownedLink", "esc-1", "ticket-1")
 
     with authority_store.capture_action_writes() as writes:
@@ -2175,6 +2264,7 @@ def test_capture_records_unlink_write(authority_store: Store) -> None:
 def test_capture_refuses_unlink_on_source_backed_link_type(
     authority_store: Store,
 ) -> None:
+    _seed_authority_endpoints(authority_store)
     authority_store.create_link("sourceLink", "ticket-1", "company-1")
 
     with authority_store.capture_action_writes() as writes:

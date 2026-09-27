@@ -585,7 +585,7 @@ Action は、型付きパラメータクラスと、
 | --- | --- |
 | `.insert(obj_type, payload) -> str` | 作成。primary key を省略した payload には、ランタイムの `id_factory` から自動で採番される。すでに有効な primary key は `OBJECT_ALREADY_EXISTS` で拒否される |
 | `.update(obj_type, obj_id, changes)` | 更新。primary key を別の値に変える変更は `PRIMARY_KEY_IMMUTABLE` で拒否される |
-| `.create_link(link_api_name, from_id, to_id)` | リンク作成 |
+| `.create_link(link_api_name, from_id, to_id)` | リンク作成。両端の id はリンク型が宣言する端点型の有効なオブジェクトである必要があり、そうでなければ `LINK_ENDPOINT_NOT_FOUND` で拒否 |
 | `.retire(obj_type, obj_id)` | オブジェクトをリタイアし、そのオブジェクト型についてリンク型が宣言している側でそのオブジェクトを参照するすべての live link を cascade-close |
 | `.unlink(link_api_name, from_id, to_id)` | 1 本の live link を閉じる |
 | `.read_current(obj_type, obj_id) -> StoredObject \| None` | 読み取り |
@@ -806,6 +806,12 @@ capture_action_writes() -> ContextManager[list[WriteRecord]]
 インデックスでもこれを保証します。retire 済みのオブジェクトの id は再び insert
 でき、新しい有効な行が始まります。
 
+`create_link` は両端に有効なオブジェクトを必要とします。各 id はリンク型が宣言する
+`from_type` / `to_type` で検索します。存在しない id、retire 済みの id、別の型としてのみ
+有効な id は `ValidationFailed`（code `LINK_ENDPOINT_NOT_FOUND`）で拒否し、リンク行は
+書き込みません。端点の検査はカーディナリティより先に行います。同じアクション
+トランザクション内で先に insert したオブジェクトは有効として扱います。
+
 primary key は変更できません。`update` は、primary key を別の値に変える変更を
 `ValidationFailed`（code `PRIMARY_KEY_IMMUTABLE`）で拒否し、ストアは変更しません。
 これにより、ストアの id と payload の primary key は常に一致します。現在と同じ値を
@@ -970,7 +976,9 @@ client.ingest_links(
 宣言された形状に対して検証されます。主キーの欠落、必須プロパティの欠落、未知の
 プロパティ、型の不一致は `INVALID_RECORD` になります。オントロジー所有の型への
 書き込みは `OWNED_TYPE_REFUSED`、オントロジー所有プロパティの指定は
-`OWNED_PROPERTY_REFUSED` になります。
+`OWNED_PROPERTY_REFUSED` になります。端点に有効な行がないリンクのペアは、
+カーディナリティ違反と同様にペア単位で `LINK_ENDPOINT_NOT_FOUND` として拒否します。
+他のペアはそのまま登録されるため、オブジェクトをリンクより先に ingest してください。
 
 ---
 
@@ -1226,6 +1234,7 @@ MCP サーバーでは、この実行時ではなくトランスポートによ�
 | `STALE_CURSOR` | An ordered walk's cursor resolved to a row that is no longer current; restart the ordered walk from the first page. |
 | `INVALID_PARAMS` | A call's parameters failed declared-shape validation: an action's params, or a read parameter whose SHAPE is wrong -- an `order_by` that is neither a field name nor a (field, direction) pair, or a `where=` that is not a mapping of field name to condition. A parameter naming something that does not exist is `UNKNOWN_FIELD` instead; this code is about the shape, not the name. |
 | `INVALID_RECORD` | A bulk_upsert record failed declared-shape validation (missing primary key, missing required property, unknown property, or a value that does not match its declared type). The validation kind carries the SAME `INVALID_RECORD` code that `bulk_upsert` already reports: from a caller's point of view, a record not matching the declaration is one failure regardless of which write path noticed. This closes the M9 hole where only ingest checked: `Store.insert`/`update` and therefore `ActionContext.insert`/`update` could commit a row missing a required property or carrying a wrong-typed value, report success, and leave the typed reader unable to hydrate it. The same code wraps a Pydantic `ValidationError` while hydrating a stored `OntologyObject` payload (for example, a non-ISO datetime string), never surfacing a bare traceback; a stored row failing declared-shape validation on read-back is the same failure class ingest carries on write. |
+| `LINK_ENDPOINT_NOT_FOUND` | A link creation named an endpoint id with no live row of the link type's declared endpoint type -- missing or retired; a link needs a live object at both ends. |
 | `LINK_NOT_FOUND` | A link closure found no matching live link. |
 | `NON_NUMERIC_AGGREGATE` | `GuardedQuery.aggregate`'s `value_field` is declared a non-numeric `PropertyType` (anything other than `int`/`float`, such as str/json/datetime/bool). It is checked against the declared type before rows are iterated or coerced, so values that merely look numeric cannot bypass the type contract (spec `m35-sdk-refactor` §6 AC7). `func="count"` is exempt and accepts any declared type. |
 | `OBJECT_NOT_FOUND` | An update targeted a non-existent object. |
@@ -1249,7 +1258,7 @@ MCP サーバーでは、この実行時ではなくトランスポートによ�
 | `MIN_N_VIOLATION` | An aggregate would be computed over fewer than min_n distinct contributors. |
 | `VISIBILITY_DENIED` | A single-object read/write targeted an object outside the consumer's scope. |
 
-*全 48 コード / 7 種別。*
+*全 49 コード / 7 種別。*
 
 ---
 
