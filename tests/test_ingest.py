@@ -4,6 +4,7 @@ ingest authority (declared-contracts §3 AC3/AC4/AC5/AC9)."""
 from __future__ import annotations
 
 import pickle
+from datetime import datetime, timezone
 
 import pytest
 from conftest import raises_code
@@ -725,6 +726,50 @@ def test_bulk_upsert_valid_datetime_accepted(
 
     assert report.ok
     assert store.read_current("Team", "team-6") is not None
+
+
+def test_bulk_upsert_aware_datetime_object_accepted_and_stored_as_iso(
+    store: ObjectStore, registry: OntologyRegistry
+) -> None:
+    """#38: a source record may carry a real offset-aware `datetime`; it is
+    stored as its `isoformat()` spelling, the same form a string write takes."""
+    report = bulk_upsert(
+        store,
+        registry,
+        "Team",
+        [
+            {
+                "id": "team-8",
+                "name": "Rockets",
+                "joined_at": datetime(2024, 1, 1, 9, 0, tzinfo=timezone.utc),
+            }
+        ],
+        Source(source_system="synthetic"),
+    )
+
+    assert report.ok, report.errors
+    stored = store.read_current("Team", "team-8")
+    assert stored is not None
+    assert stored.payload["joined_at"] == "2024-01-01T09:00:00+00:00"
+
+
+def test_bulk_upsert_naive_datetime_object_rejected(
+    store: ObjectStore, registry: OntologyRegistry
+) -> None:
+    """A naive `datetime` object has no instant; it is refused with a reason
+    that says so (a naive ISO *string* is still accepted, unchanged)."""
+    report = bulk_upsert(
+        store,
+        registry,
+        "Team",
+        [{"id": "team-9", "name": "Rockets", "joined_at": datetime(2024, 1, 1, 9, 0)}],
+        Source(source_system="synthetic"),
+    )
+
+    assert not report.ok
+    assert "joined_at" in report.errors[0].reason
+    assert "naive" in report.errors[0].reason
+    assert store.read_current("Team", "team-9") is None
 
 
 def test_bulk_upsert_refuses_owned_type_per_record_rest_proceeds(

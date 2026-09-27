@@ -32,7 +32,7 @@ import sys
 import threading
 import uuid
 from collections.abc import Callable
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -120,6 +120,18 @@ def _date_consumer() -> Consumer:
         scope_id="unused-for-unscoped-type",
         kind="human",
     )
+
+
+def _datetime_ontology() -> tuple[Ontology, type[OntologyObject]]:
+    ontology = Ontology("datetime-conformance", scope_levels=["org"], min_n=1)
+
+    @ontology.object(layer="L0", scope="unscoped")
+    class Order(OntologyObject):
+        id: str = prop(primary_key=True)
+        placed_at: datetime
+
+    ontology.validate()
+    return ontology, Order
 
 
 def _choices_ontology() -> tuple[Ontology, type[OntologyObject]]:
@@ -531,6 +543,96 @@ def test_date_insert_rejects_each_invalid_shape_as_invalid_record(
             Source(source_system="test"),
         )
     assert store.read_current("Event", case) is None
+
+
+_JST = timezone(timedelta(hours=9))
+
+
+def test_datetime_object_persists_verbatim_hydrates_and_filters(
+    store_factory: StoreFactory,
+) -> None:
+    """#38: an offset-aware `datetime` is accepted on write and stored as its
+    own `isoformat()` spelling, offset preserved -- the store never rewrites
+    what it persists. The typed read hydrates it back to an equal `datetime`,
+    and the same object works as a `where` operand."""
+    ontology, Order = _datetime_ontology()
+    store = store_factory(ontology.registry)
+    client = OntologyClient(ontology, store, _date_consumer())
+
+    placed_jst = datetime(2026, 8, 25, 12, 30, tzinfo=_JST)
+    store.insert(
+        "Order",
+        {"id": "datetime-object", "placed_at": placed_jst},
+        Source(source_system="test"),
+    )
+    store.insert(
+        "Order",
+        {"id": "iso-string", "placed_at": "2026-08-26T00:00:00+00:00"},
+        Source(source_system="test"),
+    )
+
+    stored = store.read_current("Order", "datetime-object")
+    assert stored is not None
+    assert stored.payload["placed_at"] == "2026-08-25T12:30:00+09:00"
+    assert isinstance(stored.payload["placed_at"], str)
+
+    hydrated = client.get(Order, "datetime-object")
+    assert hydrated is not None
+    assert hydrated.placed_at == placed_jst
+    assert hydrated.placed_at.utcoffset() == timedelta(hours=9)
+
+    by_object = client.list(Order, {"placed_at": placed_jst}, limit=None)
+    assert [order.id for order in by_object] == ["datetime-object"]
+    # Comparison operators match by instant: 03:30Z is the same moment.
+    by_instant = client.list(
+        Order,
+        {"placed_at": {"gte": datetime(2026, 8, 25, 3, 30, tzinfo=timezone.utc)}},
+        limit=None,
+    )
+    assert sorted(order.id for order in by_instant) == ["datetime-object", "iso-string"]
+    by_iso_string = client.list(
+        Order, {"placed_at": "2026-08-26T00:00:00+00:00"}, limit=None
+    )
+    assert [order.id for order in by_iso_string] == ["iso-string"]
+
+
+@pytest.mark.parametrize(
+    ("bad_value", "case", "fragment"),
+    [
+        pytest.param(
+            datetime(2026, 8, 25, 12, 30),
+            "naive-datetime-object",
+            "naive",
+            id="naive-datetime-object",
+        ),
+        pytest.param(
+            date(2026, 8, 25), "date-object", "expected type 'datetime'", id="date-object"
+        ),
+        pytest.param(
+            "2026-08-25", "date-only-string", "time component", id="date-only-string"
+        ),
+        pytest.param(
+            20260825, "wrong-type", "expected type 'datetime'", id="wrong-type"
+        ),
+    ],
+)
+def test_datetime_insert_rejects_each_invalid_shape_as_invalid_record(
+    store_factory: StoreFactory, bad_value: object, case: str, fragment: str
+) -> None:
+    """Each fixture differs from a valid row only in the datetime value's
+    shape. A naive `datetime` object is refused with a message that names
+    the problem, not a bare "got datetime"."""
+    ontology, _Order = _datetime_ontology()
+    store = store_factory(ontology.registry)
+
+    with raises_code(ValidationFailed, "INVALID_RECORD") as exc_info:
+        store.insert(
+            "Order",
+            {"id": case, "placed_at": bad_value},
+            Source(source_system="test"),
+        )
+    assert fragment in str(exc_info.value)
+    assert store.read_current("Order", case) is None
 
 
 def test_choices_declares_persists_hydrates_and_filters_by_equality(

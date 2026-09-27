@@ -16,6 +16,7 @@ import itertools
 import os
 import re
 from collections.abc import Callable
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, NamedTuple, get_args
 
@@ -4933,3 +4934,100 @@ def test_register_private_duplicate_and_unregistered_checks_unchanged(
     executor._register("CheckoutBookTyped", _checkout_ctx_handler, CheckoutParams)
     with pytest.raises(ActionError, match="already registered"):
         executor._register("CheckoutBookTyped", _checkout_ctx_handler, CheckoutParams)
+
+
+# -- datetime parameters (#38) -----------------------------------------------
+
+
+def _datetime_param_client() -> tuple[
+    OntologyClient, ObjectStore, list[Any], type[ActionParams]
+]:
+    """An action whose one parameter is a `datetime`. The handler records
+    what it received so a test can prove the typed instance reaches it
+    untouched while the audit trail holds the JSON string."""
+    ontology = Ontology(name="datetime-params", scope_levels=["org"], min_n=1)
+
+    @ontology.object(layer="L0", scope="unscoped", owned=True)
+    class Order(OntologyObject):
+        id: str = prop(primary_key=True)
+        placed_at: datetime | None = None
+
+    class PlaceOrderParams(ActionParams):
+        order_id: str = target(Order)
+        placed_at: datetime
+
+    received: list[Any] = []
+
+    @ontology.action(
+        PlaceOrderParams, target=Order, roles=["Operator"], api_name="PlaceOrder"
+    )
+    def place_order(ctx: ActionContext, params: PlaceOrderParams) -> dict[str, str]:
+        received.append(params.placed_at)
+        ctx.update("Order", params.order_id, {"placed_at": params.placed_at})
+        return {"order_id": params.order_id}
+
+    ontology.validate()
+    store = ObjectStore(ontology.registry)
+    store.insert("Order", {"id": "order-1"}, SRC)
+    client = OntologyClient(
+        ontology,
+        store,
+        Consumer(
+            actor_id="operator-1",
+            role="Operator",
+            scope_level="org",
+            scope_id="org-1",
+            kind="human",
+        ),
+    )
+    return client, store, received, PlaceOrderParams
+
+
+def test_action_accepts_an_aware_datetime_param_and_handler_writes_it() -> None:
+    """The handler receives the real `datetime`, `ctx.update` accepts it, the
+    row stores the ISO spelling, and the audit entry carries the JSON form."""
+    client, store, received, _params_cls = _datetime_param_client()
+    placed = datetime(2026, 8, 25, 12, 30, tzinfo=timezone.utc)
+
+    client.execute("PlaceOrder", {"order_id": "order-1", "placed_at": placed})
+
+    assert received == [placed]
+    stored = store.read_current("Order", "order-1")
+    assert stored is not None
+    assert stored.payload["placed_at"] == "2026-08-25T12:30:00+00:00"
+    entries = store.audit_entries()
+    assert entries[-1].outcome == "ok"
+    assert entries[-1].params["placed_at"] == "2026-08-25T12:30:00+00:00"
+
+
+def test_action_refuses_a_naive_datetime_param_as_invalid_params() -> None:
+    """A naive `datetime` would otherwise slip through as a naive JSON
+    string. It is refused before the handler runs, under the same code as
+    every other undeclared parameter shape, and the refusal is audited."""
+    client, store, received, _params_cls = _datetime_param_client()
+
+    with raises_code(ActionError, "INVALID_PARAMS") as exc_info:
+        client.execute(
+            "PlaceOrder",
+            {"order_id": "order-1", "placed_at": datetime(2026, 8, 25, 12, 30)},
+        )
+    assert "placed_at" in str(exc_info.value)
+    assert "naive" in str(exc_info.value)
+    assert received == []
+    entries = store.audit_entries()
+    assert entries[-1].outcome == "error"
+
+
+def test_typed_action_refuses_a_naive_datetime_param_before_the_json_dump() -> None:
+    """The typed form dumps params with `mode="json"` before validation,
+    which would render a naive `datetime` as a naive string the string rule
+    accepts. The object is checked first, so the typed form refuses it too."""
+    client, store, received, params_cls = _datetime_param_client()
+
+    with raises_code(ActionError, "INVALID_PARAMS") as exc_info:
+        client.execute(
+            params_cls(order_id="order-1", placed_at=datetime(2026, 8, 25, 12, 30))
+        )
+    assert "naive" in str(exc_info.value)
+    assert received == []
+    assert store.audit_entries()[-1].outcome == "error"

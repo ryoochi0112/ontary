@@ -362,8 +362,13 @@ scope-routing keys. Unlike the equality-shaped `where` exemption below,
 
 > **Hydration.** A typed read parses a `datetime`-typed property into a real
 > `datetime` (via Pydantic); the string surface returns the ISO-8601 string exactly as
-> stored. The store never changes what it persists — only the typed client's hydration
-> step parses on the way out.
+> stored. On write, a `date` or an offset-aware `datetime` object is accepted next to
+> the ISO string and persisted as its own `isoformat()` spelling, offset preserved; a
+> naive `datetime` object is refused with a message that says so (`INVALID_RECORD` on
+> the store and ingest paths, `INVALID_PARAMS` for an action parameter,
+> `OPERATOR_TYPE_MISMATCH` for a `where` operand), while a naive ISO *string* is still
+> accepted. The store never rewrites what it persists — only the typed client's
+> hydration step parses on the way out.
 
 > **Redaction shape.** A redacted field comes back as `None` on the typed surface, with
 > its name in `redacted_fields`. On the **string and MCP surfaces the key is absent
@@ -398,7 +403,8 @@ is their conjunction on that one field, so `{"gte": a, "lt": b}` is a half-open
 range and `{"contains": "x", "ne": "x"}` is a substring match with one value
 excluded; an empty mapping is refused. Comparisons apply to declared `int`,
 `float`, `date`, or `datetime` properties. `date` and `datetime` operands are the
-same ISO-8601 strings (or `date` values) the property stores; a `datetime` must
+same ISO-8601 strings the property stores, or `date` / offset-aware `datetime`
+values, which are converted to that spelling first; a `datetime` must
 carry a time component, so a date-only string is `OPERATOR_TYPE_MISMATCH` rather
 than a naive midnight that never matches an offset-aware column. The four comparison
 operators treat a `datetime` as an instant, so an operand in another UTC offset
@@ -1160,7 +1166,7 @@ data-driven ontologies; most authors should use `Ontology`.
 | `FunctionDef` | `api_name`, `description`, `input_description`, `output_description`, `capabilities` |
 | `Sensitivity` | `ai_usable`, `human_visible` |
 
-`PropertyType` is `Literal["str", "int", "float", "bool", "datetime", "json"]`.
+`PropertyType` is `Literal["str", "int", "float", "bool", "date", "datetime", "json"]`.
 
 **`OntologyRegistry`** holds the descriptors and validates cross-references;
 `validate()` raises `ValidationFailed` (`ONTOLOGY_INVALID`) on dangling link

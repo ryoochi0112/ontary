@@ -13,7 +13,7 @@ from __future__ import annotations
 import inspect
 import json
 from collections.abc import Callable
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from itertools import product
 from typing import Any
 
@@ -440,6 +440,51 @@ def test_where_condition_with_several_operators_is_their_conjunction(
     assert query.count(_human("shelf", "shelf-1"), "Value", where=where) == len(
         expected_ids
     )
+
+
+def test_datetime_where_operand_accepts_an_aware_object_and_refuses_a_naive_one(
+    make_registry: RegistryFactory,
+    make_policy: PolicyFactory,
+    make_store: StoreFactory,
+) -> None:
+    """#38: a `where` operand may be a real offset-aware `datetime`; it is
+    converted to the same ISO form a string operand takes, so equality
+    matches the stored spelling and comparisons match by instant. A naive
+    object is `OPERATOR_TYPE_MISMATCH`, like any other undeclared shape."""
+    registry = _operator_registry(make_registry)
+    store = make_store(registry)
+    store.insert(
+        "Value", {"id": "aware", "moment": "2026-02-15T09:00:00+09:00"}, SRC
+    )
+    policy = make_policy(levels=["team"], unscoped_types={"Value"}, min_n=1)
+    query = GuardedQuery(store, registry, policy)
+    consumer = _human("shelf", "shelf-1")
+    jst = timezone(timedelta(hours=9))
+
+    by_eq = query.get_objects(
+        consumer,
+        "Value",
+        where={"moment": datetime(2026, 2, 15, 9, 0, tzinfo=jst)},
+        limit=None,
+    )
+    assert [row.payload["id"] for row in by_eq] == ["aware"]
+
+    by_instant = query.get_objects(
+        consumer,
+        "Value",
+        where={"moment": {"gte": datetime(2026, 2, 15, 0, 0, tzinfo=timezone.utc)}},
+        limit=None,
+    )
+    assert [row.payload["id"] for row in by_instant] == ["aware"]
+
+    with raises_code(ValidationFailed, "OPERATOR_TYPE_MISMATCH") as exc_info:
+        query.get_objects(
+            consumer,
+            "Value",
+            where={"moment": {"gte": datetime(2026, 2, 15, 0, 0)}},
+            limit=None,
+        )
+    assert "naive" in str(exc_info.value)
 
 
 def test_datetime_comparison_treats_an_incomparable_row_as_unmatched(
