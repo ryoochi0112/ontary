@@ -101,7 +101,7 @@ Python 3.12+。コアパッケージの依存は `pydantic` のみ。エクス�
 ### `ontary.meta`
 
 `ActionParameterDef`、`ActionTypeDef`、`FunctionDef`、`LinkTypeDef`、
-`ObjectTypeDef`、`OntologyRegistry`、`PropertyDef`、`StructFieldDef`、`PropertyType`、`ScopeLevel`。
+`ObjectTypeDef`、`OntologyRegistry`、`PropertyDef`、`StructFieldDef`、`TransitionDef`、`RuleDef`、`PropertyType`、`ScopeLevel`。
 
 ### `ontary.ontology`
 
@@ -1304,12 +1304,14 @@ stateful セッションでも、各 request はその request 自身のトー�
 
 | 型 | 主なフィールド |
 | --- | --- |
-| `ObjectTypeDef` | `api_name`, `display_name`, `description`, `layer`, `properties`, `primary_key`, `owned` |
-| `PropertyDef` | `name`, `type`, `choices`, `fields`, `required`, `sensitivity`, `scope_level` |
+| `ObjectTypeDef` | `api_name`, `display_name`, `description`, `layer`, `properties`, `primary_key`, `rules`, `owned` |
+| `PropertyDef` | `name`, `type`, `choices`, `fields`, `transitions`, `required`, `sensitivity`, `scope_level` |
 | `LinkTypeDef` | `api_name`, `from_type`, `to_type`, `cardinality`, `description`, `identity_revealing`, `owned` |
 | `ActionTypeDef` | `api_name`, `display_name`, `target_type`, `executable_by_roles`, `description`, `parameters`, `capabilities` |
 | `ActionParameterDef` | `name`, `type`, `choices`, `fields`, `required`, `refers_to`, `scope_semantics` |
 | `StructFieldDef` | `name`, `type`, `choices`, `required` |
+| `TransitionDef` | `initial`, `moves` |
+| `RuleDef` | `name`, `message`, `check` |
 | `FunctionDef` | `api_name`, `description`, `input_description`, `output_description`, `capabilities` |
 | `Sensitivity` | `ai_usable`, `human_visible` |
 
@@ -1320,6 +1322,18 @@ stateful セッションでも、各 request はその request 自身のトー�
 既定値は `True` です。`PropertyDef.fields` と `ActionParameterDef.fields` は
 `type="struct"` では空でない tuple、それ以外の型では `None` です。MCP の schema は
 tuple を list として出力し、常に `fields` キーを含めます。
+
+`TransitionDef` は choice プロパティで許可する状態を記述します。`initial` は空でない
+開始状態の tuple で、`moves` はすべての choice から許可する遷移先への対応です。
+終端状態には空の tuple を使います。すべての状態は宣言済みの choice に含めます。
+`PropertyDef.transitions` に設定します。
+
+`RuleDef` は新しい行全体を受け取る名前付き述語を
+`check: Callable[[dict[str, Any]], bool]` として記述します。`name` と `message` は
+空にできず、同じ `ObjectTypeDef.rules` tuple 内の名前は一意である必要があります。
+rule の check は渡されたオブジェクトだけを読み取るようにしてください。
+`model_dump()` は `check` を除外するため、公開する宣言には rule の名前とメッセージ
+だけが含まれます。
 
 **`OntologyRegistry`** が記述子を保持し、相互参照を検証します。`validate()` は、
 リンク端点の参照切れ、Action 対象の参照切れ、api_name の重複、properties に無い主キーに

@@ -104,7 +104,7 @@ integration.
 ### `ontary.meta`
 
 `ActionParameterDef`, `ActionTypeDef`, `FunctionDef`, `LinkTypeDef`,
-`ObjectTypeDef`, `OntologyRegistry`, `PropertyDef`, `StructFieldDef`, `PropertyType`, `ScopeLevel`.
+`ObjectTypeDef`, `OntologyRegistry`, `PropertyDef`, `StructFieldDef`, `TransitionDef`, `RuleDef`, `PropertyType`, `ScopeLevel`.
 
 ### `ontary.ontology`
 
@@ -1333,12 +1333,14 @@ data-driven ontologies; most authors should use `Ontology`.
 
 | Type | Key fields |
 | --- | --- |
-| `ObjectTypeDef` | `api_name`, `display_name`, `description`, `layer`, `properties`, `primary_key`, `owned` |
-| `PropertyDef` | `name`, `type`, `choices`, `fields`, `required`, `sensitivity`, `scope_level` |
+| `ObjectTypeDef` | `api_name`, `display_name`, `description`, `layer`, `properties`, `primary_key`, `rules`, `owned` |
+| `PropertyDef` | `name`, `type`, `choices`, `fields`, `transitions`, `required`, `sensitivity`, `scope_level` |
 | `LinkTypeDef` | `api_name`, `from_type`, `to_type`, `cardinality`, `description`, `identity_revealing`, `owned` |
 | `ActionTypeDef` | `api_name`, `display_name`, `target_type`, `executable_by_roles`, `description`, `parameters`, `capabilities` |
 | `ActionParameterDef` | `name`, `type`, `choices`, `fields`, `required`, `refers_to`, `scope_semantics` |
 | `StructFieldDef` | `name`, `type`, `choices`, `required` |
+| `TransitionDef` | `initial`, `moves` |
+| `RuleDef` | `name`, `message`, `check` |
 | `FunctionDef` | `api_name`, `description`, `input_description`, `output_description`, `capabilities` |
 | `Sensitivity` | `ai_usable`, `human_visible` |
 
@@ -1350,6 +1352,17 @@ type, `choices` is an optional tuple of string values for a `str` field, and
 `ActionParameterDef.fields` are non-empty tuples for `type="struct"` and are
 `None` for every other type. The MCP schema renders each tuple as a list and
 always includes the `fields` key.
+
+`TransitionDef` describes a choice property's allowed states: `initial` is a
+non-empty tuple of start states, and `moves` maps every choice to its allowed
+targets. Use an empty target tuple for a terminal state. Every state must be a
+declared choice. Set it on `PropertyDef.transitions`.
+
+`RuleDef` describes a named predicate over the full new row as
+`check: Callable[[dict[str, Any]], bool]`. Its `name` and `message` must be
+non-empty, and names in one `ObjectTypeDef.rules` tuple must be unique. Rule
+checks should read only the supplied object. `model_dump()` excludes `check`,
+so the exported declaration contains only the rule's name and message.
 
 **`OntologyRegistry`** holds the descriptors and validates cross-references;
 `validate()` raises `ValidationFailed` (`ONTOLOGY_INVALID`) on dangling link
