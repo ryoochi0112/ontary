@@ -320,7 +320,9 @@ class Order(OntologyObject):
 scalar の `type`（`str`、`int`、`float`、`bool`、`date`、`datetime`）、任意の文字列
 `choices`、および `required` が含まれます。struct 以外の宣言では `fields=None` です。
 外側を `Money | None` と注釈するとプロパティまたはパラメーターが optional になり、
-内側の optional な注釈はそのフィールドを optional にします。
+内側の optional な注釈はそのフィールドを optional にします。dict で省略した optional な
+内側のフィールドは明示的な `null` として保存され、モデルにデフォルトがなくても型付き読み取りでは
+`None` になります。
 
 書き込みにはモデルのインスタンスか、それと同等の dict を渡せます。内側の宣言に対して
 検証されます。不正なオブジェクトの書き込みは `INVALID_RECORD`、不正な Action
@@ -330,7 +332,9 @@ scalar の `type`（`str`、`int`、`float`、`bool`、`date`、`datetime`）、
 プロパティ全体に適用されます。
 
 struct はフラットです。入れ子のモデル、モデルの list や map、内側の alias、内側の
-プロパティメタデータ、struct の主キーは宣言時に拒否されます。内側のフィールドによる
+プロパティメタデータ、`RootModel`、struct の主キーは宣言時に拒否されます。フラットな `BaseModel` 注釈に
+`prop(property_type="json")` を指定すると不透明な JSON として保存されますが、その他の
+明示的な property type は拒否されます。内側のフィールドによる
 検索はサポートされません。struct プロパティに対する `where` 条件は
 `OPERATOR_TYPE_MISMATCH`、`order_by` は `INVALID_PARAMS`、`group_by` は
 `INVALID_GROUP_BY` になります。数値集計関数は `NON_NUMERIC_AGGREGATE` になります

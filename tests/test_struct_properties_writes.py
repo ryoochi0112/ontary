@@ -11,7 +11,7 @@ import pytest
 from conftest import raises_code
 from pydantic import BaseModel
 
-from ontary import Consumer, ObjectStore, Source
+from ontary import Consumer, ObjectStore, Ontology, OntologyObject, Source, prop
 from ontary.client import OntologyRuntime
 from ontary.errors import ValidationFailed
 from ontary.ingest import bulk_upsert
@@ -102,6 +102,38 @@ def test_model_and_dict_store_identical_payload_bytes(store: ObjectStore) -> Non
     assert model.payload["amount"] == PLAIN
 
 
+def test_omitted_optional_inner_field_is_stored_and_hydrated() -> None:
+    class OptionalMoney(BaseModel):
+        value: float
+        note: str | None
+        currency: str
+
+    local = Ontology("optional-money", scope_levels=["org"], min_n=1)
+
+    @local.object(layer="L0", scope="unscoped")
+    class Order(OntologyObject):
+        id: str = prop(primary_key=True)
+        amount: OptionalMoney
+
+    store = ObjectStore(local.registry)
+    store.insert("Order", {"id": "dict", "amount": {"value": 1.0, "currency": "USD"}}, SRC)
+    store.insert("Order", {"id": "model", "amount": OptionalMoney(
+        value=1.0, note=None, currency="USD"
+    )}, SRC)
+    raw = store.read_current("Order", "dict")
+    model = store.read_current("Order", "model")
+    assert raw is not None and model is not None
+    assert raw.payload["amount"] == model.payload["amount"] == {
+        "value": 1.0, "note": None, "currency": "USD",
+    }
+    client = local.bind(store).for_consumer(Consumer(
+        actor_id="reader", role="Clerk", scope_level="org", scope_id="org-1", kind="human"
+    ))
+    hydrated = client.get(Order, "dict")
+    assert hydrated is not None
+    assert hydrated.amount == OptionalMoney(value=1.0, note=None, currency="USD")
+
+
 @pytest.mark.parametrize(
     "bad,path",
     [
@@ -147,8 +179,7 @@ def test_update_replaces_whole_struct(store: ObjectStore) -> None:
     store.update("Order", "one", {"amount": replacement}, SRC)
     stored = store.read_current("Order", "one")
     assert stored is not None
-    assert stored.payload["amount"] == {**replacement, "currency": "USD"}
-    assert "note" not in stored.payload["amount"]
+    assert stored.payload["amount"] == {**replacement, "currency": "USD", "note": None}
 
 
 def test_owned_struct_default_is_normalized_and_validated() -> None:

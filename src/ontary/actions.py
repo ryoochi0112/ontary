@@ -1019,6 +1019,26 @@ class ActionExecutor:
         if not isinstance(params, BaseModel):
             return
         for param in action_def.parameters:
+            if param.type == "struct" and param.fields is not None:
+                value = getattr(params, param.name, None)
+                if not isinstance(value, BaseModel):
+                    continue
+                for field in param.fields:
+                    if field.type != "datetime":
+                        continue
+                    inner = getattr(value, field.name, None)
+                    if not isinstance(inner, datetime):
+                        continue
+                    mismatch = validate_scalar(inner, field.type)
+                    if mismatch is not None:
+                        self._error(
+                            consumer,
+                            action_name,
+                            action_def,
+                            params_dict,
+                            f"{action_name!r}: {param.name}.{field.name}: {mismatch}",
+                            invocation_id,
+                        )
             if param.type != "datetime":
                 continue
             value = getattr(params, param.name, None)

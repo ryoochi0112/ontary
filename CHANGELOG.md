@@ -34,7 +34,21 @@ you**.
   annotation declares `type="struct"` with its inner fields exposed through
   `PropertyDef.fields` or `ActionParameterDef.fields`. `StructFieldDef` describes
   each inner field. MCP schema discovery includes `fields` (null for non-structs).
-  This additively widens `PropertyType`; `SCHEMA_VERSION` is unchanged.
+  An absent optional inner field is stored as explicit `null`, so a dict write
+  hydrates like the equivalent model instance. This additively widens
+  `PropertyType`; `SCHEMA_VERSION` is unchanged.
+
+### Changed
+
+- `list[<BaseModel>]` and `dict[..., <BaseModel>]` annotations now raise
+  `ONTOLOGY_INVALID` with the fix "use a linked object type". Previously they
+  derived `type="json"`; `prop(property_type="json")` does not bypass the refusal.
+- A model annotation with an explicit `prop(property_type=...)` other than
+  `"json"` now raises `ONTOLOGY_INVALID`. `property_type="json"` still stores
+  the model opaque.
+- A `RootModel` annotation now raises `ONTOLOGY_INVALID`, including with an
+  explicit `property_type="json"`. An unadorned `RootModel` was already refused
+  before #43; a property with an explicit JSON override previously accepted it.
 
 ## [0.17.0] — 2026-09-27
 

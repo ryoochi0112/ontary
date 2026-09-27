@@ -125,9 +125,19 @@ def test_struct_normalizer_matches_model_and_dict_and_unwraps_inner_enum() -> No
     model = Money(value=100, currency=Currency.JPY)
     raw = {"value": 100, "currency": Currency.JPY}
     assert struct_value(model, FIELDS) == struct_value(raw, FIELDS)
-    assert struct_value(raw, FIELDS) == {"value": 100, "currency": "JPY"}
+    assert struct_value(raw, FIELDS) == {"value": 100, "currency": "JPY", "note": None}
     assert struct_value("100 JPY", FIELDS) == "100 JPY"
     assert validate_scalar(struct_value(raw, FIELDS), "struct", fields=FIELDS) is None
+
+
+def test_struct_normalizer_fills_only_absent_optional_fields() -> None:
+    assert struct_value({"value": 1, "currency": "JPY", "extra": 7}, FIELDS) == {
+        "value": 1, "currency": "JPY", "note": None, "extra": 7,
+    }
+    assert struct_value({"value": 1}, FIELDS) == {"value": 1, "note": None}
+    assert validate_scalar(struct_value({"value": 1}, FIELDS), "struct", fields=FIELDS) == (
+        "currency: required field missing"
+    )
 
 
 def test_struct_storage_converts_inner_date_and_datetime() -> None:

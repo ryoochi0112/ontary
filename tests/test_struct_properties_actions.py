@@ -147,6 +147,49 @@ def test_dict_and_typed_action_params_deliver_money_and_save_whole_value(
     assert stored is not None and stored.payload["amount"] == PLAIN
 
 
+def test_omitted_optional_inner_action_field_reaches_handler_as_none() -> None:
+    class OptionalMoney(BaseModel):
+        value: float
+        note: str | None
+
+    local = Ontology("optional-action", scope_levels=["org"], min_n=1)
+
+    @local.object(layer="L0", scope="unscoped", owned=True)
+    class Item(OntologyObject):
+        id: str = prop(primary_key=True)
+
+    class Params(ActionParams):
+        price: OptionalMoney
+
+    seen: list[OptionalMoney] = []
+
+    @local.action(Params, target=Item, roles=["Clerk"], api_name="Quote")
+    def _quote(ctx: ActionContext, params: Params) -> dict[str, Any]:
+        seen.append(params.price)
+        return {}
+
+    consumer = Consumer(actor_id="clerk", role="Clerk", scope_level="org", scope_id="org-1", kind="human")
+    local.bind(ObjectStore(local.registry)).for_consumer(consumer).execute(
+        "Quote", {"price": {"value": 1.0}}
+    )
+    assert seen == [OptionalMoney(value=1.0, note=None)]
+
+
+def test_typed_and_dict_struct_params_refuse_naive_inner_datetime(store: ObjectStore) -> None:
+    client = _client(store)
+    SEEN.clear()
+    naive = datetime(2026, 1, 1)
+    with raises_code(OntaryError, "INVALID_PARAMS") as dict_error:
+        client.execute("Reprice", {"order_id": "one", "price": {**PLAIN, "observed": naive}})
+    with raises_code(OntaryError, "INVALID_PARAMS") as typed_error:
+        client.execute(RepriceParams(order_id="one", price=Money(
+            value=100, currency=Currency.JPY, booked=date(2026, 9, 27), observed=naive
+        )))
+    assert "price.observed: expected an offset-aware datetime" in str(dict_error.value)
+    assert str(typed_error.value) == str(dict_error.value)
+    assert SEEN == []
+
+
 @pytest.mark.parametrize(
     ("bad", "message"),
     [

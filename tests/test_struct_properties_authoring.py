@@ -8,11 +8,21 @@ from typing import Any, Literal
 
 import pytest
 from conftest import raises_code
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, RootModel
 
-from ontary import ActionContext, ActionParams, Ontology, OntologyObject, prop
+from ontary import (
+    ActionContext,
+    ActionParams,
+    Consumer,
+    ObjectStore,
+    Ontology,
+    OntologyObject,
+    Source,
+    prop,
+)
 from ontary.errors import ValidationFailed
 from ontary.meta import StructFieldDef
+from ontary.store.inmemory import InMemoryStore
 
 
 class Currency(Enum):
@@ -230,6 +240,124 @@ def test_collection_of_struct_cannot_be_hidden_by_json_override() -> None:
     with raises_code(ValidationFailed, "ONTOLOGY_INVALID") as excinfo:
         _register_property(list[Money], marker=prop(property_type="json"))
     assert "use a linked object type" in str(excinfo.value)
+
+
+def test_model_json_override_remains_opaque_and_other_override_is_refused() -> None:
+    local = _local()
+
+    @local.object(layer="L0", scope="unscoped")
+    class Opaque(OntologyObject):
+        id: str = prop(primary_key=True)
+        amount: Money = prop(property_type="json")
+
+    amount = next(p for p in local.registry.get_object_type("Opaque").properties if p.name == "amount")
+    assert (amount.type, amount.fields) == ("json", None)
+    store = InMemoryStore(local.registry)
+    opaque_value = {"value": 1.0, "currency": "JPY", "kind": "gross", "extra": 7}
+    store.insert("Opaque", {"id": "one", "amount": opaque_value}, Source(source_system="test"))
+    stored = store.read_current("Opaque", "one")
+    assert stored is not None and stored.payload["amount"] == opaque_value
+    with raises_code(ValidationFailed, "ONTOLOGY_INVALID") as excinfo:
+        _register_property(Money, marker=prop(property_type="str"))
+    assert "remove property_type (a model annotation derives a struct), or use property_type='json' to store it opaque" in str(excinfo.value)
+
+
+def test_root_model_is_refused_for_property_and_action_parameter() -> None:
+    class Root(RootModel[int]):
+        pass
+
+    with raises_code(ValidationFailed, "ONTOLOGY_INVALID") as excinfo:
+        _register_property(Root)
+    assert "annotate the inner type directly, or use a flat BaseModel" in str(excinfo.value)
+    with raises_code(ValidationFailed, "ONTOLOGY_INVALID") as excinfo:
+        _register_property(Root, marker=prop(property_type="json"))
+    assert "annotate the inner type directly, or use a flat BaseModel" in str(excinfo.value)
+
+    local = _local()
+
+    @local.object(layer="L0", scope="unscoped")
+    class Order(OntologyObject):
+        id: str = prop(primary_key=True)
+
+    class Params(ActionParams):
+        root: Root
+
+    with raises_code(ValidationFailed, "ONTOLOGY_INVALID") as excinfo:
+        @local.action(Params, target=Order, roles=["Clerk"], api_name="UseRoot")
+        def _use_root(ctx: ActionContext, params: Params) -> dict[str, Any]:
+            return {}
+    assert "annotate the inner type directly, or use a flat BaseModel" in str(excinfo.value)
+
+
+def test_action_model_property_type_override_matches_property_rules() -> None:
+    local = _local()
+
+    @local.object(layer="L0", scope="unscoped")
+    class Order(OntologyObject):
+        id: str = prop(primary_key=True)
+
+    class OpaqueParams(ActionParams):
+        amount: Money = prop(property_type="json")
+
+    @local.action(OpaqueParams, target=Order, roles=["Clerk"], api_name="Opaque")
+    def _opaque(ctx: ActionContext, params: OpaqueParams) -> dict[str, Any]:
+        return {}
+
+    amount = local.registry.get_action_type("Opaque").parameters[0]
+    assert (amount.type, amount.fields) == ("json", None)
+
+    class BadParams(ActionParams):
+        amount: Money = prop(property_type="str")
+
+    with raises_code(ValidationFailed, "ONTOLOGY_INVALID") as excinfo:
+        @local.action(BadParams, target=Order, roles=["Clerk"], api_name="BadOverride")
+        def _bad(ctx: ActionContext, params: BadParams) -> dict[str, Any]:
+            return {}
+    assert "remove property_type (a model annotation derives a struct), or use property_type='json' to store it opaque" in str(excinfo.value)
+
+
+def test_optional_model_json_override_is_optional_for_property_and_action() -> None:
+    local = _local()
+
+    @local.object(layer="L0", scope="unscoped")
+    class Order(OntologyObject):
+        id: str = prop(primary_key=True)
+        amount: Money | None = prop(property_type="json")
+
+    class Params(ActionParams):
+        amount: Money | None = prop(property_type="json")
+
+    @local.action(Params, target=Order, roles=["Clerk"], api_name="OptionalOpaque")
+    def _opaque(ctx: ActionContext, params: Params) -> dict[str, Any]:
+        return {}
+
+    prop_def = next(p for p in local.registry.get_object_type("Order").properties if p.name == "amount")
+    param_def = local.registry.get_action_type("OptionalOpaque").parameters[0]
+    assert (prop_def.type, prop_def.fields, prop_def.required) == ("json", None, False)
+    assert (param_def.type, param_def.fields, param_def.required) == ("json", None, False)
+
+
+def test_scalar_action_parameter_ignores_property_type_override() -> None:
+    local = _local()
+
+    @local.object(layer="L0", scope="unscoped")
+    class Order(OntologyObject):
+        id: str = prop(primary_key=True)
+
+    class Params(ActionParams):
+        n: int = prop(property_type="str")
+
+    @local.action(Params, target=Order, roles=["Clerk"], api_name="UseNumber")
+    def _use_number(ctx: ActionContext, params: Params) -> dict[str, Any]:
+        return {"n": params.n}
+
+    param_def = local.registry.get_action_type("UseNumber").parameters[0]
+    assert (param_def.type, param_def.fields) == ("int", None)
+    consumer = Consumer(actor_id="clerk", role="Clerk", scope_level="org", scope_id="org-1", kind="human")
+    result = local.bind(ObjectStore(local.registry)).for_consumer(consumer).execute(
+        "UseNumber", {"n": 5}
+    )
+    assert result == {"n": 5}
 
 
 def test_choices_on_struct_action_param_are_refused() -> None:

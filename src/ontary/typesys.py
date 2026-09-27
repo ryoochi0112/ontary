@@ -150,18 +150,22 @@ def choice_value(value: Any, choices: tuple[str, ...] | None) -> Any:
 
 
 def struct_value(value: Any, fields: Sequence[StructFieldDef]) -> Any:
-    """Normalize model and declared inner choice values before validation."""
+    """Normalize declared inner choices and fill absent optional fields."""
     if isinstance(value, BaseModel):
         value = value.model_dump()
     if not isinstance(value, Mapping):
         return value
     choices_by_name = {field.name: field.choices for field in fields}
-    return {
+    normalized = {
         name: choice_value(inner, choices_by_name[name])
         if name in choices_by_name
         else inner
         for name, inner in value.items()
     }
+    for field in fields:
+        if not field.required and field.name not in normalized:
+            normalized[field.name] = None
+    return normalized
 
 
 def _struct_violation(

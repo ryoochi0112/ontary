@@ -328,7 +328,9 @@ non-empty `fields` tuple of `StructFieldDef` values. Each inner declaration carr
 `name`, a scalar `type` (`str`, `int`, `float`, `bool`, `date`, or `datetime`),
 optional string `choices`, and `required`. A non-struct declaration has
 `fields=None`. An optional outer model makes the property or parameter optional;
-an optional inner annotation makes that inner field optional.
+an optional inner annotation makes that inner field optional. An absent optional
+inner field in a dict is stored as explicit `null`, so typed hydration supplies
+`None` even if the model field has no default.
 
 Writes accept a model instance or an equivalent dict and validate the declared
 inner fields. A bad object write raises `INVALID_RECORD`; a bad action parameter
@@ -338,7 +340,9 @@ return a plain object. Updating a struct replaces the whole value. Sensitivity
 applies to the whole property.
 
 Structs are flat: nested models, lists or maps of models, inner aliases, inner
-property metadata, and struct primary keys are refused at declaration. Querying by
+property metadata, `RootModel`, and struct primary keys are refused at declaration.
+Use `prop(property_type="json")` on a flat `BaseModel` annotation to store it opaque;
+other explicit property types are refused. Querying by
 an inner field is unsupported. A `where` condition on the struct property raises
 `OPERATOR_TYPE_MISMATCH`; `order_by` raises `INVALID_PARAMS`; `group_by` raises
 `INVALID_GROUP_BY`; and numeric aggregate functions raise

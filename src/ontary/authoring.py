@@ -29,7 +29,7 @@ from typing import (
     overload,
 )
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, RootModel, ValidationError
 
 from ontary.actions import ActionContext, TypedHandler
 from ontary.client import OntologyRuntime
@@ -215,6 +215,12 @@ def _struct_fields(
             f"{path}: an OntologyObject cannot be a struct; use a link",
             code="ONTOLOGY_INVALID",
         )
+    if issubclass(annotation, RootModel):
+        raise ValidationFailed(
+            f"{path}: a RootModel cannot be a struct; "
+            "annotate the inner type directly, or use a flat BaseModel",
+            code="ONTOLOGY_INVALID",
+        )
     fields: list[StructFieldDef] = []
     for inner_name, inner_info in annotation.model_fields.items():
         inner_path = f"{path}.{inner_name}"
@@ -270,6 +276,27 @@ def _struct_fields(
     return tuple(fields)
 
 
+def _apply_struct_type_override(
+    fields: tuple[StructFieldDef, ...] | None,
+    meta: dict[str, Any],
+    field_name: str,
+    class_name: str,
+) -> tuple[StructFieldDef, ...] | None:
+    if fields is None:
+        return None
+    override = meta.get("property_type")
+    if override == "json":
+        return None
+    if override is not None:
+        raise ValidationFailed(
+            f"{class_name}.{field_name}: remove property_type "
+            "(a model annotation derives a struct), or use "
+            "property_type='json' to store it opaque",
+            code="ONTOLOGY_INVALID",
+        )
+    return fields
+
+
 def _refuse_double_choices(meta: dict[str, Any], field_name: str, class_name: str) -> None:
     if meta.get("choices") is not None:
         raise ValidationFailed(
@@ -322,7 +349,9 @@ def _derive_properties(cls: type["OntologyObject"]) -> tuple[list[PropertyDef], 
 
         meta = _field_ontary_meta(field_info.json_schema_extra)
         annotation, is_optional = _unwrap_optional(field_info.annotation)
-        fields = _struct_fields(annotation, field_name, cls.__name__)
+        fields = _apply_struct_type_override(
+            _struct_fields(annotation, field_name, cls.__name__), meta, field_name, cls.__name__
+        )
         if fields is not None:
             if meta.get("primary_key"):
                 raise ValidationFailed(
@@ -512,7 +541,10 @@ def _derive_action_params(
             fields = None
         else:
             refers_to = None
-            fields = _struct_fields(annotation, field_name, cls.__name__)
+            struct_fields = _struct_fields(annotation, field_name, cls.__name__)
+            fields = _apply_struct_type_override(
+                struct_fields, meta, field_name, cls.__name__,
+            )
             if fields is not None:
                 if meta.get("choices") is not None:
                     raise ValidationFailed(
@@ -527,7 +559,10 @@ def _derive_action_params(
             if fields is None and choices is not None:
                 property_type = "str"
             elif fields is None:
-                property_type = _property_type_for(annotation, field_name, cls.__name__)
+                property_type = (
+                    "json" if struct_fields is not None
+                    else _property_type_for(annotation, field_name, cls.__name__)
+                )
 
         required = meta.get("required")
         if required is None:
