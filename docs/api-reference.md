@@ -597,8 +597,8 @@ the action's own `Source`.
 
 | Member | Purpose |
 | --- | --- |
-| `.insert(obj_type, payload) -> str` | Create. A payload omitting the type's primary key gets one auto-minted from the runtime's `id_factory` |
-| `.update(obj_type, obj_id, changes)` | Update |
+| `.insert(obj_type, payload) -> str` | Create. A payload omitting the type's primary key gets one auto-minted from the runtime's `id_factory`; a primary key that is already live is refused with `OBJECT_ALREADY_EXISTS` |
+| `.update(obj_type, obj_id, changes)` | Update. A change that gives the primary key a different value is refused with `PRIMARY_KEY_IMMUTABLE` |
 | `.create_link(link_api_name, from_id, to_id)` | Link |
 | `.retire(obj_type, obj_id)` | Retire the object and cascade-close every live link that references the object on the side its link type declares for that object type |
 | `.unlink(link_api_name, from_id, to_id)` | Close one live link |
@@ -815,6 +815,17 @@ audit_entries() -> list[AuditEntry]
 transaction() -> ContextManager
 capture_action_writes() -> ContextManager[list[WriteRecord]]
 ```
+
+`insert` refuses a primary key that already has a live row of the same object type
+with `ConflictError` and code `OBJECT_ALREADY_EXISTS`; the store is left unchanged.
+An object has at most one live row, and the SQL backends back this with a partial
+unique index. A retired object's id may be inserted again, which starts a new live row.
+
+A primary key is immutable. `update` refuses a change that gives the primary key a
+different value with `ValidationFailed` and code `PRIMARY_KEY_IMMUTABLE`, and the store
+is left unchanged. This keeps the store id and the payload primary key equal. Repeating
+the current value is not a change and is accepted. To give an entity a new key, retire
+the object and insert a new one.
 
 `read_current` returns the live row only; `read_last` returns the newest row whether
 or not it is still live. `links_from`/`links_to` return live links only; the `_asof`
@@ -1183,6 +1194,7 @@ table below is generated from it.
 | --- | --- |
 | `CALLER_TRANSACTION_REFUSED` | Raised when `ActionExecutor.execute()` (or an ingest entry point, a later task) is called while the caller has already opened a `store.transaction()` block (declared-contracts §3 AC9). `transaction()` is reentrant, so a caller-owned outer transaction could roll back an action after the executor reported success and audited `ok`. The engine must own the transaction/audit boundary and refuses to nest inside the caller's. Deliberately NOT audited (spec §5): an audit row inside the caller's transaction could itself be rolled back, so the refusal is raised before any audit write. |
 | `CARDINALITY_VIOLATION` | A link creation would violate its LinkTypeDef cardinality. |
+| `OBJECT_ALREADY_EXISTS` | An insert used a primary key that already has a live row of the same object type; update that object instead, or retire it first. |
 | `OBJECT_ALREADY_RETIRED` | A retirement targeted an object whose current row is already closed. |
 | `STORE_VERSION_UNSUPPORTED` | Raised at store construction when the store's schema stamp is not this engine's `SCHEMA_VERSION` -- a SQLite file's `PRAGMA user_version`, or a Postgres database's `schema_meta` row. Neither backend carries a migration ladder: a store written by a different ontary schema shape is REFUSED, never migrated in place and never adopted. An unstamped store that already has an `objects` table is refused for the same reason -- stamping a shape this engine cannot read would be a lying stamp, and every later query would fail as a confusing uncoded SQL error instead. The message names BOTH the store's and the engine's versions, so an operator knows exactly what to upgrade; the way forward is a matching ontary version, or a fresh store the data is migrated into. |
 | `STORE_BUSY` | A SQLite transaction could not acquire or retain its database lock within ObjectStore's configured busy timeout; retry after the competing writer finishes or increase busy_timeout. This is a conflict, not a precondition: retrying is the remedy, and the kind travels on the MCP wire so callers can branch on retryability. |
@@ -1229,6 +1241,7 @@ table below is generated from it.
 | `NON_NUMERIC_AGGREGATE` | `GuardedQuery.aggregate`'s `value_field` is declared a non-numeric `PropertyType` (anything other than `int`/`float`, such as str/json/datetime/bool). It is checked against the declared type before rows are iterated or coerced, so values that merely look numeric cannot bypass the type contract (spec `m35-sdk-refactor` §6 AC7). `func="count"` is exempt and accepts any declared type. |
 | `OBJECT_NOT_FOUND` | An update targeted a non-existent object. |
 | `OBJECT_RETIRE_NOT_FOUND` | A retirement targeted an object with no stored row. |
+| `PRIMARY_KEY_IMMUTABLE` | An update tried to change an object's primary key; a primary key is immutable, so retire the object and insert a new one instead. |
 | `ONTOLOGY_INVALID` | `OntologyRegistry.validate()` rejected a declaration because its cross-references were invalid. |
 | `SCOPE_POLICY_ERROR` | A ScopePolicy declaration is unusable: a rule references an undeclared object type, link type, or scope level; a type declares an empty contributor rule list; or a type is listed in unscoped_types while also declaring scope rules. |
 | `UNDECLARED_CAPABILITY` | A handler requested a capability its action or function did not declare. |
@@ -1247,7 +1260,7 @@ table below is generated from it.
 | `MIN_N_VIOLATION` | An aggregate would be computed over fewer than min_n distinct contributors. |
 | `VISIBILITY_DENIED` | A single-object read/write targeted an object outside the consumer's scope. |
 
-*46 codes across 7 kinds.*
+*48 codes across 7 kinds.*
 
 ---
 

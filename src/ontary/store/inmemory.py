@@ -43,6 +43,7 @@ from ontary.store._shared import (
     encode_audit_entry,
     live_link_not_found,
     merge_update,
+    object_already_exists,
     prepare_insert,
     resolve_link_type,
     retire_object_refusal,
@@ -239,6 +240,8 @@ class InMemoryStore:
 
         now = _utcnow_iso()
         with self.transaction():
+            if self.read_current(obj_type, obj_id) is not None:
+                raise object_already_exists(obj_type, obj_id)
             self._objects.append(
                 {
                     "tenant": self._tenant,
@@ -377,11 +380,11 @@ class InMemoryStore:
         the replacement row, so the LAST match is the newest state.
 
         A LIVE row wins over a newer closed one, and among live rows this
-        returns `read_current`'s own pick (the first in append order). The
-        store does not enforce payload-pk uniqueness among current rows,
-        so two inserts of one primary key leave two live
+        returns `read_current`'s own pick (the first in append order). Since
+        #34 `insert` refuses a live duplicate, so an id has at most one live
+        row; but before that two inserts of one primary key left two live
         rows -- and a plain "last match" then answered with the opposite row
-        to `read_current`. That matters because the action target gate
+        to `read_current`. The live-first rule stays as defense in depth. That matters because the action target gate
         resolves scope from `read_last` while every consumer read resolves it
         from `read_current`: the two disagreeing let the gate authorize
         against a scope no consumer read can see.

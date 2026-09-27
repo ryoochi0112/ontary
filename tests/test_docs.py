@@ -112,6 +112,15 @@ REMOVED_SINCE_080_ERROR_CODES = frozenset(
         "MISSING_MAPPED_FIELD",
     }
 )
+# Codes added to the catalogue after 0.8.0, recorded here for the same reason
+# as the removals above: the released 0.8.0 bullet is never edited, so a later
+# addition must be accounted for somewhere the catalogue-diff assertion reads.
+ADDED_SINCE_080_ERROR_CODES = frozenset(
+    {
+        "OBJECT_ALREADY_EXISTS",
+        "PRIMARY_KEY_IMMUTABLE",
+    }
+)
 NEW_ENGLISH_DOCS = tuple(
     _DOCS / name
     for name in (
@@ -537,9 +546,14 @@ def test_changelog_new_error_codes_match_catalog_diff() -> None:
         EXPECTED_PRE_080_ERROR_CODES | EXPECTED_080_NEW_ERROR_CODES
     )
     assert not (REMOVED_SINCE_080_ERROR_CODES & set(ERROR_CODES))
+    assert not (
+        ADDED_SINCE_080_ERROR_CODES
+        & (EXPECTED_PRE_080_ERROR_CODES | EXPECTED_080_NEW_ERROR_CODES)
+    )
     assert set(ERROR_CODES) == (
-        EXPECTED_PRE_080_ERROR_CODES | EXPECTED_080_NEW_ERROR_CODES
-    ) - REMOVED_SINCE_080_ERROR_CODES
+        (EXPECTED_PRE_080_ERROR_CODES | EXPECTED_080_NEW_ERROR_CODES)
+        - REMOVED_SINCE_080_ERROR_CODES
+    ) | ADDED_SINCE_080_ERROR_CODES
 
 
 @pytest.mark.parametrize("path", API_REFERENCES, ids=lambda p: p.name)

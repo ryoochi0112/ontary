@@ -150,6 +150,20 @@ ERROR_CODES: dict[str, ErrorCodeInfo] = {
         kind="validation",
         description="An update targeted a non-existent object.",
     ),
+    "OBJECT_ALREADY_EXISTS": ErrorCodeInfo(
+        kind="conflict",
+        description=(
+            "An insert used a primary key that already has a live row of the "
+            "same object type; update that object instead, or retire it first."
+        ),
+    ),
+    "PRIMARY_KEY_IMMUTABLE": ErrorCodeInfo(
+        kind="validation",
+        description=(
+            "An update tried to change an object's primary key; a primary key "
+            "is immutable, so retire the object and insert a new one instead."
+        ),
+    ),
     "OBJECT_RETIRE_NOT_FOUND": ErrorCodeInfo(
         kind="validation",
         description="A retirement targeted an object with no stored row.",

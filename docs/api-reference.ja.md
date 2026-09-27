@@ -583,8 +583,8 @@ Action は、型付きパラメータクラスと、
 
 | メンバー | 用途 |
 | --- | --- |
-| `.insert(obj_type, payload) -> str` | 作成。primary key を省略した payload には、ランタイムの `id_factory` から自動で採番される |
-| `.update(obj_type, obj_id, changes)` | 更新 |
+| `.insert(obj_type, payload) -> str` | 作成。primary key を省略した payload には、ランタイムの `id_factory` から自動で採番される。すでに有効な primary key は `OBJECT_ALREADY_EXISTS` で拒否される |
+| `.update(obj_type, obj_id, changes)` | 更新。primary key を別の値に変える変更は `PRIMARY_KEY_IMMUTABLE` で拒否される |
 | `.create_link(link_api_name, from_id, to_id)` | リンク作成 |
 | `.retire(obj_type, obj_id)` | オブジェクトをリタイアし、そのオブジェクト型についてリンク型が宣言している側でそのオブジェクトを参照するすべての live link を cascade-close |
 | `.unlink(link_api_name, from_id, to_id)` | 1 本の live link を閉じる |
@@ -794,6 +794,18 @@ audit_entries() -> list[AuditEntry]
 transaction() -> ContextManager
 capture_action_writes() -> ContextManager[list[WriteRecord]]
 ```
+
+`insert` は、同じ object type に有効な行がすでにある primary key を受け付けません。
+`ConflictError`（code `OBJECT_ALREADY_EXISTS`）で拒否し、ストアは変更しません。
+1 つのオブジェクトが持つ有効な行は最大 1 行です。SQL バックエンドは部分ユニーク
+インデックスでもこれを保証します。retire 済みのオブジェクトの id は再び insert
+でき、新しい有効な行が始まります。
+
+primary key は変更できません。`update` は、primary key を別の値に変える変更を
+`ValidationFailed`（code `PRIMARY_KEY_IMMUTABLE`）で拒否し、ストアは変更しません。
+これにより、ストアの id と payload の primary key は常に一致します。現在と同じ値を
+渡す場合は変更とみなさず、受け付けます。新しいキーが必要なときは、オブジェクトを
+retire してから新しく insert してください。
 
 `read_current` は有効な行だけを返します。`read_last` は、その行が有効かどうかに
 関わらず最新の行を返します。`links_from`/`links_to` は有効なリンクだけを返します。
@@ -1166,6 +1178,7 @@ MCP サーバーでは、この実行時ではなくトランスポートによ�
 | --- | --- |
 | `CALLER_TRANSACTION_REFUSED` | Raised when `ActionExecutor.execute()` (or an ingest entry point, a later task) is called while the caller has already opened a `store.transaction()` block (declared-contracts §3 AC9). `transaction()` is reentrant, so a caller-owned outer transaction could roll back an action after the executor reported success and audited `ok`. The engine must own the transaction/audit boundary and refuses to nest inside the caller's. Deliberately NOT audited (spec §5): an audit row inside the caller's transaction could itself be rolled back, so the refusal is raised before any audit write. |
 | `CARDINALITY_VIOLATION` | A link creation would violate its LinkTypeDef cardinality. |
+| `OBJECT_ALREADY_EXISTS` | An insert used a primary key that already has a live row of the same object type; update that object instead, or retire it first. |
 | `OBJECT_ALREADY_RETIRED` | A retirement targeted an object whose current row is already closed. |
 | `STORE_VERSION_UNSUPPORTED` | Raised at store construction when the store's schema stamp is not this engine's `SCHEMA_VERSION` -- a SQLite file's `PRAGMA user_version`, or a Postgres database's `schema_meta` row. Neither backend carries a migration ladder: a store written by a different ontary schema shape is REFUSED, never migrated in place and never adopted. An unstamped store that already has an `objects` table is refused for the same reason -- stamping a shape this engine cannot read would be a lying stamp, and every later query would fail as a confusing uncoded SQL error instead. The message names BOTH the store's and the engine's versions, so an operator knows exactly what to upgrade; the way forward is a matching ontary version, or a fresh store the data is migrated into. |
 | `STORE_BUSY` | A SQLite transaction could not acquire or retain its database lock within ObjectStore's configured busy timeout; retry after the competing writer finishes or increase busy_timeout. This is a conflict, not a precondition: retrying is the remedy, and the kind travels on the MCP wire so callers can branch on retryability. |
@@ -1212,6 +1225,7 @@ MCP サーバーでは、この実行時ではなくトランスポートによ�
 | `NON_NUMERIC_AGGREGATE` | `GuardedQuery.aggregate`'s `value_field` is declared a non-numeric `PropertyType` (anything other than `int`/`float`, such as str/json/datetime/bool). It is checked against the declared type before rows are iterated or coerced, so values that merely look numeric cannot bypass the type contract (spec `m35-sdk-refactor` §6 AC7). `func="count"` is exempt and accepts any declared type. |
 | `OBJECT_NOT_FOUND` | An update targeted a non-existent object. |
 | `OBJECT_RETIRE_NOT_FOUND` | A retirement targeted an object with no stored row. |
+| `PRIMARY_KEY_IMMUTABLE` | An update tried to change an object's primary key; a primary key is immutable, so retire the object and insert a new one instead. |
 | `ONTOLOGY_INVALID` | `OntologyRegistry.validate()` rejected a declaration because its cross-references were invalid. |
 | `SCOPE_POLICY_ERROR` | A ScopePolicy declaration is unusable: a rule references an undeclared object type, link type, or scope level; a type declares an empty contributor rule list; or a type is listed in unscoped_types while also declaring scope rules. |
 | `UNDECLARED_CAPABILITY` | A handler requested a capability its action or function did not declare. |
@@ -1230,7 +1244,7 @@ MCP サーバーでは、この実行時ではなくトランスポートによ�
 | `MIN_N_VIOLATION` | An aggregate would be computed over fewer than min_n distinct contributors. |
 | `VISIBILITY_DENIED` | A single-object read/write targeted an object outside the consumer's scope. |
 
-*全 46 コード / 7 種別。*
+*全 48 コード / 7 種別。*
 
 ---
 

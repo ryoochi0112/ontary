@@ -11,8 +11,30 @@ you**.
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking (store schema):** `SCHEMA_VERSION` is now 11. The new
+  `idx_objects_live_id` partial unique index allows at most one live row per
+  `(tenant, object_type, id)` in SQLite and Postgres. A store stamped 10 is refused
+  with `STORE_VERSION_UNSUPPORTED`; drop and re-ingest it as described in
+  [docs/storage.md](docs/storage.md#moving-across-a-schema-version).
+
 ### Fixed
 
+- `insert` (and `ctx.insert` inside an action) now refuses a primary key that
+  already has a live row of the same object type, with `ConflictError` and the
+  new catalogued code `OBJECT_ALREADY_EXISTS`. Before, every store accepted the
+  duplicate: `read_all` returned both rows while `read_current` kept returning the
+  old one. A retired object's id may still be inserted again. Fixes
+  [ontary#34](https://github.com/ryoochi0112/ontary/issues/34).
+- `update` (and `ctx.update` inside an action) now refuses a change that gives the
+  primary key a different value, with `ValidationFailed` and the new catalogued
+  code `PRIMARY_KEY_IMMUTABLE`. Before, every store accepted it: the payload
+  primary key changed while the store id kept its old value, so two live objects
+  could carry the same primary key and `read_current(type, "b")` could return a
+  row whose payload said `id == "a"`. Repeating the current value is still
+  accepted. To re-key an entity, retire it and insert a new object. Fixes
+  [ontary#75](https://github.com/ryoochi0112/ontary/issues/75).
 - An ungrouped `aggregate` that misses min-N with a supplied `value_field` no
   longer reports `<type>.<field> group None`; only a real `group_by` names a
   group in the `MIN_N_VIOLATION` message. Review backlog from

@@ -154,6 +154,17 @@ def retire_object_refusal(
     )
 
 
+def object_already_exists(object_type: str, obj_id: str) -> ConflictError:
+    """Build the coded refusal for an insert whose primary key is already
+    live. Each backend checks inside its own serialized transaction; the SQL
+    backends also carry a partial unique index as a storage backstop."""
+    return ConflictError(
+        f"{object_type} object {obj_id!r} already exists -- update it, or "
+        "retire it before inserting the same primary key again",
+        code="OBJECT_ALREADY_EXISTS",
+    )
+
+
 def live_link_not_found(
     link_type: str, from_id: str, to_id: str
 ) -> ValidationFailed:
@@ -320,7 +331,10 @@ def merge_update(
     over the current payload, and check the MERGED row -- an update that
     blanks a required property, or whose changes are individually fine but
     leave the row incomplete, is exactly the case a changes-only check
-    would miss."""
+    would miss. A primary key is immutable (#75): a change that gives it a
+    different value is refused, so the store id and the payload pk always
+    agree and no update can move a row onto another live object's id.
+    Repeating the current value is not a change and is accepted."""
     if current is None:
         raise ValidationFailed(
             f"no current row for {obj_type}/{obj_id}",
@@ -334,7 +348,17 @@ def merge_update(
             f"update of {obj_type}/{obj_id}: {violation}",
             code="INVALID_RECORD",
         )
-    return _normalize_payload_scalars(obj_def, merged)
+    normalized = _normalize_payload_scalars(obj_def, merged)
+    pk = obj_def.primary_key
+    if pk in payload_changes and normalized.get(pk) != current.payload.get(pk):
+        raise ValidationFailed(
+            f"update of {obj_type}/{obj_id}: primary key {pk!r} is immutable "
+            f"(current {current.payload.get(pk)!r}, requested "
+            f"{normalized.get(pk)!r}); retire this object and insert a new "
+            "one instead",
+            code="PRIMARY_KEY_IMMUTABLE",
+        )
+    return normalized
 
 
 def check_link_write_authority(

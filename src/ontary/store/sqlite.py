@@ -40,6 +40,7 @@ from ontary.store._shared import (
     encode_audit_entry,
     live_link_not_found,
     merge_update,
+    object_already_exists,
     prepare_insert,
     resolve_link_type,
     retire_object_refusal,
@@ -207,6 +208,8 @@ class ObjectStore(SqliteSchemaGate):
 
         now = _utcnow_iso()
         with self.transaction() as conn:
+            if self.read_current(obj_type, prepared.obj_id) is not None:
+                raise object_already_exists(obj_type, prepared.obj_id)
             conn.execute(
                 """
                 INSERT INTO objects
