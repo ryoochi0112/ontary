@@ -204,7 +204,7 @@ def _choice_members(
 
 
 def _struct_fields(
-    annotation: Any, field_name: str, class_name: str
+    annotation: Any, field_name: str, class_name: str, *, opaque_json: bool = False
 ) -> tuple[StructFieldDef, ...] | None:
     """Derive a flat BaseModel's declared scalar fields, if applicable."""
     if not isinstance(annotation, type) or not issubclass(annotation, BaseModel):
@@ -224,6 +224,16 @@ def _struct_fields(
     fields: list[StructFieldDef] = []
     for inner_name, inner_info in annotation.model_fields.items():
         inner_path = f"{path}.{inner_name}"
+        if not opaque_json and (
+            inner_info.default_factory is not None
+            or (not inner_info.is_required() and inner_info.default is not None)
+        ):
+            raise ValidationFailed(
+                f"{inner_path}: struct inner field '{inner_name}' has a default; "
+                "a struct inner field may only default to None "
+                "(make it Optional with `= None`, or set the value at the call site)",
+                code="ONTOLOGY_INVALID",
+            )
         if any(
             alias is not None and alias != inner_name
             for alias in (
@@ -350,7 +360,10 @@ def _derive_properties(cls: type["OntologyObject"]) -> tuple[list[PropertyDef], 
         meta = _field_ontary_meta(field_info.json_schema_extra)
         annotation, is_optional = _unwrap_optional(field_info.annotation)
         fields = _apply_struct_type_override(
-            _struct_fields(annotation, field_name, cls.__name__), meta, field_name, cls.__name__
+            _struct_fields(
+                annotation, field_name, cls.__name__,
+                opaque_json=meta.get("property_type") == "json",
+            ), meta, field_name, cls.__name__
         )
         if fields is not None:
             if meta.get("primary_key"):
@@ -541,7 +554,10 @@ def _derive_action_params(
             fields = None
         else:
             refers_to = None
-            struct_fields = _struct_fields(annotation, field_name, cls.__name__)
+            struct_fields = _struct_fields(
+                annotation, field_name, cls.__name__,
+                opaque_json=meta.get("property_type") == "json",
+            )
             fields = _apply_struct_type_override(
                 struct_fields, meta, field_name, cls.__name__,
             )

@@ -151,6 +151,7 @@ def test_omitted_optional_inner_action_field_reaches_handler_as_none() -> None:
     class OptionalMoney(BaseModel):
         value: float
         note: str | None
+        memo: str | None = None
 
     local = Ontology("optional-action", scope_levels=["org"], min_n=1)
 
@@ -172,7 +173,7 @@ def test_omitted_optional_inner_action_field_reaches_handler_as_none() -> None:
     local.bind(ObjectStore(local.registry)).for_consumer(consumer).execute(
         "Quote", {"price": {"value": 1.0}}
     )
-    assert seen == [OptionalMoney(value=1.0, note=None)]
+    assert seen == [OptionalMoney(value=1.0, note=None, memo=None)]
 
 
 def test_typed_and_dict_struct_params_refuse_naive_inner_datetime(store: ObjectStore) -> None:

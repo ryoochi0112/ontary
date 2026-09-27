@@ -35,7 +35,8 @@ you**.
   `PropertyDef.fields` or `ActionParameterDef.fields`. `StructFieldDef` describes
   each inner field. MCP schema discovery includes `fields` (null for non-structs).
   An absent optional inner field is stored as explicit `null`, so a dict write
-  hydrates like the equivalent model instance. This additively widens
+  hydrates like the equivalent model instance. Struct inner fields may only
+  default to `None`. This additively widens
   `PropertyType`; `SCHEMA_VERSION` is unchanged.
 
 ### Changed

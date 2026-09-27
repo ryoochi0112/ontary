@@ -106,6 +106,7 @@ def test_omitted_optional_inner_field_is_stored_and_hydrated() -> None:
     class OptionalMoney(BaseModel):
         value: float
         note: str | None
+        memo: str | None = None
         currency: str
 
     local = Ontology("optional-money", scope_levels=["org"], min_n=1)
@@ -115,6 +116,11 @@ def test_omitted_optional_inner_field_is_stored_and_hydrated() -> None:
         id: str = prop(primary_key=True)
         amount: OptionalMoney
 
+    amount_def = next(p for p in local.registry.get_object_type("Order").properties if p.name == "amount")
+    assert amount_def.fields is not None
+    assert [(field.name, field.required) for field in amount_def.fields] == [
+        ("value", True), ("note", False), ("memo", False), ("currency", True),
+    ]
     store = ObjectStore(local.registry)
     store.insert("Order", {"id": "dict", "amount": {"value": 1.0, "currency": "USD"}}, SRC)
     store.insert("Order", {"id": "model", "amount": OptionalMoney(
@@ -124,14 +130,14 @@ def test_omitted_optional_inner_field_is_stored_and_hydrated() -> None:
     model = store.read_current("Order", "model")
     assert raw is not None and model is not None
     assert raw.payload["amount"] == model.payload["amount"] == {
-        "value": 1.0, "note": None, "currency": "USD",
+        "value": 1.0, "note": None, "memo": None, "currency": "USD",
     }
     client = local.bind(store).for_consumer(Consumer(
         actor_id="reader", role="Clerk", scope_level="org", scope_id="org-1", kind="human"
     ))
     hydrated = client.get(Order, "dict")
     assert hydrated is not None
-    assert hydrated.amount == OptionalMoney(value=1.0, note=None, currency="USD")
+    assert hydrated.amount == OptionalMoney(value=1.0, note=None, memo=None, currency="USD")
 
 
 @pytest.mark.parametrize(

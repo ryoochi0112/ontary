@@ -35,7 +35,7 @@ class Money(BaseModel):
     currency: Currency
     kind: Literal["gross", "net"]
     count: int | None = None
-    active: bool = True
+    active: bool
     booked: date | None = None
     recorded: datetime | None = None
 
@@ -65,6 +65,58 @@ def _register_property(annotation: Any, *, marker: Any = None) -> None:
         namespace["amount"] = marker
     thing = type("Thing", (OntologyObject,), namespace)
     local.object(layer="L0", scope="unscoped")(thing)
+
+
+def _register_action_parameter(annotation: Any) -> None:
+    local = _local()
+
+    @local.object(layer="L0", scope="unscoped")
+    class Order(OntologyObject):
+        id: str = prop(primary_key=True)
+
+    params_cls = type("Params", (ActionParams,), {"__annotations__": {"price": annotation}})
+
+    @local.action(params_cls, target=Order, roles=["Clerk"], api_name="Quote")
+    def _quote(ctx: ActionContext, params: ActionParams) -> dict[str, Any]:
+        return {}
+
+
+@pytest.mark.parametrize(
+    ("annotation", "default"),
+    [
+        (str | None, "JPY"),
+        (str, "JPY"),
+        (str, Field(default_factory=lambda: "t")),
+    ],
+)
+@pytest.mark.parametrize("surface", ["property", "action"])
+def test_struct_inner_non_none_default_is_refused_for_property_and_action(
+    annotation: Any, default: Any, surface: str
+) -> None:
+    model = type("WithDefault", (BaseModel,), {
+        "__annotations__": {"currency": annotation}, "currency": default,
+    })
+    register = _register_property if surface == "property" else _register_action_parameter
+    with raises_code(ValidationFailed, "ONTOLOGY_INVALID") as excinfo:
+        register(model)
+    assert "struct inner field 'currency' has a default" in str(excinfo.value)
+    assert "make it Optional with `= None`, or set the value at the call site" in str(excinfo.value)
+
+
+def test_json_override_allows_inner_defaults() -> None:
+    class Opaque(BaseModel):
+        currency: str = "JPY"
+        tags: str = Field(default_factory=lambda: "t")
+
+    local = _local()
+
+    @local.object(layer="L0", scope="unscoped")
+    class Order(OntologyObject):
+        id: str = prop(primary_key=True)
+        amount: Opaque = prop(property_type="json")
+
+    amount = next(p for p in local.registry.get_object_type("Order").properties if p.name == "amount")
+    assert (amount.type, amount.fields) == ("json", None)
 
 
 def test_struct_and_optional_struct_derive_all_inner_fields() -> None:

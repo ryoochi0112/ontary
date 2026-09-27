@@ -129,6 +129,7 @@ class Order(OntologyObject):
 
 The inner fields remain part of the ontology declaration, while sensitivity applies
 to the whole value.
+Struct inner fields may only default to None; set other values at the call site.
 
 Use a linked object type with a `LinkTypeDef` when the group is repeatable, shared,
 independently governed, or an action target. These cases need their own identity,
