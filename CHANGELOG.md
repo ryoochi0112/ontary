@@ -11,6 +11,21 @@ you**.
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking (store schema):** `SCHEMA_VERSION` is now 12. `audit_log` has a new
+  `unscoped_params` column. A store stamped 11 is refused with
+  `STORE_VERSION_UNSUPPORTED`; drop and re-ingest it as described in
+  [docs/storage.md](docs/storage.md#moving-across-a-schema-version).
+- An action may now target a `scope="unscoped"` type. A `target(...)` parameter
+  that refers to an unscoped type skips the action scope gate, so the action's
+  `roles=` is its only gate. Before, every scope level resolved to nothing and
+  every consumer was denied with `SCOPE_DENIED`, so reference data could never be
+  an action's target. The new `AuditEntry.unscoped_params` names the parameters
+  that skipped the gate. A `scope_ref(...)` parameter may not refer to an
+  unscoped type; `validate()` and `diagnose()` report it as `SCOPE_POLICY_ERROR`.
+  Fixes [ontary#35](https://github.com/ryoochi0112/ontary/issues/35).
+
 ## [0.15.0] — 2026-09-27
 
 ```bash

@@ -28,6 +28,7 @@ from ontary.scope import (
     SelfScope,
     ViaLink,
     incoherent_scope_declarations,
+    unscoped_scope_parameter_declarations,
 )
 from ontary.typesys import validate_scalar
 
@@ -409,6 +410,19 @@ def _scope_policy_findings(
                 message.split(":", 1)[0],
                 message,
                 "Remove the type from unscoped_types, or drop its rules entry.",
+            )
+        )
+
+    for api_name, index, message in unscoped_scope_parameter_declarations(
+        policy, registry
+    ):
+        findings.append(
+            _error(
+                "SCOPE_POLICY_ERROR",
+                f"ActionTypeDef[{api_name!r}].parameters[{index}]",
+                message,
+                "Use scope_semantics 'target' for the parameter, or give the "
+                "type a scope rule instead of listing it as unscoped.",
             )
         )
 

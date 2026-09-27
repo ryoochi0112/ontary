@@ -68,6 +68,7 @@ class AuditRowFields(NamedTuple):
     invocation_id: str | None
     kind: str
     principal: str | None
+    unscoped_params: str
 
 
 def encode_audit_entry(entry: AuditEntry) -> AuditRowFields:
@@ -90,6 +91,7 @@ def encode_audit_entry(entry: AuditEntry) -> AuditRowFields:
         invocation_id=entry.invocation_id,
         kind=entry.kind,
         principal=entry.principal,
+        unscoped_params=_safe_json_dumps(entry.unscoped_params),
     )
 
 
@@ -118,6 +120,7 @@ def decode_audit_entry(row: AuditRowLike) -> AuditEntry:
         # any future adopt/migrate path MUST validate `kind` before this call.
         kind=row["kind"],
         principal=row["principal"],
+        unscoped_params=json.loads(row["unscoped_params"]),
     )
 
 

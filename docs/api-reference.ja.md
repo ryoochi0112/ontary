@@ -229,8 +229,8 @@ SDK 利用者向けのテストヘルパーは `make_store`、`consumer`、`rais
 | マーカー | 宣言内容 |
 | --- | --- |
 | `ref(cls)` | このパラメータは `cls` のオブジェクトを指す |
-| `target(cls)` | …かつ Action の**対象**である（スコープはこれに対して強制される） |
-| `scope_ref(cls)` | …かつ Action が作成する先の**スコープ**を指す |
+| `target(cls)` | …かつ Action の**対象**である（スコープはこれに対して強制される）。unscoped な型には強制するスコープがないため、`roles=` だけがゲートになる |
+| `scope_ref(cls)` | …かつ Action が作成する先の**スコープ**を指す。unscoped な型は指せない（`SCOPE_POLICY_ERROR`） |
 
 これらが生成される `ActionParameterDef` の `refers_to` / `scope_semantics` を決めます。
 つまりスコープ強制は、エンジンのハードコードではなく**作者が宣言する**ものです。
@@ -645,6 +645,11 @@ Function は 1 つのログを共有するため、読み手が両者を区別�
 同じパラメータで 2 回呼ぶと、それ以外では区別できません。`None` はこのフィールドが存在
 しなかった頃のエントリ（古いエンジンが書いたストアファイル）を意味し、後から捏造される
 ことはありません。
+
+**`unscoped_params: list[str]`** — `scope="unscoped"` の型を指すため、Action の
+スコープゲートを通らなかった `target(...)` パラメータの一覧です。これらのパラメータでは、
+Action の `roles=` だけがゲートでした。スコープを持つパラメータがすべてスコープ検査を
+受けた場合は空です。ゲートより前に書かれたエントリ（ロールによる拒否など）でも空です。
 
 - `WriteRecord` — `op`（`create`/`update`/`link`）、`object_type`、`link_type`、
   `object_id`、`from_id`、`to_id`
@@ -1227,7 +1232,7 @@ MCP サーバーでは、この実行時ではなくトランスポートによ�
 | `OBJECT_RETIRE_NOT_FOUND` | A retirement targeted an object with no stored row. |
 | `PRIMARY_KEY_IMMUTABLE` | An update tried to change an object's primary key; a primary key is immutable, so retire the object and insert a new one instead. |
 | `ONTOLOGY_INVALID` | `OntologyRegistry.validate()` rejected a declaration because its cross-references were invalid. |
-| `SCOPE_POLICY_ERROR` | A ScopePolicy declaration is unusable: a rule references an undeclared object type, link type, or scope level; a type declares an empty contributor rule list; or a type is listed in unscoped_types while also declaring scope rules. |
+| `SCOPE_POLICY_ERROR` | A ScopePolicy declaration is unusable: a rule references an undeclared object type, link type, or scope level; a type declares an empty contributor rule list; a type is listed in unscoped_types while also declaring scope rules; or an action's scope parameter refers to an unscoped type. |
 | `UNDECLARED_CAPABILITY` | A handler requested a capability its action or function did not declare. |
 | `UNKNOWN_ACTION` | An action name is unregistered on the OntologyRegistry, or has no handler bound to it. |
 | `UNKNOWN_FIELD` | A typed `get`/`list` call named a key that is not one of the target class's declared properties (spec typed-authoring AC7). The existence-only check runs client-side before the guarded read layer; a hidden-but-declared key still reaches the visibility kind unchanged, and the string-form surface keeps its silent-non-match behavior (AC8). The error lives here since C3 of the staged refactor (previously `ontary.functions`, which re-exports it). |

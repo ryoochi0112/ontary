@@ -235,8 +235,8 @@ All take an `OntologyObject` subclass and pass extra kwargs to `Field`.
 | Marker | Declares |
 | --- | --- |
 | `ref(cls)` | This param refers to an object of `cls` |
-| `target(cls)` | …and it is the action's **target** — scope is enforced against it |
-| `scope_ref(cls)` | …and it names the **scope** the action creates within |
+| `target(cls)` | …and it is the action's **target** — scope is enforced against it. For an unscoped type there is no scope to enforce, so `roles=` is the only gate |
+| `scope_ref(cls)` | …and it names the **scope** the action creates within. It may not refer to an unscoped type (`SCOPE_POLICY_ERROR`) |
 
 These drive `refers_to` / `scope_semantics` on the generated `ActionParameterDef`, so
 scope enforcement is declared by the author rather than hardcoded in the engine.
@@ -659,6 +659,12 @@ entries by this value rather than by matching fields and append order — two ca
 the same action with the same params are otherwise indistinguishable. `None` means
 the entry predates the field (a store file written by an older engine); it is never
 invented for such rows.
+
+**`unscoped_params: list[str]`** — the `target(...)` parameters that skipped the
+action scope gate because they refer to a `scope="unscoped"` type. For them the
+action's `roles=` was the only gate. The list is empty when every scope-bearing
+parameter was scope-checked, and on entries written before the gate ran (for
+example a role denial).
 
 - `WriteRecord` — `op` (`create`/`update`/`link`), `object_type`, `link_type`,
   `object_id`, `from_id`, `to_id`
@@ -1243,7 +1249,7 @@ table below is generated from it.
 | `OBJECT_RETIRE_NOT_FOUND` | A retirement targeted an object with no stored row. |
 | `PRIMARY_KEY_IMMUTABLE` | An update tried to change an object's primary key; a primary key is immutable, so retire the object and insert a new one instead. |
 | `ONTOLOGY_INVALID` | `OntologyRegistry.validate()` rejected a declaration because its cross-references were invalid. |
-| `SCOPE_POLICY_ERROR` | A ScopePolicy declaration is unusable: a rule references an undeclared object type, link type, or scope level; a type declares an empty contributor rule list; or a type is listed in unscoped_types while also declaring scope rules. |
+| `SCOPE_POLICY_ERROR` | A ScopePolicy declaration is unusable: a rule references an undeclared object type, link type, or scope level; a type declares an empty contributor rule list; a type is listed in unscoped_types while also declaring scope rules; or an action's scope parameter refers to an unscoped type. |
 | `UNDECLARED_CAPABILITY` | A handler requested a capability its action or function did not declare. |
 | `UNKNOWN_ACTION` | An action name is unregistered on the OntologyRegistry, or has no handler bound to it. |
 | `UNKNOWN_FIELD` | A typed `get`/`list` call named a key that is not one of the target class's declared properties (spec typed-authoring AC7). The existence-only check runs client-side before the guarded read layer; a hidden-but-declared key still reaches the visibility kind unchanged, and the string-form surface keeps its silent-non-match behavior (AC8). The error lives here since C3 of the staged refactor (previously `ontary.functions`, which re-exports it). |
