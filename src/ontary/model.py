@@ -98,7 +98,9 @@ def hydrate(cls: type[_T], stored: StoredObject, consumer_kind: ConsumerKind) ->
             value = stored.payload[prop.name]
             if value is None:
                 continue
-            mismatch = _storage_scalar_violation(value, prop.type, prop.choices)
+            mismatch = _storage_scalar_violation(
+                value, prop.type, prop.choices, fields=prop.fields
+            )
             if mismatch is not None:
                 raise ValidationFailed(
                     f"{cls.__name__} {stored.lineage.object_id!r}: stored "
