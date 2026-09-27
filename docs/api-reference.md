@@ -307,6 +307,46 @@ class Ticket(OntologyObject):
   such as an `IntEnum` or `Literal[1, 2]`; a choice annotation combined with
   `prop(choices=...)`; and a choice annotation on the primary key.
 
+#### Struct properties and parameters
+
+Annotate a property or an `ActionParams` field with a flat Pydantic `BaseModel`.
+For example, `amount: Money` declares a struct property. The same annotation on an
+action parameter declares a struct parameter.
+
+```python
+class Money(BaseModel):
+    value: float
+    currency: str
+
+
+class Order(OntologyObject):
+    amount: Money
+```
+
+The generated `PropertyDef` or `ActionParameterDef` has `type="struct"` and a
+non-empty `fields` tuple of `StructFieldDef` values. Each inner declaration carries
+`name`, a scalar `type` (`str`, `int`, `float`, `bool`, `date`, or `datetime`),
+optional string `choices`, and `required`. A non-struct declaration has
+`fields=None`. An optional outer model makes the property or parameter optional;
+an optional inner annotation makes that inner field optional.
+
+Writes accept a model instance or an equivalent dict and validate the declared
+inner fields. A bad object write raises `INVALID_RECORD`; a bad action parameter
+raises `INVALID_PARAMS`, with the message naming the inner path such as
+`amount.currency`. A typed read returns the model, while string and MCP reads
+return a plain object. Updating a struct replaces the whole value. Sensitivity
+applies to the whole property.
+
+Structs are flat: nested models, lists or maps of models, inner aliases, inner
+property metadata, and struct primary keys are refused at declaration. Querying by
+an inner field is unsupported. A `where` condition on the struct property raises
+`OPERATOR_TYPE_MISMATCH`; `order_by` raises `INVALID_PARAMS`; `group_by` raises
+`INVALID_GROUP_BY`; and numeric aggregate functions raise
+`NON_NUMERIC_AGGREGATE` (`count` is exempt). MCP's `list_object_types` and
+`list_action_types` include `fields` on every property and parameter: `null` for
+non-struct values, and a list of objects with `name`, `type`, `required`, and
+`choices` for a struct.
+
 #### Field markers: `ref`, `target`, `scope_ref`
 
 All take an `OntologyObject` subclass and pass extra kwargs to `Field`.
@@ -499,6 +539,10 @@ property is absent. An `int` operand on a declared `float` is widening, not a
 mismatch. Mapping-valued `where` is the same grammar on typed,
 string, aggregate, Function, and MCP read surfaces.
 
+A `where` condition on a struct property raises `OPERATOR_TYPE_MISMATCH` with a
+message such as `where is not supported on struct property 'amount'`. Inner paths
+such as `amount.currency` cannot be queried; they are not top-level properties.
+
 Because a mapping value is operator syntax, dict equality on a declared `json`
 property is not spelled `where={"data": {"kind": "a"}}` — that mapping is parsed
 as operators, not a value to match. Wrap it as an `in` list of one instead:
@@ -642,6 +686,8 @@ A `json`-declared `group_by` raises `INVALID_GROUP_BY`: its values may be a
 `dict` or `list` and so need not be hashable. The **declared type** is what is
 checked, not the stored values, so a `json` property that happens to hold only
 scalars refuses too rather than working until the first `dict` arrives.
+Struct properties also raise `INVALID_GROUP_BY` when used as `group_by`; the
+declared struct value is not a supported group key.
 
 Two distinct group values that release as the same dictionary key raise
 `GROUP_KEY_COLLISION` — most often an optional property, which keys `None` on
@@ -1284,14 +1330,22 @@ data-driven ontologies; most authors should use `Ontology`.
 | Type | Key fields |
 | --- | --- |
 | `ObjectTypeDef` | `api_name`, `display_name`, `description`, `layer`, `properties`, `primary_key`, `owned` |
-| `PropertyDef` | `name`, `type`, `choices`, `required`, `sensitivity`, `scope_level` |
+| `PropertyDef` | `name`, `type`, `choices`, `fields`, `required`, `sensitivity`, `scope_level` |
 | `LinkTypeDef` | `api_name`, `from_type`, `to_type`, `cardinality`, `description`, `identity_revealing`, `owned` |
 | `ActionTypeDef` | `api_name`, `display_name`, `target_type`, `executable_by_roles`, `description`, `parameters`, `capabilities` |
-| `ActionParameterDef` | `name`, `type`, `choices`, `required`, `refers_to`, `scope_semantics` |
+| `ActionParameterDef` | `name`, `type`, `choices`, `fields`, `required`, `refers_to`, `scope_semantics` |
+| `StructFieldDef` | `name`, `type`, `choices`, `required` |
 | `FunctionDef` | `api_name`, `description`, `input_description`, `output_description`, `capabilities` |
 | `Sensitivity` | `ai_usable`, `human_visible` |
 
-`PropertyType` is `Literal["str", "int", "float", "bool", "date", "datetime", "json"]`.
+`PropertyType` is `Literal["str", "int", "float", "bool", "date", "datetime", "json", "struct"]`.
+
+`StructFieldDef` describes one flat inner field. Its `type` is a scalar property
+type, `choices` is an optional tuple of string values for a `str` field, and
+`required` defaults to `True`. `PropertyDef.fields` and
+`ActionParameterDef.fields` are non-empty tuples for `type="struct"` and are
+`None` for every other type. The MCP schema renders each tuple as a list and
+always includes the `fields` key.
 
 **`OntologyRegistry`** holds the descriptors and validates cross-references;
 `validate()` raises `ValidationFailed` (`ONTOLOGY_INVALID`) on dangling link
@@ -1389,6 +1443,7 @@ table below is generated from it.
 | `INVALID_CURSOR` | Raised when `Store.read_page`'s `after_key` is malformed OR simply unknown. `after_key` is UNTRUSTED input: it reaches the store from an MCP client via a later page-filling loop, round-tripped from a previous page's cursor without any guarantee the caller did not tamper with it. As amended 2026-07-25 (T2 review, spec §5), it is a random per-row PAGE TOKEN (`objects.page_token`, uuid4 hex), not a decimal row id. Resolving token to row id through the unique index is the ONLY way to turn a cursor into row identity, so every string never issued for a real row (malformed, tampered, or made up) raises this same error on both backends. There is no distinct well-formed but out-of-range case from the old integer design's `OverflowError`/silent-empty-page divergence. A token issued for a row since superseded by `update` still resolves because lookup uses `row_id` independently of `valid_to`, so an in-flight cursor remains a valid resume point (spec §8). |
 | `GROUP_KEY_COLLISION` | Two distinct `group_by` values in one selection release as the same dictionary key, so one cell would have to describe two populations. The released shape is `dict[str, ...]` -- a public return type and MCP's wire shape -- and `str()` is not injective over the values a group key can take: an optional property keys `None` on the rows that lack it, which collides with a row carrying the literal string `"None"`. The populations did not merge; the later one overwrote the earlier, so the released value (and, under `func="count"`, the released size) described whichever rows were inserted last, decided by nothing the caller supplied or could observe. Raised per group as each is released, AFTER that group's min-N check, so the release floor keeps precedence over a shape refusal. |
 | `INVALID_GROUP_BY` | `GuardedQuery.aggregate_by`'s (or `BoundQuery`'s/`OntologyClient`'s) `group_by` cannot be a group key. Either it was falsy (e.g. "") -- the shared aggregation body branches on `group_by`'s truthiness, so a falsy-but-non-None value would otherwise silently collapse to the ungrouped path and return a float instead of a `dict[str, float]` -- or it names a property whose declared `PropertyType` is not groupable (`json`, whose values may be a `dict` or `list` and so need not be hashable; grouping by one used to raise a bare `TypeError` from inside the grouping loop, and `INTERNAL_ERROR` once it crossed the MCP boundary). The declared type is checked, not the stored values, so a `json` column that happens to hold only scalars refuses too rather than working until the first `dict` arrives. Both are checked in `aggregate_by`, where the `GuardedQuery`, `BoundQuery`, and client surfaces converge, before `_aggregate` runs, rather than relying on an assert removed by `python -O`. |
+|  | A struct property is also not groupable; using it as `group_by` raises this code before rows are read. |
 | `PAGE_NOT_ITERABLE` | A `Page`/`TypedPage` was iterated, indexed or measured directly instead of through `.items`. Both are pydantic models, so the inherited `BaseModel.__iter__` would otherwise yield `(field_name, value)` pairs -- `for row in page` hands back `('items', [...])` and `('next_cursor', ...)`, and the failure surfaces later as `AttributeError: 'tuple' object has no attribute 'payload'` at whatever touched the row. This refuses at the iteration itself and names `.items` and `limit=None`. |
 | `INVALID_LIMIT` | `GuardedQuery.get_objects`'s (or `OntologyClient.list`'s) `limit` was < 1 -- a silently empty page would hide that the call was malformed rather than legitimately paginated. |
 | `STALE_CURSOR` | An ordered walk's cursor resolved to a row that is no longer current; restart the ordered walk from the first page. |
@@ -1411,6 +1466,7 @@ table below is generated from it.
 | `UNKNOWN_OBJECT_TYPE` | An operation referenced an unregistered object type. |
 | `UNKNOWN_OPERATOR` | A mapping-form `where` clause named an operator outside the declared set: `gt`, `gte`, `lt`, `lte`, `in`, `ne`, or `contains` -- or was an empty mapping. A mapping with several operators is validated key by key, so one unknown key refuses the whole clause. |
 | `OPERATOR_TYPE_MISMATCH` | A mapping-form `where` operator is not valid for the property's declared type (comparisons need `int`, `float`, `date`, or `datetime`; `contains` needs `str`), or its operand is not a declared-type scalar. |
+|  | A `where` condition on a struct property raises this code with a message such as `where is not supported on struct property 'amount'`; inner-field paths are unsupported. |
 
 ### `visibility`
 

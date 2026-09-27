@@ -114,17 +114,29 @@ security that cannot be expressed cleanly on the containing object.
 
 ### Structs
 
-Foundry structs group nested fields inside a property. **No equivalent yet; the
-nearest approximation is separate properties on the same `ObjectTypeDef`, or a
-linked object type when the group has its own identity, lifecycle, reuse, or
-security.** `PropertyDef` has no nested property-type declaration.
+Use a struct for a small, inseparable value that is always created, secured, and
+changed as a whole with its parent. For example, an order can declare `amount: Money`:
 
-Choose separate properties for a small, inseparable value group that is always
-created, secured, and changed with its parent. Choose another object type plus
-`LinkTypeDef` when the group is repeatable, shared, independently governed, or a
-target of actions. Avoid placing opaque nested data into one property merely to make
-the descriptor shorter; doing so hides fields from ontology-level naming and
-security review.
+```python
+class Money(BaseModel):
+    value: float
+    currency: str
+
+
+class Order(OntologyObject):
+    amount: Money
+```
+
+The inner fields remain part of the ontology declaration, while sensitivity applies
+to the whole value.
+
+Use a linked object type with a `LinkTypeDef` when the group is repeatable, shared,
+independently governed, or an action target. These cases need their own identity,
+lifecycle, ownership, or action boundary.
+
+Structs are flat. Filtering, ordering, and grouping on the struct property are
+unsupported; numeric aggregation is also unsupported, though count remains
+available. Querying by an inner field such as `amount.currency` is not supported.
 
 *Source: Palantir, "Ontology design: Structural guidance".*
 

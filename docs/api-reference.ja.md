@@ -299,6 +299,45 @@ class Ticket(OntologyObject):
   ような文字列でないメンバー、選択肢の注釈と `prop(choices=...)` の併用、主キーへの
   選択肢の注釈です。
 
+#### Struct プロパティとパラメーター
+
+プロパティまたは `ActionParams` のフィールドに、フラットな Pydantic `BaseModel` を
+注釈します。たとえば `amount: Money` は struct プロパティを宣言します。Action パラメーター
+にも同じ注釈を付けられます。
+
+```python
+class Money(BaseModel):
+    value: float
+    currency: str
+
+
+class Order(OntologyObject):
+    amount: Money
+```
+
+生成される `PropertyDef` または `ActionParameterDef` は `type="struct"` と、
+`StructFieldDef` の空でない `fields` tuple を持ちます。各内側の宣言には `name`、
+scalar の `type`（`str`、`int`、`float`、`bool`、`date`、`datetime`）、任意の文字列
+`choices`、および `required` が含まれます。struct 以外の宣言では `fields=None` です。
+外側を `Money | None` と注釈するとプロパティまたはパラメーターが optional になり、
+内側の optional な注釈はそのフィールドを optional にします。
+
+書き込みにはモデルのインスタンスか、それと同等の dict を渡せます。内側の宣言に対して
+検証されます。不正なオブジェクトの書き込みは `INVALID_RECORD`、不正な Action
+パラメーターは `INVALID_PARAMS` になり、メッセージは `amount.currency` のような内側の
+パスを示します。型付き読み取りはモデルを返し、文字列および MCP の読み取りは通常の
+オブジェクトを返します。struct の更新は値全体を置き換えます。sensitivity は
+プロパティ全体に適用されます。
+
+struct はフラットです。入れ子のモデル、モデルの list や map、内側の alias、内側の
+プロパティメタデータ、struct の主キーは宣言時に拒否されます。内側のフィールドによる
+検索はサポートされません。struct プロパティに対する `where` 条件は
+`OPERATOR_TYPE_MISMATCH`、`order_by` は `INVALID_PARAMS`、`group_by` は
+`INVALID_GROUP_BY` になります。数値集計関数は `NON_NUMERIC_AGGREGATE` になります
+（`count` は対象外です）。MCP の `list_object_types` と `list_action_types` は、すべての
+プロパティとパラメーターに `fields` を含めます。struct 以外は `null`、struct は
+`name`、`type`、`required`、`choices` を持つオブジェクトの list です。
+
 #### フィールドマーカー: `ref` / `target` / `scope_ref`
 
 いずれも `OntologyObject` サブクラスを取り、追加の kwargs は `Field` に渡します。
@@ -492,6 +531,11 @@ mapping は拒否されます。比較演算子は宣言済みの `int`、`float
 `where` は、型付き、文字列、aggregate、Function、MCP のすべての読み取り surface で
 共通です。
 
+struct プロパティに対する `where` 条件は `OPERATOR_TYPE_MISMATCH` になります。
+メッセージは `where is not supported on struct property 'amount'` のようにプロパティ名を
+示します。`amount.currency` のような内側のパスでは検索できません。内側のフィールドは
+トップレベルのプロパティではありません。
+
 mapping 値は演算子構文なので、宣言済み `json` プロパティの等価比較を
 `where={"data": {"kind": "a"}}` とは書けません — その mapping は値ではなく演算子として
 解釈されます。1 要素の `in` リストで包んでください:
@@ -626,6 +670,8 @@ surface だけでなく、**すべての** surface が対象です。型が宣�
 `list` になり得るため、ハッシュ可能とは限らないからです。検査対象は保存された値では
 なく**宣言された型**です。したがって、たまたまスカラーしか保持していない `json`
 プロパティも拒否されます。最初の `dict` が届くまで動いてしまうことはありません。
+struct プロパティを `group_by` に指定した場合も `INVALID_GROUP_BY` になります。宣言済みの
+struct 値はグループキーとしてサポートされません。
 
 異なる 2 つのグループ値が同じ dict キーとして公開される場合は `GROUP_KEY_COLLISION`
 になります。多くはオプショナルなプロパティが原因です。値を持たない行のキーが `None` に
@@ -1255,14 +1301,21 @@ stateful セッションでも、各 request はその request 自身のトー�
 | 型 | 主なフィールド |
 | --- | --- |
 | `ObjectTypeDef` | `api_name`, `display_name`, `description`, `layer`, `properties`, `primary_key`, `owned` |
-| `PropertyDef` | `name`, `type`, `choices`, `required`, `sensitivity`, `scope_level` |
+| `PropertyDef` | `name`, `type`, `choices`, `fields`, `required`, `sensitivity`, `scope_level` |
 | `LinkTypeDef` | `api_name`, `from_type`, `to_type`, `cardinality`, `description`, `identity_revealing`, `owned` |
 | `ActionTypeDef` | `api_name`, `display_name`, `target_type`, `executable_by_roles`, `description`, `parameters`, `capabilities` |
-| `ActionParameterDef` | `name`, `type`, `choices`, `required`, `refers_to`, `scope_semantics` |
+| `ActionParameterDef` | `name`, `type`, `choices`, `fields`, `required`, `refers_to`, `scope_semantics` |
+| `StructFieldDef` | `name`, `type`, `choices`, `required` |
 | `FunctionDef` | `api_name`, `description`, `input_description`, `output_description`, `capabilities` |
 | `Sensitivity` | `ai_usable`, `human_visible` |
 
-`PropertyType` は `Literal["str", "int", "float", "bool", "date", "datetime", "json"]`。
+`PropertyType` は `Literal["str", "int", "float", "bool", "date", "datetime", "json", "struct"]`。
+
+`StructFieldDef` はフラットな内側のフィールドを 1 つ記述します。`type` は scalar の
+プロパティ型で、`choices` は `str` フィールドに使う任意の文字列 tuple、`required` の
+既定値は `True` です。`PropertyDef.fields` と `ActionParameterDef.fields` は
+`type="struct"` では空でない tuple、それ以外の型では `None` です。MCP の schema は
+tuple を list として出力し、常に `fields` キーを含めます。
 
 **`OntologyRegistry`** が記述子を保持し、相互参照を検証します。`validate()` は、
 リンク端点の参照切れ、Action 対象の参照切れ、api_name の重複、properties に無い主キーに
@@ -1366,6 +1419,7 @@ MCP サーバーでは、この実行時ではなくトランスポートによ�
 | `INVALID_CURSOR` | Raised when `Store.read_page`'s `after_key` is malformed OR simply unknown. `after_key` is UNTRUSTED input: it reaches the store from an MCP client via a later page-filling loop, round-tripped from a previous page's cursor without any guarantee the caller did not tamper with it. As amended 2026-07-25 (T2 review, spec §5), it is a random per-row PAGE TOKEN (`objects.page_token`, uuid4 hex), not a decimal row id. Resolving token to row id through the unique index is the ONLY way to turn a cursor into row identity, so every string never issued for a real row (malformed, tampered, or made up) raises this same error on both backends. There is no distinct well-formed but out-of-range case from the old integer design's `OverflowError`/silent-empty-page divergence. A token issued for a row since superseded by `update` still resolves because lookup uses `row_id` independently of `valid_to`, so an in-flight cursor remains a valid resume point (spec §8). |
 | `GROUP_KEY_COLLISION` | Two distinct `group_by` values in one selection release as the same dictionary key, so one cell would have to describe two populations. The released shape is `dict[str, ...]` -- a public return type and MCP's wire shape -- and `str()` is not injective over the values a group key can take: an optional property keys `None` on the rows that lack it, which collides with a row carrying the literal string `"None"`. The populations did not merge; the later one overwrote the earlier, so the released value (and, under `func="count"`, the released size) described whichever rows were inserted last, decided by nothing the caller supplied or could observe. Raised per group as each is released, AFTER that group's min-N check, so the release floor keeps precedence over a shape refusal. |
 | `INVALID_GROUP_BY` | `GuardedQuery.aggregate_by`'s (or `BoundQuery`'s/`OntologyClient`'s) `group_by` cannot be a group key. Either it was falsy (e.g. "") -- the shared aggregation body branches on `group_by`'s truthiness, so a falsy-but-non-None value would otherwise silently collapse to the ungrouped path and return a float instead of a `dict[str, float]` -- or it names a property whose declared `PropertyType` is not groupable (`json`, whose values may be a `dict` or `list` and so need not be hashable; grouping by one used to raise a bare `TypeError` from inside the grouping loop, and `INTERNAL_ERROR` once it crossed the MCP boundary). The declared type is checked, not the stored values, so a `json` column that happens to hold only scalars refuses too rather than working until the first `dict` arrives. Both are checked in `aggregate_by`, where the `GuardedQuery`, `BoundQuery`, and client surfaces converge, before `_aggregate` runs, rather than relying on an assert removed by `python -O`. |
+|  | struct プロパティもグループ化できません。`group_by` に指定すると、行を読む前にこのコードになります。 |
 | `PAGE_NOT_ITERABLE` | A `Page`/`TypedPage` was iterated, indexed or measured directly instead of through `.items`. Both are pydantic models, so the inherited `BaseModel.__iter__` would otherwise yield `(field_name, value)` pairs -- `for row in page` hands back `('items', [...])` and `('next_cursor', ...)`, and the failure surfaces later as `AttributeError: 'tuple' object has no attribute 'payload'` at whatever touched the row. This refuses at the iteration itself and names `.items` and `limit=None`. |
 | `INVALID_LIMIT` | `GuardedQuery.get_objects`'s (or `OntologyClient.list`'s) `limit` was < 1 -- a silently empty page would hide that the call was malformed rather than legitimately paginated. |
 | `STALE_CURSOR` | An ordered walk's cursor resolved to a row that is no longer current; restart the ordered walk from the first page. |
@@ -1388,6 +1442,7 @@ MCP サーバーでは、この実行時ではなくトランスポートによ�
 | `UNKNOWN_OBJECT_TYPE` | An operation referenced an unregistered object type. |
 | `UNKNOWN_OPERATOR` | A mapping-form `where` clause named an operator outside the declared set: `gt`, `gte`, `lt`, `lte`, `in`, `ne`, or `contains` -- or was an empty mapping. A mapping with several operators is validated key by key, so one unknown key refuses the whole clause. |
 | `OPERATOR_TYPE_MISMATCH` | A mapping-form `where` operator is not valid for the property's declared type (comparisons need `int`, `float`, `date`, or `datetime`; `contains` needs `str`), or its operand is not a declared-type scalar. |
+|  | struct プロパティに対する `where` 条件もこのコードになります。メッセージは `where is not supported on struct property 'amount'` のように示され、内側のフィールドパスは使えません。 |
 
 ### `visibility`
 

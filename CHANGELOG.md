@@ -30,6 +30,11 @@ you**.
   accepts an `Enum` member whose value is one of its choices, since it is the
   same declaration. A `str` property without `choices` refuses an `Enum` member
   exactly as before.
+- Struct properties and action parameters (#43). A flat Pydantic model
+  annotation declares `type="struct"` with its inner fields exposed through
+  `PropertyDef.fields` or `ActionParameterDef.fields`. `StructFieldDef` describes
+  each inner field. MCP schema discovery includes `fields` (null for non-structs).
+  This additively widens `PropertyType`; `SCHEMA_VERSION` is unchanged.
 
 ## [0.17.0] — 2026-09-27
 
