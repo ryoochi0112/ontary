@@ -195,10 +195,19 @@ class ActionContext:
         obj_def = self._registry_or_raise("save").get_object_type(api_name)
         return [p.name for p in obj_def.properties]
 
+    def _declared_snapshot(self, obj: OntologyObject, api_name: str) -> dict[str, Any]:
+        properties = self._registry_or_raise("save").get_object_type(api_name).properties
+        struct_names = {p.name for p in properties if p.type == "struct"}
+        snapshot = obj.model_dump(include={p.name for p in properties} - struct_names)
+        for prop in properties:
+            if prop.type == "struct" and prop.fields is not None:
+                snapshot[prop.name] = struct_value(getattr(obj, prop.name), prop.fields)
+        return snapshot
+
     def _hand_out(self, cls: type[_O], stored: StoredObject) -> _O:
         obj = hydrate(cls, stored, self._consumer.kind)
         api_name = stored.lineage.object_type
-        snapshot = obj.model_dump(include=set(self._property_names(api_name)))
+        snapshot = self._declared_snapshot(obj, api_name)
         self._loaded[id(obj)] = (obj, api_name, snapshot)
         return obj
 
@@ -290,7 +299,7 @@ class ActionContext:
             )
         _, api_name, snapshot = entry
         names = self._property_names(api_name)
-        current = obj.model_dump(include=set(names))
+        current = self._declared_snapshot(obj, api_name)
         changes = {
             name: getattr(obj, name) for name in names if current.get(name) != snapshot.get(name)
         }
@@ -978,7 +987,18 @@ class ActionExecutor:
         audit trail, and a dict handler all see the plain string.
         """
         if isinstance(params, BaseModel):
-            return params.model_dump(mode="json")
+            struct_names = {p.name for p in action_def.parameters if p.type == "struct"}
+            dumped = params.model_dump(mode="json", exclude=struct_names)
+            for typed_param in action_def.parameters:
+                if typed_param.type == "struct" and typed_param.fields is not None:
+                    value = struct_value(getattr(params, typed_param.name), typed_param.fields)
+                    dumped[typed_param.name] = (
+                        _to_storage_scalar(value, typed_param.type, fields=typed_param.fields)
+                        if value is not None
+                        and validate_scalar(value, typed_param.type, fields=typed_param.fields) is None
+                        else value
+                    )
+            return dumped
         declared = {p.name: p for p in action_def.parameters}
         unwrapped = {}
         for name, value in params.items():

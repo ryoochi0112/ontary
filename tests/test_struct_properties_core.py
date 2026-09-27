@@ -8,7 +8,14 @@ from typing import Any
 
 import pytest
 from conftest import raises_code
-from pydantic import BaseModel
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    computed_field,
+    field_serializer,
+    model_serializer,
+)
 
 from ontary.errors import ValidationFailed
 from ontary.meta import ActionParameterDef, PropertyDef, StructFieldDef
@@ -169,3 +176,30 @@ def test_non_struct_type_ignores_passed_fields() -> None:
         value, "json"
     )
     assert _to_storage_scalar(value, "json", fields=fields) == _to_storage_scalar(value, "json")
+
+
+def test_struct_normalizer_reads_declared_attributes_and_preserves_extras() -> None:
+    class Special(BaseModel):
+        model_config = ConfigDict(extra="allow")
+        a: int = Field(exclude=True)
+        b: str
+
+        @field_serializer("b")
+        def serialize_b(self, value: str) -> str:
+            return value.upper()
+
+        @computed_field  # type: ignore[prop-decorator]
+        @property
+        def derived(self) -> str:
+            return "computed"
+
+        @model_serializer(mode="wrap")
+        def serialize_model(self, handler: Any) -> Any:
+            return {"replacement": handler(self)}
+
+    fields = (StructFieldDef(name="a", type="int"), StructFieldDef(name="b", type="str"))
+    instance = Special.model_validate({"a": 5, "b": "raw", "extra": 7})
+    assert struct_value(instance, fields) == {"a": 5, "b": "raw", "extra": 7}
+    assert validate_scalar(struct_value(instance, fields), "struct", fields=fields) == (
+        "extra: unknown field"
+    )

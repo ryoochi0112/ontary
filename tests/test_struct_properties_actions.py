@@ -8,7 +8,7 @@ from typing import Any, Literal, assert_type
 
 import pytest
 from conftest import raises_code
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ontary import (
     ActionContext,
@@ -256,3 +256,67 @@ def test_non_struct_action_parameters_keep_their_declared_rules(store: ObjectSto
         assert message in str(excinfo.value)
         if isinstance(bad, Meta):
             assert str(excinfo.value) == f"'Other': {message}"
+
+
+def test_excluded_inner_action_param_matches_dict_handler_and_audit() -> None:
+    class Detail(BaseModel):
+        a: int
+        b: int | None = Field(default=None, exclude=True)
+
+    local = Ontology("excluded-param", scope_levels=["org"], min_n=1)
+
+    @local.object(layer="L0", scope="unscoped", owned=True)
+    class Item(OntologyObject):
+        id: str = prop(primary_key=True)
+
+    class Params(ActionParams):
+        detail: Detail
+
+    seen: list[Detail] = []
+
+    @local.action(Params, target=Item, roles=["Clerk"], api_name="UseDetail")
+    def use_detail(ctx: ActionContext, params: Params) -> dict[str, Any]:
+        seen.append(params.detail)
+        return {}
+
+    local_store = ObjectStore(local.registry)
+    consumer = Consumer(actor_id="clerk", role="Clerk", scope_level="org", scope_id="one", kind="human")
+    client = local.bind(local_store).for_consumer(consumer)
+    client.execute("UseDetail", {"detail": {"a": 1, "b": 5}})
+    client.execute(Params(detail=Detail(a=1, b=5)))
+    assert seen == [Detail(a=1, b=5), Detail(a=1, b=5)]
+    entries = local_store.audit_entries()
+    assert [entry.params for entry in entries] == [
+        {"detail": {"a": 1, "b": 5}}, {"detail": {"a": 1, "b": 5}},
+    ]
+
+
+def test_ctx_save_detects_in_place_edit_of_excluded_inner_field() -> None:
+    class Detail(BaseModel):
+        a: int
+        b: int | None = Field(default=None, exclude=True)
+
+    local = Ontology("excluded-save", scope_levels=["org"], min_n=1)
+
+    @local.object(layer="L0", scope="unscoped", owned=True)
+    class Item(OntologyObject):
+        id: str = prop(primary_key=True)
+        detail: Detail
+
+    class Params(ActionParams):
+        item_id: str = target(Item)
+
+    @local.action(Params, target=Item, roles=["Clerk"], api_name="EditDetail")
+    def edit_detail(ctx: ActionContext, params: Params) -> dict[str, Any]:
+        item = ctx.get(Item, params.item_id)
+        assert item is not None
+        item.detail.b = 9
+        ctx.save(item)
+        return {}
+
+    local_store = ObjectStore(local.registry)
+    local_store.insert("Item", {"id": "one", "detail": {"a": 1, "b": 5}}, SRC)
+    consumer = Consumer(actor_id="clerk", role="Clerk", scope_level="org", scope_id="one", kind="human")
+    local.bind(local_store).for_consumer(consumer).execute("EditDetail", {"item_id": "one"})
+    row = local_store.read_current("Item", "one")
+    assert row is not None and row.payload["detail"] == {"a": 1, "b": 9}

@@ -152,7 +152,14 @@ def choice_value(value: Any, choices: tuple[str, ...] | None) -> Any:
 def struct_value(value: Any, fields: Sequence[StructFieldDef]) -> Any:
     """Normalize declared inner choices and fill absent optional fields."""
     if isinstance(value, BaseModel):
-        value = value.model_dump()
+        model_fields = {
+            name: getattr(value, name) for name in type(value).model_fields
+        }
+        declared = {
+            field.name: getattr(value, field.name) for field in fields
+            if field.name not in model_fields and hasattr(value, field.name)
+        }
+        value = {**model_fields, **declared, **(value.model_extra or {})}
     if not isinstance(value, Mapping):
         return value
     choices_by_name = {field.name: field.choices for field in fields}

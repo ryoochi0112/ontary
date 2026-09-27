@@ -3,21 +3,42 @@
 from __future__ import annotations
 
 import json
+import os
+import uuid
 from datetime import date, datetime, timezone
 from enum import Enum
 from typing import Any
 
 import pytest
 from conftest import raises_code
-from pydantic import BaseModel
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    computed_field,
+    create_model,
+    field_serializer,
+    model_serializer,
+)
 
-from ontary import Consumer, ObjectStore, Ontology, OntologyObject, Source, prop
+from ontary import (
+    ActionContext,
+    ActionParams,
+    Consumer,
+    InMemoryStore,
+    ObjectStore,
+    Ontology,
+    OntologyObject,
+    Source,
+    prop,
+)
 from ontary.client import OntologyRuntime
-from ontary.errors import ValidationFailed
+from ontary.errors import OntaryError, ValidationFailed
 from ontary.ingest import bulk_upsert
 from ontary.meta import ObjectTypeDef, OntologyRegistry, PropertyDef, StructFieldDef
 from ontary.ontology import OntologyDef
 from ontary.scope import ScopePolicy
+from ontary.store import Store
 
 
 class Currency(Enum):
@@ -208,3 +229,175 @@ def test_owned_struct_default_is_normalized_and_validated() -> None:
 def test_non_struct_choice_does_not_unwrap_without_declaration(store: ObjectStore) -> None:
     with raises_code(ValidationFailed, "INVALID_RECORD"):
         store.insert("Order", {"id": Currency.JPY, "amount": PLAIN, "status": "open"}, SRC)
+
+
+class ExcludedOptional(BaseModel):
+    a: int
+    b: int | None = Field(default=None, exclude=True)
+
+
+class ExcludedRequired(BaseModel):
+    a: int = Field(exclude=True)
+
+
+class SerializedField(BaseModel):
+    a: int
+    b: str
+
+    @field_serializer("b")
+    def serialize_b(self, value: str) -> str:
+        return value.upper()
+
+
+class SerializedModel(BaseModel):
+    a: int
+    b: str
+
+    @model_serializer(mode="plain")
+    def serialize_model(self) -> dict[str, str]:
+        return {"different": self.b}
+
+
+class ComputedValue(BaseModel):
+    a: int
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def calculated(self) -> int:
+        return self.a + 1
+
+
+@pytest.fixture(params=["mem", "sqlite", "pg"])
+def conformance_backend(request: pytest.FixtureRequest) -> str:
+    backend: str = request.param
+    if backend == "pg" and not os.getenv("ONTARY_TEST_POSTGRES_DSN"):
+        pytest.skip("ONTARY_TEST_POSTGRES_DSN is not set")
+    return backend
+
+
+@pytest.mark.parametrize(
+    "model,plain",
+    [
+        (ExcludedOptional(a=1, b=5), {"a": 1, "b": 5}),
+        (ExcludedRequired(a=5), {"a": 5}),
+        (SerializedField(a=1, b="raw"), {"a": 1, "b": "raw"}),
+        (SerializedModel(a=1, b="raw"), {"a": 1, "b": "raw"}),
+        (ComputedValue(a=1), {"a": 1}),
+    ],
+)
+def test_serializer_shapes_store_identically_on_each_backend(
+    conformance_backend: str, model: BaseModel, plain: dict[str, Any]
+) -> None:
+    local = Ontology("serializer-shapes", scope_levels=["org"], min_n=1)
+
+    entry_cls = create_model(
+        "Entry", __base__=OntologyObject,
+        id=(str, prop(primary_key=True)), detail=(type(model), ...),
+    )
+    local.object(layer="L0", scope="unscoped", owned=True)(entry_cls)
+
+    backend: Store
+    if conformance_backend == "mem":
+        backend = InMemoryStore(local.registry)
+    elif conformance_backend == "sqlite":
+        backend = ObjectStore(local.registry)
+    else:
+        from ontary.store import PostgresStore
+
+        backend = PostgresStore(
+            local.registry, os.environ["ONTARY_TEST_POSTGRES_DSN"],
+            tenant=f"serializer-{uuid.uuid4().hex}",
+        )
+    backend.insert("Entry", {"id": "instance", "detail": model}, SRC)
+    backend.insert("Entry", {"id": "dict", "detail": plain}, SRC)
+    instance_row = backend.read_current("Entry", "instance")
+    dict_row = backend.read_current("Entry", "dict")
+    assert instance_row is not None and dict_row is not None
+    assert instance_row.payload["detail"] == dict_row.payload["detail"] == plain
+
+
+def test_model_extra_is_refused_as_unknown_inner_field() -> None:
+    class WithExtra(BaseModel):
+        model_config = ConfigDict(extra="allow")
+        a: int = Field(exclude=True)
+
+    local = Ontology("extra-struct", scope_levels=["org"], min_n=1)
+
+    @local.object(layer="L0", scope="unscoped", owned=True)
+    class Entry(OntologyObject):
+        id: str = prop(primary_key=True)
+        detail: WithExtra
+
+    backend = ObjectStore(local.registry)
+    with raises_code(ValidationFailed, "INVALID_RECORD") as excinfo:
+        backend.insert(
+            "Entry", {"id": "one", "detail": WithExtra.model_validate({"a": 1, "extra": 7})}, SRC
+        )
+    assert "property 'detail.extra' unknown field" in str(excinfo.value)
+    backend.insert("Entry", {"id": "two", "detail": WithExtra(a=1)}, SRC)
+    row = backend.read_current("Entry", "two")
+    assert row is not None and row.payload["detail"] == {"a": 1}
+
+
+@pytest.mark.parametrize("entry", ["insert", "action"])
+def test_subclass_field_is_refused_on_insert_and_typed_action_param(
+    conformance_backend: str, entry: str,
+) -> None:
+    class Detail(BaseModel):
+        a: int
+
+    class SubDetail(Detail):
+        zzz: int
+
+    local = Ontology("subclass-field", scope_levels=["org"], min_n=1)
+
+    @local.object(layer="L0", scope="unscoped", owned=True)
+    class Entry(OntologyObject):
+        id: str = prop(primary_key=True)
+        detail: Detail
+
+    class Params(ActionParams):
+        detail: Detail
+
+    seen: list[Detail] = []
+
+    @local.action(Params, target=Entry, roles=["Clerk"], api_name="UseDetail")
+    def use_detail(ctx: ActionContext, params: Params) -> dict[str, Any]:
+        seen.append(params.detail)
+        return {}
+
+    backend: Store
+    if conformance_backend == "mem":
+        backend = InMemoryStore(local.registry)
+    elif conformance_backend == "sqlite":
+        backend = ObjectStore(local.registry)
+    else:
+        from ontary.store import PostgresStore
+
+        backend = PostgresStore(
+            local.registry, os.environ["ONTARY_TEST_POSTGRES_DSN"],
+            tenant=f"subclass-{uuid.uuid4().hex}",
+        )
+
+    if entry == "insert":
+        for row_id, detail in (
+            ("instance", SubDetail(a=1, zzz=2)),
+            ("dict", {"a": 1, "zzz": 2}),
+        ):
+            with raises_code(ValidationFailed, "INVALID_RECORD") as excinfo:
+                backend.insert("Entry", {"id": row_id, "detail": detail}, SRC)
+            assert "property 'detail.zzz' unknown field" in str(excinfo.value)
+            assert backend.read_current("Entry", row_id) is None
+        return
+
+    consumer = Consumer(
+        actor_id="writer", role="Clerk", scope_level="org", scope_id="org-1", kind="human"
+    )
+    client = local.bind(backend).for_consumer(consumer)
+    with raises_code(OntaryError, "INVALID_PARAMS") as typed_error:
+        client.execute(Params(detail=SubDetail(a=1, zzz=2)))
+    assert "detail.zzz: unknown field" in str(typed_error.value)
+    with raises_code(OntaryError, "INVALID_PARAMS") as dict_error:
+        client.execute("UseDetail", {"detail": {"a": 1, "zzz": 2}})
+    assert "detail.zzz: unknown field" in str(dict_error.value)
+    assert seen == []
