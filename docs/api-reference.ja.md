@@ -621,6 +621,33 @@ Action は、型付きパラメータクラスと、
 ハンドラが生のストアハンドルの代わりに受け取るもの。書き込みには Action 自身の
 `Source` が自動で刻印されます。
 
+**型付きメンバー。** オントロジー自身のクラスと `LinkHandle` を受け取ります。そのため
+`mypy` がクラス、戻り値の型、リンクの各端点の型、`save` 前にハンドラが代入する属性を
+検査します。`create` のキーワード名は実行時にだけ検査されます。
+
+| メンバー | 用途 |
+| --- | --- |
+| `.get(cls, obj_id) -> T \| None` | 現在のオブジェクトを 1 件読む |
+| `.all(cls) -> list[T]` | `cls` の現在のオブジェクトすべて |
+| `.create(cls, **values) -> T` | 作成し、そのオブジェクトを返す。primary key を省略するとランタイムの `id_factory` から採番する。宣言されていないプロパティ名は `INVALID_RECORD` で拒否される |
+| `.save(obj)` | このコンテキストが `obj` を渡した時点から変わった宣言済みプロパティだけを書く。変更がなければ何も書かない。`get`・`all`・`create`・`traverse` で得たオブジェクトだけを保存できる（それ以外は `OBJECT_NOT_LOADED`）。primary key の変更は `PRIMARY_KEY_IMMUTABLE` で拒否される |
+| `.link(handle, from_, to)` | リンク作成。各端はオブジェクトかその id で、型は handle が決める。規則は `create_link` と同じ |
+| `.unlink(handle, from_, to)` | 1 本の live link を閉じる。端の渡し方は `link` と同じ |
+| `.traverse(handle, anchor) -> list[To]` | `anchor` からリンクされた `To` オブジェクト。`reverse=True` ならそこへリンクしている `From` オブジェクト |
+| `.retire(obj)` / `.retire(cls, obj_id)` | リタイア。リンクの cascade は文字列版と同じ |
+
+型付きハンドラは、オブジェクトを読み、変更し、保存します。
+
+```python
+order = ctx.get(Order, params.order_id)
+order.status = "shipped"          # mypy がフィールド名と型を検査する
+ctx.save(order)                   # `status` だけを書く
+```
+
+**文字列メンバー。** 型名とリンク名を文字列で、payload を dict で受け取る従来の API です。
+[ontary#41](https://github.com/ryoochi0112/ontary/issues/41) の PR 2 で非推奨にし、
+型付きメンバーへ移行します。
+
 | メンバー | 用途 |
 | --- | --- |
 | `.insert(obj_type, payload) -> str` | 作成。primary key を省略した payload には、ランタイムの `id_factory` から自動で採番される。すでに有効な primary key は `OBJECT_ALREADY_EXISTS` で拒否される |
@@ -1299,6 +1326,7 @@ MCP サーバーでは、この実行時ではなくトランスポートによ�
 | `LINK_NOT_FOUND` | A link closure found no matching live link. |
 | `NON_NUMERIC_AGGREGATE` | `GuardedQuery.aggregate`'s `value_field` is declared a non-numeric `PropertyType` (anything other than `int`/`float`, such as str/json/datetime/bool). It is checked against the declared type before rows are iterated or coerced, so values that merely look numeric cannot bypass the type contract (spec `m35-sdk-refactor` §6 AC7). `func="count"` is exempt and accepts any declared type. |
 | `OBJECT_NOT_FOUND` | An update targeted a non-existent object. |
+| `OBJECT_NOT_LOADED` | ActionContext.save got an object this action context did not hand out; load it with ctx.get(...) or ctx.create(...) first, so only the fields the handler changed are written. |
 | `OBJECT_RETIRE_NOT_FOUND` | A retirement targeted an object with no stored row. |
 | `PRIMARY_KEY_IMMUTABLE` | An update tried to change an object's primary key; a primary key is immutable, so retire the object and insert a new one instead. |
 | `ONTOLOGY_INVALID` | A declaration was rejected: `validate()` found invalid cross-references, or an authoring call (`@ontology.object(...)`, `ontology.link(...)`, `.definition`) refused a kwarg of the wrong shape: a misspelled `scope`/`cardinality` literal, a rule not wrapped in a list, a non-callable `row_visibility`, empty `scope_levels`, or `min_n` below 1. |
@@ -1319,7 +1347,7 @@ MCP サーバーでは、この実行時ではなくトランスポートによ�
 | `MIN_N_VIOLATION` | An aggregate would be computed over fewer than min_n distinct contributors. |
 | `VISIBILITY_DENIED` | A single-object read/write targeted an object outside the consumer's scope. |
 
-*全 49 コード / 7 種別。*
+*全 50 コード / 7 種別。*
 
 ---
 

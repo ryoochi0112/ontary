@@ -4799,16 +4799,24 @@ def test_action_context_exposes_no_store_handle(
     ctx = ActionContext(store, Source(source_system="action:Test"), _librarian())
 
     public_attrs = {name for name in dir(ctx) if not name.startswith("_")}
+    # #41 added the typed surface: all, create, get, link, save, traverse
+    # (retire and unlink gained typed forms under their existing names).
     assert public_attrs == {
+        "all",
         "capability",
         "consumer",
+        "create",
         "create_link",
+        "get",
         "insert",
+        "link",
         "links_from",
         "links_to",
         "read_all",
         "read_current",
         "retire",
+        "save",
+        "traverse",
         "unlink",
         "update",
     }
