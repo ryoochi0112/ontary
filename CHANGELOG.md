@@ -11,6 +11,19 @@ you**.
 
 ## [Unreleased]
 
+## [0.16.0] — 2026-09-27
+
+```bash
+uv add "ontary @ git+https://github.com/ryoochi0112/ontary@v0.16.0"
+```
+
+This release completes M0, "Trust the core". A link needs a live object at both
+ends, and re-creating a link is a no-op. An action may target an unscoped type.
+`datetime` objects are accepted on write, and authoring mistakes raise catalogued
+errors. `diagnose()` catches a `target()` mismatch and stored rows that an edited
+ontology can no longer read. The store schema moves to v12, so a v11 store must be
+re-ingested.
+
 ### Changed
 
 - **Breaking (store schema):** `SCHEMA_VERSION` is now 12. `audit_log` has a new
