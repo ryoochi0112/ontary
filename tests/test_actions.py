@@ -529,7 +529,7 @@ def _lifecycle_client(
     class Badge(OntologyObject):
         id: str = prop(primary_key=True)
 
-    ontology.link(
+    employeeDepartment = ontology.link(
         "employeeDepartment",
         Employee,
         Department,
@@ -564,9 +564,7 @@ def _lifecycle_client(
     def assign_employee_to_department(
         ctx: ActionContext, params: AssignEmployeeToDepartmentParams
     ) -> dict[str, str]:
-        ctx.create_link(
-            "employeeDepartment", params.employee_id, params.department_id
-        )
+        ctx.link(employeeDepartment, params.employee_id, params.department_id)
         return {
             "employee_id": params.employee_id,
             "department_id": params.department_id,
@@ -584,7 +582,7 @@ def _lifecycle_client(
     def offboard_employee(
         ctx: ActionContext, params: OffboardEmployeeParams
     ) -> dict[str, str]:
-        ctx.retire("Employee", params.employee_id)
+        ctx.retire(Employee, params.employee_id)
         return {"employee_id": params.employee_id}
 
     class UnassignEmployeeParams(ActionParams):
@@ -600,9 +598,7 @@ def _lifecycle_client(
     def unassign_employee(
         ctx: ActionContext, params: UnassignEmployeeParams
     ) -> dict[str, str]:
-        ctx.unlink(
-            "employeeDepartment", params.employee_id, params.department_id
-        )
+        ctx.unlink(employeeDepartment, params.employee_id, params.department_id)
         return {"employee_id": params.employee_id}
 
     ontology.validate()
@@ -660,7 +656,7 @@ def _vialink_lifecycle_client() -> tuple[OntologyClient, ObjectStore]:
     def offboard_worker(
         ctx: ActionContext, params: OffboardWorkerParams
     ) -> dict[str, str]:
-        ctx.retire("Worker", params.worker_id)
+        ctx.retire(Worker, params.worker_id)
         return {"worker_id": params.worker_id}
 
     ontology.validate()
@@ -2186,7 +2182,7 @@ def _scoped_lifecycle_client(
     def offboard_worker(
         ctx: ActionContext, params: OffboardWorkerParams
     ) -> dict[str, str]:
-        ctx.retire("Worker", params.worker_id)
+        ctx.retire(Worker, params.worker_id)
         return {"worker_id": params.worker_id}
 
     ontology.validate()
@@ -2254,7 +2250,7 @@ def _two_team_vialink_client() -> tuple[Ontology, ObjectStore]:
     def offboard_worker(
         ctx: ActionContext, params: OffboardWorkerParams
     ) -> dict[str, str]:
-        ctx.retire("Worker", params.worker_id)
+        ctx.retire(Worker, params.worker_id)
         return {"worker_id": params.worker_id}
 
     ontology.validate()
@@ -2301,7 +2297,7 @@ def _two_team_vialink_to_client() -> tuple[Ontology, ObjectStore]:
     def offboard_worker(
         ctx: ActionContext, params: OffboardWorkerParams
     ) -> dict[str, str]:
-        ctx.retire("Worker", params.worker_id)
+        ctx.retire(Worker, params.worker_id)
         return {"worker_id": params.worker_id}
 
     ontology.validate()
@@ -2639,7 +2635,7 @@ def _company_hierarchy_client() -> tuple[Ontology, ObjectStore]:
     def offboard_worker(
         ctx: ActionContext, params: OffboardWorkerParams
     ) -> dict[str, str]:
-        ctx.retire("Worker", params.worker_id)
+        ctx.retire(Worker, params.worker_id)
         return {"worker_id": params.worker_id}
 
     class EndContractParams(ActionParams):
@@ -2654,7 +2650,7 @@ def _company_hierarchy_client() -> tuple[Ontology, ObjectStore]:
     def end_contract(
         ctx: ActionContext, params: EndContractParams
     ) -> dict[str, str]:
-        ctx.retire("Contractor", params.contractor_id)
+        ctx.retire(Contractor, params.contractor_id)
         return {"contractor_id": params.contractor_id}
 
     ontology.validate()
@@ -3048,7 +3044,7 @@ def _customresolver_narrower_level_client() -> tuple[Ontology, ObjectStore]:
     def end_engagement(
         ctx: ActionContext, params: EndEngagementParams
     ) -> dict[str, str]:
-        ctx.retire("Consultant", params.consultant_id)
+        ctx.retire(Consultant, params.consultant_id)
         return {"consultant_id": params.consultant_id}
 
     ontology.validate()
@@ -3119,7 +3115,7 @@ def _customresolver_ancestor_rule_client() -> (
     def offboard_worker(
         ctx: ActionContext, params: OffboardWorkerParams
     ) -> dict[str, str]:
-        ctx.retire("Worker", params.worker_id)
+        ctx.retire(Worker, params.worker_id)
         return {"worker_id": params.worker_id}
 
     ontology.validate()
@@ -3173,7 +3169,7 @@ def _customresolver_ancestor_client() -> tuple[Ontology, ObjectStore]:
     def end_engagement(
         ctx: ActionContext, params: EndEngagementParams
     ) -> dict[str, str]:
-        ctx.retire("Consultant", params.consultant_id)
+        ctx.retire(Consultant, params.consultant_id)
         return {"consultant_id": params.consultant_id}
 
     ontology.validate()
@@ -3386,7 +3382,7 @@ def _payload_ancestor_client() -> tuple[Ontology, ObjectStore]:
     def offboard_worker(
         ctx: ActionContext, params: OffboardWorkerParams
     ) -> dict[str, str]:
-        ctx.retire("Worker", params.worker_id)
+        ctx.retire(Worker, params.worker_id)
         return {"worker_id": params.worker_id}
 
     ontology.validate()
@@ -4572,11 +4568,12 @@ def test_action_context_writes_are_source_stamped(
     store.create_link("onShelf", "book-1", "shelf-1")
     executor = _setup_typed(registry, store, make_policy)
 
-    result = executor.execute(
-        _librarian(scope_id="shelf-1"),
-        "CheckoutBookTyped",
-        {"book_id": "book-1", "borrower": "alice"},
-    )
+    with pytest.warns(DeprecationWarning, match="ActionContext"):
+        result = executor.execute(
+            _librarian(scope_id="shelf-1"),
+            "CheckoutBookTyped",
+            {"book_id": "book-1", "borrower": "alice"},
+        )
 
     loan = store.read_current("Loan", result["loan_id"])
     assert loan is not None
@@ -4603,7 +4600,7 @@ def test_action_context_refusal_mid_handler_rolls_back_and_audits_error(
     store.create_link("onShelf", "book-1", "shelf-1")
     executor = _setup_typed(registry, store, make_policy)
 
-    with pytest.raises(Exception):
+    with pytest.warns(DeprecationWarning, match="ActionContext"), pytest.raises(Exception):
         executor.execute(
             _librarian(scope_id="shelf-1"),
             "CheckoutBookTypedRefused",
@@ -4636,11 +4633,12 @@ def test_typed_handler_receives_params_instance_via_dict_execute(
     executor = _setup_typed(registry, store, make_policy)
     received_checkout_params.clear()
 
-    executor.execute(
-        _librarian(scope_id="shelf-1"),
-        "CheckoutBookTyped",
-        {"book_id": "book-1", "borrower": "alice"},
-    )
+    with pytest.warns(DeprecationWarning, match="ActionContext"):
+        executor.execute(
+            _librarian(scope_id="shelf-1"),
+            "CheckoutBookTyped",
+            {"book_id": "book-1", "borrower": "alice"},
+        )
 
     assert len(received_checkout_params) == 1
     assert isinstance(received_checkout_params[0], CheckoutParams)
@@ -4668,7 +4666,8 @@ def test_typed_handler_receives_same_instance_via_typed_execute(
     received_checkout_params.clear()
 
     params = CheckoutParams(book_id="book-1", borrower="alice")
-    executor.execute(_librarian(scope_id="shelf-1"), "CheckoutBookTyped", params)
+    with pytest.warns(DeprecationWarning, match="ActionContext"):
+        executor.execute(_librarian(scope_id="shelf-1"), "CheckoutBookTyped", params)
 
     assert len(received_checkout_params) == 1
     assert received_checkout_params[0] is params
@@ -4905,7 +4904,8 @@ def test_action_context_read_all_delegates_to_the_trusted_raw_store_read(
     store.insert("Book", {"id": "book-2", "title": "Second"}, SRC)
     ctx = ActionContext(store, Source(source_system="action:Test"), _librarian())
 
-    assert ctx.read_all("Book") == store.read_all("Book")
+    with pytest.warns(DeprecationWarning, match="ActionContext"):
+        assert ctx.read_all("Book") == store.read_all("Book")
 
 
 def test_register_private_duplicate_and_unregistered_checks_unchanged(
@@ -4971,7 +4971,10 @@ def _datetime_param_client() -> tuple[
     )
     def place_order(ctx: ActionContext, params: PlaceOrderParams) -> dict[str, str]:
         received.append(params.placed_at)
-        ctx.update("Order", params.order_id, {"placed_at": params.placed_at})
+        order = ctx.get(Order, params.order_id)
+        assert order is not None
+        order.placed_at = params.placed_at
+        ctx.save(order)
         return {"order_id": params.order_id}
 
     ontology.validate()

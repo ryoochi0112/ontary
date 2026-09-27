@@ -644,25 +644,31 @@ order.status = "shipped"          # mypy がフィールド名と型を検査す
 ctx.save(order)                   # `status` だけを書く
 ```
 
-**文字列メンバー。** 型名とリンク名を文字列で、payload を dict で受け取る従来の API です。
-[ontary#41](https://github.com/ryoochi0112/ontary/issues/41) の PR 2 で非推奨にし、
-型付きメンバーへ移行します。
+**文字列メンバー（非推奨）。** 型名とリンク名を文字列で、payload を dict で受け取る従来の API です。
+0.17.0 から、呼び出すたびに移行先の型付きメンバーを示す `DeprecationWarning` を出します。
+文字列メンバーは 0.18.0 で削除します（[ontary#41](https://github.com/ryoochi0112/ontary/issues/41)）。
+`retire` と `unlink` は名前を変えず、文字列形式だけを非推奨にします。
+
+| メンバー | 用途 | 移行先 |
+| --- | --- | --- |
+| `.insert(obj_type, payload) -> str` | 作成。primary key を省略した payload には、ランタイムの `id_factory` から自動で採番される。すでに有効な primary key は `OBJECT_ALREADY_EXISTS` で拒否される | `.create(cls, **values)` |
+| `.update(obj_type, obj_id, changes)` | 更新。primary key を別の値に変える変更は `PRIMARY_KEY_IMMUTABLE` で拒否される | `.get` + 代入 + `.save(obj)` |
+| `.create_link(link_api_name, from_id, to_id)` | リンク作成。両端の id はリンク型が宣言する端点型の有効なオブジェクトである必要があり、そうでなければ `LINK_ENDPOINT_NOT_FOUND` で拒否。有効なリンクと同一なら no-op | `.link(handle, from_, to)` |
+| `.retire(obj_type, obj_id)` | オブジェクトをリタイアし、そのオブジェクト型についてリンク型が宣言している側でそのオブジェクトを参照するすべての live link を cascade-close | `.retire(obj)` / `.retire(cls, obj_id)` |
+| `.unlink(link_api_name, from_id, to_id)` | 1 本の live link を閉じる | `.unlink(handle, from_, to)` |
+| `.read_current(obj_type, obj_id) -> StoredObject \| None` | 読み取り | `.get(cls, obj_id)` |
+| `.read_all(obj_type) -> list[StoredObject]` | 現在行の列挙 | `.all(cls)` |
+| `.links_from(link_api_name, from_id) -> list[str]` | リンク走査 | `.traverse(handle, anchor)` |
+| `.links_to(link_api_name, to_id) -> list[str]` | リンク走査 | `.traverse(handle, anchor, reverse=True)` |
+
+**その他のメンバー。** 非推奨ではありません。
 
 | メンバー | 用途 |
 | --- | --- |
-| `.insert(obj_type, payload) -> str` | 作成。primary key を省略した payload には、ランタイムの `id_factory` から自動で採番される。すでに有効な primary key は `OBJECT_ALREADY_EXISTS` で拒否される |
-| `.update(obj_type, obj_id, changes)` | 更新。primary key を別の値に変える変更は `PRIMARY_KEY_IMMUTABLE` で拒否される |
-| `.create_link(link_api_name, from_id, to_id)` | リンク作成。両端の id はリンク型が宣言する端点型の有効なオブジェクトである必要があり、そうでなければ `LINK_ENDPOINT_NOT_FOUND` で拒否。有効なリンクと同一なら no-op |
-| `.retire(obj_type, obj_id)` | オブジェクトをリタイアし、そのオブジェクト型についてリンク型が宣言している側でそのオブジェクトを参照するすべての live link を cascade-close |
-| `.unlink(link_api_name, from_id, to_id)` | 1 本の live link を閉じる |
-| `.read_current(obj_type, obj_id) -> StoredObject \| None` | 読み取り |
-| `.read_all(obj_type) -> list[StoredObject]` | 現在行の列挙 |
-| `.links_from(link_api_name, from_id) -> list[str]` | リンク走査 |
-| `.links_to(link_api_name, to_id) -> list[str]` | リンク走査 |
 | `.capability(handle) -> P` | 宣言済み Capability の取得 |
 | `.consumer` | 呼び出し元の `Consumer` |
 
-`read_current` と `read_all` は、信頼されたハンドラ向けの生の読み取りであり、
+`get` と `all` は、非推奨の `read_current` と `read_all` と同じく、信頼されたハンドラ向けの生の読み取りであり、
 非 redaction・非 scope 制限です。意図的に consumer 向けの guarded query にはしていません。
 とくに列挙を scope や sensitivity で絞ると、id allocator から既存行が隠れ、id の再利用を
 引き起こし得ます。

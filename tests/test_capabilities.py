@@ -91,7 +91,7 @@ def _capability_fixture() -> dict[str, Any]:
         if selected == "foreign":
             ctx.capability(foreign)
         if selected == "write":
-            ctx.insert("Record", {"id": "must-not-exist"})
+            ctx.create(Record, id="must-not-exist")
         provider = ctx.capability(declared)
         provider.read("private-argument")
         provider.read("private-argument")

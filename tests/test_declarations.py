@@ -580,7 +580,10 @@ def test_identity_declared_matches_transport_proof_resolver_trust_and_dual_audit
 
     @ontology.action(TouchParams, target=Item, roles=["Admin"], api_name="Touch")
     def touch(ctx: ActionContext, params: TouchParams) -> dict[str, str]:
-        ctx.update("Item", params.item_id, {"touched": True})
+        item = ctx.get(Item, params.item_id)
+        assert item is not None
+        item.touched = True
+        ctx.save(item)
         return {"item_id": params.item_id}
 
     ontology.validate()

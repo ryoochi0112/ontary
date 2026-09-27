@@ -65,7 +65,10 @@ def _ontology() -> Ontology:
             raise ActionError("author code", code="TEAM_FROZEN")
         if params.focus == "crash":
             raise KeyError("boom")
-        ctx.update("Team", params.team_id, {"focus": params.focus})
+        team = ctx.get(Team, params.team_id)
+        assert team is not None
+        team.focus = params.focus
+        ctx.save(team)
         return {"team_id": params.team_id}
 
     class StampParams(ActionParams):

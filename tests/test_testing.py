@@ -46,7 +46,7 @@ def _build_recording_ontology() -> Ontology:
         api_name="Record",
     )
     def record(ctx: ActionContext, _params: RecordParams) -> dict[str, str]:
-        ctx.insert("Record", {})
+        ctx.create(Record)
         return {"status": "ok"}
 
     return ontology

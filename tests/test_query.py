@@ -3738,17 +3738,18 @@ def test_retire_action_does_not_release_an_individuals_hidden_values(
 
     executor = ActionExecutor(store, registry, policy)
     executor._register("RetireReader", retire_reader, RetireReaderParams)
-    executor.execute(
-        Consumer(
-            actor_id="op-1",
-            role="Operator",
-            scope_level="shelf",
-            scope_id="shelf-1",
-            kind="human",
-        ),
-        "RetireReader",
-        {"reader_id": "reader-1"},
-    )
+    with pytest.warns(DeprecationWarning, match="ActionContext"):
+        executor.execute(
+            Consumer(
+                actor_id="op-1",
+                role="Operator",
+                scope_level="shelf",
+                scope_id="shelf-1",
+                kind="human",
+            ),
+            "RetireReader",
+            {"reader_id": "reader-1"},
+        )
     assert store.links_from("byReader", "r0") == []
 
     with raises_code(VisibilityError, "MIN_N_VIOLATION"):

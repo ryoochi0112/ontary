@@ -15,6 +15,7 @@ names (compare the prototype's `_TARGET_PARAM_TYPES` /
 from __future__ import annotations
 
 import json
+import warnings
 from collections.abc import Callable, Mapping
 from datetime import datetime
 from typing import Any, Literal, NoReturn, TypeVar, cast, overload
@@ -54,6 +55,22 @@ class ActionError(PreconditionFailed):
     """An action precondition failed."""
 
     kind: Kind = "precondition"
+
+
+_REMOVAL_RELEASE = "0.18.0"
+
+
+def _warn_deprecated(member: str, replacement: str) -> None:
+    """Warn that the string `ActionContext.<member>` is deprecated (#41).
+
+    `stacklevel=3` attributes the warning to the handler line that called
+    the deprecated member, not to this helper or the member itself."""
+    warnings.warn(
+        f"ActionContext.{member}() with type/link names as strings is deprecated "
+        f"and will be removed in ontary {_REMOVAL_RELEASE}; use {replacement} instead",
+        DeprecationWarning,
+        stacklevel=3,
+    )
 
 
 def _source(action_name: str) -> Source:
@@ -340,7 +357,10 @@ class ActionContext:
         writers, replay) gets every id an action mints, not just the ones
         that already went through it. `store.insert`'s own `uuid.uuid4()`
         fallback (see `prepare_insert`) is reserved for callers that reach
-        the store directly, bypassing this context."""
+        the store directly, bypassing this context.
+
+        Deprecated (#41): use `create(Cls, **values)`."""
+        _warn_deprecated("insert", "ctx.create(Cls, **values)")
         return self._insert(obj_type, payload)
 
     def _insert(self, obj_type: str, payload: dict[str, Any]) -> str:
@@ -353,7 +373,10 @@ class ActionContext:
 
     def update(self, obj_type: str, obj_id: str, changes: dict[str, Any]) -> None:
         """Update `(obj_type, obj_id)`, source-stamped with this action's
-        `Source`."""
+        `Source`.
+
+        Deprecated (#41): use `get` + attribute assignment + `save(obj)`."""
+        _warn_deprecated("update", "ctx.get(...) then ctx.save(obj)")
         self._store.update(obj_type, obj_id, changes, self._source)
 
     def create_link(self, link_api_name: str, from_id: str, to_id: str) -> None:
@@ -363,7 +386,10 @@ class ActionContext:
         type -- an object this action inserted earlier in the same
         transaction counts -- or the store refuses with
         `LINK_ENDPOINT_NOT_FOUND` (#36) and writes nothing.
+
+        Deprecated (#41): use `link(handle, from_, to)`.
         """
+        _warn_deprecated("create_link", "ctx.link(handle, from_, to)")
         self._store.create_link(link_api_name, from_id, to_id)
 
     def _require_action_transaction(self, operation: str) -> None:
@@ -391,8 +417,13 @@ class ActionContext:
         transaction and write-capture boundary, so the object close, both
         directions of link cascade, and audit write records commit or roll
         back together.
+
+        The string form `retire("Type", obj_id)` is deprecated (#41): pass the
+        object, or its class and id.
         """
         self._require_action_transaction("retire")
+        if isinstance(obj_type, str):
+            _warn_deprecated("retire", "ctx.retire(obj) or ctx.retire(Cls, obj_id)")
         if self._registry is None:
             raise InternalError(
                 "ActionContext.retire requires the executor's ontology registry",
@@ -416,7 +447,7 @@ class ActionContext:
             link = (link_api_name, from_id, to_id)
             if link in closed_links:
                 return
-            self.unlink(link_api_name, from_id, to_id)
+            self._close_link(link_api_name, from_id, to_id)
             closed_links.add(link)
 
         for link_def in self._registry.link_types.values():
@@ -438,22 +469,33 @@ class ActionContext:
         to_id: OntologyObject | str,
     ) -> None:
         """Close one live link inside the current action transaction. The
-        typed form takes a `LinkHandle` and each end as an object or its id."""
+        typed form takes a `LinkHandle` and each end as an object or its id;
+        the string form `unlink("linkName", ...)` is deprecated (#41)."""
         self._require_action_transaction("unlink")
         if isinstance(link_api_name, LinkHandle):
             link_api_name = self._link_type(link_api_name, "unlink")
-        self._store.close_link(
+        else:
+            _warn_deprecated("unlink", "ctx.unlink(handle, from_, to)")
+        self._close_link(
             link_api_name,
             self._endpoint_id(from_id, "unlink"),
             self._endpoint_id(to_id, "unlink"),
         )
+
+    def _close_link(self, link_api_name: str, from_id: str, to_id: str) -> None:
+        # The non-warning path: `retire`'s cascade closes links through here.
+        self._require_action_transaction("unlink")
+        self._store.close_link(link_api_name, from_id, to_id)
 
     def read_current(self, obj_type: str, obj_id: str) -> StoredObject | None:
         """Trusted raw (unredacted, unscoped) read of one current row.
 
         This is not a guarded consumer read: an action handler is trusted
         ontology-author code running inside the engine-owned transaction.
+
+        Deprecated (#41): use `get(Cls, obj_id)`.
         """
+        _warn_deprecated("read_current", "ctx.get(Cls, obj_id)")
         return self._store.read_current(obj_type, obj_id)
 
     def read_all(self, obj_type: str) -> list[StoredObject]:
@@ -464,17 +506,22 @@ class ActionContext:
         enumeration could hide an existing row from an id allocator and cause
         it to reuse that row's id -- the opposite of why handlers need this
         operation.
+
+        Deprecated (#41): use `all(Cls)`.
         """
+        _warn_deprecated("read_all", "ctx.all(Cls)")
         return self._store.read_all(obj_type)
 
     def links_from(self, link_api_name: str, from_id: str) -> list[str]:
         """IDs linked FROM `from_id` via `link_api_name` (same trusted
-        tier as `read_current`)."""
+        tier as `read_current`). Deprecated (#41): use `traverse`."""
+        _warn_deprecated("links_from", "ctx.traverse(handle, anchor)")
         return self._store.links_from(link_api_name, from_id)
 
     def links_to(self, link_api_name: str, to_id: str) -> list[str]:
         """IDs linked TO `to_id` via `link_api_name` (same trusted tier as
-        `read_current`)."""
+        `read_current`). Deprecated (#41): use `traverse(..., reverse=True)`."""
+        _warn_deprecated("links_to", "ctx.traverse(handle, anchor, reverse=True)")
         return self._store.links_to(link_api_name, to_id)
 
 

@@ -57,7 +57,10 @@ def _ontology() -> Ontology:
         RenameProductParams, target=Product, roles=["Operator"], api_name="RenameProduct"
     )
     def _rename(ctx: ActionContext, params: RenameProductParams) -> dict[str, str]:
-        ctx.update("Product", params.product_id, {"name": params.name})
+        product = ctx.get(Product, params.product_id)
+        assert product is not None
+        product.name = params.name
+        ctx.save(product)
         return {"product_id": params.product_id}
 
     class FocusTeamParams(ActionParams):
@@ -68,7 +71,10 @@ def _ontology() -> Ontology:
         FocusTeamParams, target=Team, roles=["Operator"], api_name="FocusTeam"
     )
     def _focus(ctx: ActionContext, params: FocusTeamParams) -> dict[str, str]:
-        ctx.update("Team", params.team_id, {"focus": params.product_id})
+        team = ctx.get(Team, params.team_id)
+        assert team is not None
+        team.focus = params.product_id
+        ctx.save(team)
         return {"team_id": params.team_id}
 
     ontology.validate()

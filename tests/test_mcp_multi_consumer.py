@@ -108,7 +108,7 @@ def _library_ontology() -> tuple[Ontology, type[OntologyObject]]:
     ontology.link(
         "inLibrary", Shelf, Library, Cardinality.MANY_TO_ONE, description="Shelf -> its library"
     )
-    ontology.link(
+    onShelf = ontology.link(
         "onShelf",
         Book,
         Shelf,
@@ -130,9 +130,10 @@ def _library_ontology() -> tuple[Ontology, type[OntologyObject]]:
         api_name="RelocateBook",
     )
     def _relocate(ctx: ActionContext, params: _RelocateBookParams) -> dict[str, str]:
-        if ctx.read_current("Book", params.book_id) is None:
+        book = ctx.get(Book, params.book_id)
+        if book is None:
             raise ActionError(f"book {params.book_id!r} does not exist", code="PRECONDITION_FAILED")
-        ctx.create_link("onShelf", params.book_id, params.shelf_id)
+        ctx.link(onShelf, book, params.shelf_id)
         return {"book_id": params.book_id}
 
     @ontology.function(
