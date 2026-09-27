@@ -147,8 +147,8 @@ to 10 between the last `ontos` release and `ontary` 0.11.0, and a database stamp
 the `idx_objects_live_id` partial unique index made "at most one live row per
 primary key" a storage constraint; a store stamped 10 is refused by 0.15.0
 and later and is rebuilt by re-ingest like any other schema move. It changed from 11
-to 12 after 0.15.0, when `audit_log` gained the `unscoped_params` column (#35); a
-store stamped 11 is refused by later versions in the same way. Check the engine's number with
+to 12 in 0.16.0, when `audit_log` gained the `unscoped_params` column (#35); a
+store stamped 11 is refused by 0.16.0 and later in the same way. Check the engine's number with
 `ontary.store.SCHEMA_VERSION` and the store's with
 `SELECT value FROM schema_meta WHERE key = 'schema_version'` before an upgrade so
 the re-ingest is planned rather than discovered at startup.
