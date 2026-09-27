@@ -45,6 +45,16 @@ you**.
 
 ### Fixed
 
+- Authoring mistakes are refused where they are written, with
+  `ValidationFailed` (`ONTOLOGY_INVALID`) naming the class or link, the kwarg, what
+  was given, and the accepted forms. Before, a misspelled `cardinality` escaped as a
+  bare `ValueError` from `ontology.link(...)`, and a misspelled `scope="unscoped"`,
+  a rule not wrapped in a list, or a non-callable `row_visibility` surfaced only at
+  `validate()` as a raw pydantic error from inside `ScopePolicy`. An empty or
+  duplicated `scope_levels` and a `min_n` below 1 are wrapped the same way when
+  `.definition` is built. `cardinality` and `scope` are now `Literal`-typed, so
+  the typo is a mypy error as well; the runtime still accepts any string that
+  names a member. Fixes [ontary#39](https://github.com/ryoochi0112/ontary/issues/39).
 - An offset-aware `datetime` object is now accepted wherever a `datetime` property
   or parameter takes a value: `Store.insert`/`update` (and so `ActionContext`),
   `bulk_upsert`/`client.ingest`, `where` operands, and action parameters in both
