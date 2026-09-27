@@ -1427,6 +1427,7 @@ MCP サーバーでは、この実行時ではなくトランスポートによ�
 | `CAPABILITY_NOT_PROVIDED` | A declared capability had no provider bound for this call. |
 | `FUNCTION_ERROR` | Registering/calling a Function failed: undeclared api_name, duplicate registration, or no handler bound. |
 | `PRECONDITION_FAILED` | An action's precondition failed; the message names it. The conventional code for `ActionError` (kind precondition); an author may attach their own stable code instead (AC7), e.g. `raise ActionError("...", code="GAP_NOT_ACKNOWLEDGED")`. It is also used with overridden codes for unregistered/unhandled actions (`UNKNOWN_ACTION`) and parameter-validation failures (`INVALID_PARAMS`) -- see the `code=` overrides at those raise sites. |
+| `TRANSITION_NOT_ALLOWED` | A governed property changed to a state not allowed by its declared transition graph; action starts must be initial states. |
 
 ### `validation`
 
@@ -1450,6 +1451,7 @@ MCP サーバーでは、この実行時ではなくトランスポートによ�
 | `OBJECT_NOT_LOADED` | ActionContext.save got an object this action context did not hand out; load it with ctx.get(...) or ctx.create(...) first, so only the fields the handler changed are written. |
 | `OBJECT_RETIRE_NOT_FOUND` | A retirement targeted an object with no stored row. |
 | `PRIMARY_KEY_IMMUTABLE` | An update tried to change an object's primary key; a primary key is immutable, so retire the object and insert a new one instead. |
+| `RULE_VIOLATED` | A declared object rule returned false or raised while checking the full new row. |
 | `ONTOLOGY_INVALID` | A declaration was rejected: `validate()` found invalid cross-references, or an authoring call (`@ontology.object(...)`, `ontology.link(...)`, `.definition`) refused a kwarg of the wrong shape: a misspelled `scope`/`cardinality` literal, a rule not wrapped in a list, a non-callable `row_visibility`, empty `scope_levels`, or `min_n` below 1. |
 | `SCOPE_POLICY_ERROR` | A ScopePolicy declaration is unusable: a rule references an undeclared object type, link type, or scope level; a type declares an empty contributor rule list; a type is listed in unscoped_types while also declaring scope rules; or an action's scope parameter refers to an unscoped type. |
 | `UNDECLARED_CAPABILITY` | A handler requested a capability its action or function did not declare. |
@@ -1469,7 +1471,7 @@ MCP サーバーでは、この実行時ではなくトランスポートによ�
 | `MIN_N_VIOLATION` | An aggregate would be computed over fewer than min_n distinct contributors. |
 | `VISIBILITY_DENIED` | A single-object read/write targeted an object outside the consumer's scope. |
 
-*全 50 コード / 7 種別。*
+*全 52 コード / 7 種別。*
 
 ---
 

@@ -246,6 +246,20 @@ ERROR_CODES: dict[str, ErrorCodeInfo] = {
             "sites."
         ),
     ),
+    "TRANSITION_NOT_ALLOWED": ErrorCodeInfo(
+        kind="precondition",
+        description=(
+            "A governed property changed to a state not allowed by its "
+            "declared transition graph; action starts must be initial states."
+        ),
+    ),
+    "RULE_VIOLATED": ErrorCodeInfo(
+        kind="validation",
+        description=(
+            "A declared object rule returned false or raised while checking "
+            "the full new row."
+        ),
+    ),
     "PERMISSION_DENIED": ErrorCodeInfo(
         kind="permission",
         description=(
