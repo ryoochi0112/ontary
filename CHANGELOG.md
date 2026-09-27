@@ -11,6 +11,23 @@ you**.
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking (store schema):** `SCHEMA_VERSION` is now 13. `audit_log` has a new
+  `error_code` column. A store stamped 12 is refused with
+  `STORE_VERSION_UNSUPPORTED`; drop and re-ingest it as described in
+  [docs/storage.md](docs/storage.md#moving-across-a-schema-version).
+
+### Fixed
+
+- Every non-`ok` audit entry now says what failed and why. An action entry records
+  the requested `target_id` on every outcome; before, only the `ok` entry had it,
+  and `denied` and `error` entries wrote `None`. The new `AuditEntry.error_code`
+  records the raised exception's code on every `denied` and `error` entry, for
+  actions and functions alike. An exception without a code is recorded as
+  `INTERNAL_ERROR`, as the MCP server reports it. Fixes
+  [ontary#49](https://github.com/ryoochi0112/ontary/issues/49).
+
 ## [0.16.0] — 2026-09-27
 
 ```bash

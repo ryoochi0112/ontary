@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from ontary.store import _sql
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 """The DDL shape this engine writes, stamped into a SQLite file's own `PRAGMA
 user_version`; a file carrying a different stamp is refused rather than
 migrated (`ObjectStore._init_schema`)."""

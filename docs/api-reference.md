@@ -684,7 +684,7 @@ could be rolled back underneath the audit log.
 ### `AuditEntry`
 
 `ts`, `actor`, `role`, `action`, `target_type`, `target_id`, `params`, `outcome`,
-`invocation_id`, plus integrity records: `writes: list[WriteRecord]`,
+`invocation_id`, `error_code`, plus integrity records: `writes: list[WriteRecord]`,
 `capability_accesses: list[CapabilityAccessRecord]`.
 
 **`kind: Literal["action", "function"]`** — what produced the entry. Actions and
@@ -705,6 +705,17 @@ action scope gate because they refer to a `scope="unscoped"` type. For them the
 action's `roles=` was the only gate. The list is empty when every scope-bearing
 parameter was scope-checked, and on entries written before the gate ran (for
 example a role denial).
+
+**`target_id: str | None`** — on an `action` entry, the id the caller passed in the
+action's declared target parameter. Every outcome records it, including `denied` and
+`error`, even when that id does not exist. `None` when the action declares no target
+parameter, and on every `function` entry.
+
+**`error_code: str | None`** — why a `denied` or `error` entry failed: the raised
+exception's catalogued `code` (for example `PERMISSION_DENIED`, `SCOPE_DENIED`,
+`INVALID_PARAMS`, or a handler's own `ActionError` code). An exception that carries
+no code, such as a bare `KeyError` from a handler, is recorded as `INTERNAL_ERROR`,
+the code the MCP server reports for it. `None` on an `ok` entry.
 
 - `WriteRecord` — `op` (`create`/`update`/`link`), `object_type`, `link_type`,
   `object_id`, `from_id`, `to_id`

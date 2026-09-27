@@ -670,7 +670,7 @@ Action が監査ログの下でロールバックされうるためです。
 ### `AuditEntry`
 
 `ts`、`actor`、`role`、`action`、`target_type`、`target_id`、`params`、`outcome`、
-`invocation_id`、および完全性レコード: `writes: list[WriteRecord]`、
+`invocation_id`、`error_code`、および完全性レコード: `writes: list[WriteRecord]`、
 `capability_accesses: list[CapabilityAccessRecord]`。
 
 **`kind: Literal["action", "function"]`** — このエントリを生成したもの。Action と
@@ -690,6 +690,17 @@ Function は 1 つのログを共有するため、読み手が両者を区別�
 スコープゲートを通らなかった `target(...)` パラメータの一覧です。これらのパラメータでは、
 Action の `roles=` だけがゲートでした。スコープを持つパラメータがすべてスコープ検査を
 受けた場合は空です。ゲートより前に書かれたエントリ（ロールによる拒否など）でも空です。
+
+**`target_id: str | None`** — `action` エントリでは、呼び出し側が Action の宣言済み
+対象パラメータに渡した id です。`denied` と `error` を含むすべての結果で記録されます。
+その id が存在しない場合も記録します。Action が対象パラメータを宣言していない場合と、
+すべての `function` エントリでは `None` です。
+
+**`error_code: str | None`** — `denied` または `error` のエントリが失敗した理由です。
+送出された例外のカタログ済み `code`（`PERMISSION_DENIED`、`SCOPE_DENIED`、
+`INVALID_PARAMS`、ハンドラ独自の `ActionError` のコードなど）が入ります。ハンドラが
+送出した素の `KeyError` のように `code` を持たない例外は、MCP サーバーと同じく
+`INTERNAL_ERROR` として記録します。`ok` エントリでは `None` です。
 
 - `WriteRecord` — `op`（`create`/`update`/`link`）、`object_type`、`link_type`、
   `object_id`、`from_id`、`to_id`

@@ -112,6 +112,19 @@ class AuditEntry(BaseModel):
     # action's `roles=` was their only gate. Empty when every scope-bearing
     # parameter was scope-checked, and on entries written before the gate ran.
     unscoped_params: list[str] = Field(default_factory=list)
+    # Why a non-ok attempt failed (#49): the raised exception's `code` on an
+    # "error" or "denied" entry, or `INTERNAL_ERROR` for an exception that
+    # carries none -- the same code the MCP server reports for it. `None` on
+    # an "ok" entry.
+    error_code: str | None = None
+
+
+def _audit_error_code(exc: BaseException) -> str:
+    """The `error_code` an error/denied audit entry records for `exc` (#49):
+    its own `code` when it carries one, else `INTERNAL_ERROR` -- the code the
+    MCP server reports for an exception that carries none."""
+    code = getattr(exc, "code", None)
+    return code if isinstance(code, str) and code else "INTERNAL_ERROR"
 
 
 def _placeholder(value: Any) -> dict[str, str]:

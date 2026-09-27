@@ -60,7 +60,7 @@ from typing import TYPE_CHECKING, Any, Literal, TypeVar, overload
 from ontary._runtime import default_clock, default_id_factory
 from ontary._typed_api import _TypedReadMixin, list_objects
 from ontary.actions import ActionError, ActionExecutor, TypedHandler
-from ontary.audit import AuditEntry, CapabilityAccessRecord
+from ontary.audit import AuditEntry, CapabilityAccessRecord, _audit_error_code
 from ontary.declarations import Declarations, declarations
 from ontary.errors import ValidationFailed
 from ontary.functions import BoundQuery
@@ -630,10 +630,15 @@ class OntologyClient(_TypedReadMixin):
         invocation_id = self._id_factory()
         try:
             result = self._ontology.functions.call(api_name, bound, params)
-        except Exception:
+        except Exception as exc:
             if audited or disclosures:
                 self._append_function_audit(
-                    api_name, params, "error", accesses or [], invocation_id
+                    api_name,
+                    params,
+                    "error",
+                    accesses or [],
+                    invocation_id,
+                    error_code=_audit_error_code(exc),
                 )
             raise
         if audited or disclosures:
@@ -649,6 +654,8 @@ class OntologyClient(_TypedReadMixin):
         outcome: str,
         accesses: builtins.list[CapabilityAccessRecord],
         invocation_id: str,
+        *,
+        error_code: str | None = None,
     ) -> None:
         """Append one `kind="function"` entry.
 
@@ -676,6 +683,7 @@ class OntologyClient(_TypedReadMixin):
                 # for. Functions never write, so `writes` stays empty by
                 # construction.
                 capability_accesses=accesses,
+                error_code=error_code,
             )
         )
 
