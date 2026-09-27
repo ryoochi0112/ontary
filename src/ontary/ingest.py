@@ -19,7 +19,12 @@ from pydantic import BaseModel, Field
 from pydantic_core import core_schema
 
 from ontary.errors import ConflictError, Kind, OntaryError, ValidationFailed
-from ontary.meta import ObjectTypeDef, OntologyRegistry, PropertyDef
+from ontary.meta import (
+    ObjectTypeDef,
+    OntologyRegistry,
+    PropertyDef,
+    normalize_choice_payload,
+)
 from ontary.store import Source, Store
 from ontary.typesys import validate_scalar
 
@@ -271,6 +276,7 @@ def bulk_upsert(
             )
             continue
 
+        record = normalize_choice_payload(obj_def, record)
         rejection = _validate_record(obj_def, record)
         if rejection is not None:
             code, reason = rejection

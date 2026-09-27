@@ -103,7 +103,12 @@ from ontary.scope import (
 )
 from ontary.security import Consumer, covers_scope
 from ontary.store import DEFAULT_BATCH, Store, StoredObject
-from ontary.typesys import PropertyType, _to_storage_scalar, validate_scalar
+from ontary.typesys import (
+    PropertyType,
+    _to_storage_scalar,
+    choice_value,
+    validate_scalar,
+)
 
 _NUMERIC_PROPERTY_TYPES = {"int", "float"}
 _GROUPABLE_PROPERTY_TYPES = {"str", "int", "float", "bool", "date", "datetime"}
@@ -977,12 +982,23 @@ class GuardedQuery:
         if mismatch is not None:
             _operator_type_mismatch(obj_type, field, operator, prop_type, mismatch)
 
+    @staticmethod
+    def _unwrap_choice_operand(operand: Any, choices: tuple[str, ...] | None) -> Any:
+        """Apply `typesys.choice_value` to a where operand (#42): an
+        ``Enum`` member is unwrapped ONLY when the field declares `choices`,
+        and only unwrapped -- the operand gains no membership check here, so
+        a field without `choices` still refuses the member as before."""
+        if isinstance(operand, list):
+            return [choice_value(value, choices) for value in operand]
+        return choice_value(operand, choices)
+
     def _compile_where_clause(
         self,
         obj_type: str,
         field: str,
         prop_type: PropertyType,
         condition: _NormalizedCondition,
+        choices: tuple[str, ...] | None = None,
     ) -> _WhereClause:
         """Compile one already-snapshotted condition.
 
@@ -991,6 +1007,8 @@ class GuardedQuery:
         second read of that mapping was a disclosure.
         """
         kind, operator, operand = condition
+        if kind in ("bare", "operator"):
+            operand = self._unwrap_choice_operand(operand, choices)
         if kind == "bare":
             self._validate_where_operator(obj_type, field, prop_type, "eq", operand)
             return (
@@ -1012,7 +1030,7 @@ class GuardedQuery:
                 _CONJUNCTION,
                 tuple(
                     self._compile_where_clause(
-                        obj_type, field, prop_type, ("operator", op, sub_operand)
+                        obj_type, field, prop_type, ("operator", op, sub_operand), choices
                     )
                     for op, sub_operand in operand
                 ),
@@ -1042,8 +1060,11 @@ class GuardedQuery:
             return None
         obj_def = self._registry.get_object_type(obj_type)
         prop_types = {prop.name: prop.type for prop in obj_def.properties}
+        prop_choices = {prop.name: prop.choices for prop in obj_def.properties}
         clauses = [
-            self._compile_where_clause(obj_type, field, prop_types[field], condition)
+            self._compile_where_clause(
+                obj_type, field, prop_types[field], condition, prop_choices[field]
+            )
             for field, condition in where
         ]
 

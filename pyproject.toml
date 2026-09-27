@@ -98,7 +98,7 @@ python_version = "3.12"
 strict = true
 mypy_path = "src"
 # The Makefile's `make typecheck` passes explicit paths (src, examples, scripts,
-# and the two admitted test files); `packages` covers plain `uv run mypy` too.
+# and the admitted test files); `packages` covers plain `uv run mypy` too.
 packages = ["ontary"]
 
 [tool.pytest.ini_options]

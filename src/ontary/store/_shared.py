@@ -32,6 +32,7 @@ from ontary.meta import (
     ObjectTypeDef,
     OntologyRegistry,
     declared_shape_violation,
+    normalize_choice_payload,
 )
 from ontary.store.values import StoredObject
 from ontary.typesys import _to_storage_scalar
@@ -300,7 +301,7 @@ def prepare_insert(
             code="SOURCE_CREATE_REFUSED",
         )
 
-    payload = dict(payload)
+    payload = normalize_choice_payload(obj_def, payload)
     obj_id = payload.get(obj_def.primary_key)
     if obj_id is None:
         obj_id = str(uuid.uuid4())
@@ -384,6 +385,7 @@ def merge_update(
             code="OBJECT_NOT_FOUND",
         )
 
+    payload_changes = normalize_choice_payload(obj_def, payload_changes)
     merged = {**current.payload, **payload_changes}
     violation = declared_shape_violation(obj_def, merged)
     if violation is not None:

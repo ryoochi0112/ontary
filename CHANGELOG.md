@@ -11,6 +11,26 @@ you**.
 
 ## [Unreleased]
 
+### Added
+
+- Choice properties (#42). A property or action parameter annotated with a
+  string-valued `Enum` or a `Literal[...]` of strings declares `type="str"` with
+  its member values as `choices`. The store keeps the string value, every write
+  path accepts the member or its value, and a typed read returns the member, so
+  `mypy` narrows it. `ActionParameterDef` gains `choices`, enforced as
+  `INVALID_PARAMS`, and MCP's `list_object_types` and `list_action_types` now list
+  `choices` for properties and parameters. A non-string member, a choice
+  annotation combined with `prop(choices=...)`, and a choice annotation on the
+  primary key are refused as `ONTOLOGY_INVALID`.
+  An `Enum` member is unwrapped to its value by the declaration, in one place
+  (`typesys.choice_value`), before validation and before the object id is read:
+  only a property or parameter that declares `choices` accepts it. The one
+  deliberate behaviour change for an existing declaration is that a
+  `prop(choices=...)` property (including a `choices`-declared primary key) now
+  accepts an `Enum` member whose value is one of its choices, since it is the
+  same declaration. A `str` property without `choices` refuses an `Enum` member
+  exactly as before.
+
 ## [0.17.0] — 2026-09-27
 
 ```bash

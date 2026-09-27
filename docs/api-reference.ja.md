@@ -245,7 +245,7 @@ ontology.validate(store=store)  # 編集したオントロジーを提供する�
 ためのものです。可視だが値が無い optional フィールドも `None` になりますが、
 こちらには決して現れません。
 
-#### `prop(*, primary_key=False, sensitivity=None, scope_level=None, required=None, property_type=None, **field_kwargs)`
+#### `prop(*, primary_key=False, sensitivity=None, scope_level=None, required=None, property_type=None, choices=None, **field_kwargs)`
 
 `pydantic.Field(...)` にオントロジーのメタデータを足したもの。認識されない kwargs は
 そのまま `Field` に渡るので、`prop(default=None, description="...")` は期待どおりに
@@ -255,6 +255,49 @@ ontology.validate(store=store)  # 編集したオントロジーを提供する�
 > **`sensitivity` を制限したプロパティは `X | None` で宣言する必要があります。**
 > そうでない場合、クラス登録時にコード付きのバリデーションエラーになります —
 > リダクションされた読み取りが `None` を返せる必要があるためです。
+
+`choices=["open", "closed"]` は `str` プロパティの値をその集合に限定します。
+それ以外の値は、どの書き込み経路でも拒否されます。
+
+#### 選択肢プロパティ: `Enum` と `Literal`
+
+プロパティに、値が文字列の `Enum`（`StrEnum` など）か、文字列の `Literal[...]` を
+注釈します。これは `str` と `choices` の組と同じ形を宣言します。`PropertyDef` は
+`type="str"` になり、`choices` は宣言順のメンバー値になります。
+
+```python
+class Status(StrEnum):
+    OPEN = "open"
+    CLOSED = "closed"
+
+
+@ontology.object(layer="L0", scope="unscoped")
+class Ticket(OntologyObject):
+    id: str = prop(primary_key=True)
+    status: Status
+    kind: Literal["bug", "task"]
+```
+
+- **保存。** ストアはメンバーの文字列値を保持します。すべての書き込み経路が
+  `Enum` メンバーとその値の両方を受け付けます。対象は `ingest`、`ctx.create`、
+  `ctx.save`、Action パラメータ、`where` フィルタです。それ以外の値は拒否されます
+  （書き込みでは `INVALID_RECORD`、Action では `INVALID_PARAMS`）。`where` フィルタは
+  選択肢外の値を拒否しません。どの行にも一致しないだけです。
+- **`choices` を宣言した場所だけ。** `Enum` メンバーを値に展開するのは宣言であり、
+  Python の型ではありません。`prop(choices=...)` のプロパティは、値が選択肢に含まれる
+  メンバーを受け付けます。同じ宣言だからです。`choices` の無い素の `str` プロパティは、
+  従来どおり `Enum` メンバーを拒否します（書き込みでは `INVALID_RECORD`、`where`
+  フィルタでは `OPERATOR_TYPE_MISMATCH`）。
+- **読み取り。** 型付きの読み取りは `Enum` メンバー（`Literal` なら文字列）を返すので、
+  `mypy` がフィールドの型を絞り込みます。dict の読み取り、MCP の結果、
+  `aggregate_by` のキーは素の文字列を返します。
+- **Action パラメータ。** `ActionParams` のフィールドに同じ注釈を付けると、その
+  `ActionParameterDef` に `choices` が付きます。型付きハンドラはメンバーを受け取ります。
+- **MCP。** `list_object_types` と `list_action_types` は、許される値を `choices` に
+  列挙します（無い場合は `null`）。
+- **宣言時に拒否されるもの**（`ONTOLOGY_INVALID`）: `IntEnum` や `Literal[1, 2]` の
+  ような文字列でないメンバー、選択肢の注釈と `prop(choices=...)` の併用、主キーへの
+  選択肢の注釈です。
 
 #### フィールドマーカー: `ref` / `target` / `scope_ref`
 
@@ -1212,10 +1255,10 @@ stateful セッションでも、各 request はその request 自身のトー�
 | 型 | 主なフィールド |
 | --- | --- |
 | `ObjectTypeDef` | `api_name`, `display_name`, `description`, `layer`, `properties`, `primary_key`, `owned` |
-| `PropertyDef` | `name`, `type`, `required`, `sensitivity`, `scope_level` |
+| `PropertyDef` | `name`, `type`, `choices`, `required`, `sensitivity`, `scope_level` |
 | `LinkTypeDef` | `api_name`, `from_type`, `to_type`, `cardinality`, `description`, `identity_revealing`, `owned` |
 | `ActionTypeDef` | `api_name`, `display_name`, `target_type`, `executable_by_roles`, `description`, `parameters`, `capabilities` |
-| `ActionParameterDef` | `name`, `type`, `required`, `refers_to`, `scope_semantics` |
+| `ActionParameterDef` | `name`, `type`, `choices`, `required`, `refers_to`, `scope_semantics` |
 | `FunctionDef` | `api_name`, `description`, `input_description`, `output_description`, `capabilities` |
 | `Sensitivity` | `ai_usable`, `human_visible` |
 

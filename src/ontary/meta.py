@@ -10,14 +10,14 @@ any one domain.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from enum import Enum
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
 from ontary.errors import ValidationFailed
-from ontary.typesys import PropertyType, validate_scalar
+from ontary.typesys import PropertyType, normalize_choice_values, validate_scalar
 
 __all__ = [
     "PropertyType",
@@ -132,8 +132,20 @@ class ObjectTypeDef(BaseModel):
         carries no per-property defaults of its own).
         """
         if isinstance(self.owned, dict):
-            return dict(self.owned)
+            return normalize_choice_payload(self, self.owned)
         return {}
+
+
+def normalize_choice_payload(
+    obj_def: "ObjectTypeDef", payload: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Copy ``payload`` with each `choices`-declared property's ``Enum``
+    member replaced by its value (#42; see `typesys.choice_value`). Every
+    write entry runs this FIRST, before the primary key is read and before
+    `declared_shape_violation`."""
+    return normalize_choice_values(
+        payload, {prop.name: prop.choices for prop in obj_def.properties}
+    )
 
 
 def declared_shape_violation(
@@ -226,13 +238,30 @@ class ActionParameterDef(BaseModel):
     - `scope_semantics="scope"` (requires `refers_to`): the param names an
       object (e.g. a team) that must itself be covered by the consumer's
       scope, regardless of whether it "exists" as a target of the action.
+    - `choices`: the allowed string values, as on `PropertyDef` (#42).
     """
 
     name: str
     type: PropertyType
+    choices: tuple[str, ...] | None = None
     required: bool = True
     refers_to: str | None = None
     scope_semantics: Literal["target", "scope"] | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _valid_choices(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        violation = _choices_declaration_violation(
+            data.get("type"), data.get("choices")
+        )
+        if violation is not None:
+            raise ValidationFailed(
+                f"ActionParameterDef {data.get('name')!r}: {violation}",
+                code="ONTOLOGY_INVALID",
+            )
+        return data
 
 
 class CapabilityDef(BaseModel):
