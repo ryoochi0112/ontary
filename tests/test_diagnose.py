@@ -10,8 +10,17 @@ from conftest import raises_code
 import ontary.diagnose as diagnose_module
 from ontary import Cardinality, Finding, Ontology, OntologyObject, SelfScope, prop
 from ontary.errors import ValidationFailed
-from ontary.meta import ActionTypeDef, FunctionDef, LinkTypeDef
+from ontary.meta import (
+    ActionParameterDef,
+    ActionTypeDef,
+    FunctionDef,
+    LinkTypeDef,
+    ObjectTypeDef,
+    PropertyDef,
+)
 from ontary.scope import ViaLink
+from ontary.store import Source, StoredObject
+from ontary.store.inmemory import InMemoryStore
 
 
 def _ontology_with_two_independent_defects() -> Ontology:
@@ -305,3 +314,228 @@ def test_diagnose_converts_a_rule_failure_into_a_finding(
     assert findings[0].severity == "error"
     assert findings[0].location == "broken_rule"
     assert "deliberate diagnostic failure" in findings[0].message
+
+
+# --- ontary#40: checks that teach -------------------------------------------
+
+
+def _hand_built_mismatched_action() -> Ontology:
+    ontology = Ontology("mismatch", scope_levels=["org"])
+
+    @ontology.object(layer="L0", scope="unscoped")
+    class Org(OntologyObject):
+        id: str = prop(primary_key=True)
+
+    @ontology.object(layer="L0", scope="unscoped")
+    class Ticket(OntologyObject):
+        id: str = prop(primary_key=True)
+
+    ontology.registry.register_action_type(
+        ActionTypeDef(
+            api_name="EscalateTicket",
+            display_name="EscalateTicket",
+            target_type="Org",
+            executable_by_roles=["Operator"],
+            description="Targets Org but its target param refers to Ticket.",
+            parameters=[
+                ActionParameterDef(
+                    name="ticket_id",
+                    type="str",
+                    refers_to="Ticket",
+                    scope_semantics="target",
+                )
+            ],
+        )
+    )
+    return ontology
+
+
+def test_diagnose_reports_a_target_param_that_disagrees_with_target_type() -> None:
+    findings = _hand_built_mismatched_action().diagnose()
+
+    assert len(findings) == 1
+    finding = findings[0]
+    assert finding.code == "ONTOLOGY_INVALID"
+    assert finding.location == "ActionTypeDef['EscalateTicket'].parameters[0]"
+    assert "'ticket_id'" in finding.message
+    assert "'Ticket'" in finding.message
+    assert "'Org'" in finding.message
+
+
+def test_validate_refuses_a_target_param_that_disagrees_with_target_type() -> None:
+    with raises_code(ValidationFailed, "ONTOLOGY_INVALID") as exc_info:
+        _hand_built_mismatched_action().validate()
+
+    message = str(exc_info.value)
+    assert "'EscalateTicket'" in message
+    assert "'ticket_id'" in message
+    assert "'Ticket'" in message
+    assert "'Org'" in message
+
+
+_SOURCE = Source(source_system="test")
+
+
+def _ticket_store_v1(rows: list[dict[str, object]]) -> InMemoryStore:
+    """Rows written under `Ticket(id)` -- the shape before the edit."""
+    v1 = Ontology("tickets", scope_levels=["org"])
+
+    @v1.object(layer="L0", api_name="Ticket", scope="unscoped")
+    class Ticket(OntologyObject):
+        id: str = prop(primary_key=True)
+        priority: str | None = None
+
+    store = InMemoryStore(v1.registry)
+    for row in rows:
+        store.insert("Ticket", dict(row), _SOURCE)
+    return store
+
+
+def _ticket_ontology_v2() -> Ontology:
+    """The edited ontology: `priority` is now a required `str`, `rank` an
+    `int`."""
+    v2 = Ontology("tickets", scope_levels=["org"])
+
+    @v2.object(layer="L0", api_name="Ticket", scope="unscoped")
+    class Ticket(OntologyObject):
+        id: str = prop(primary_key=True)
+        priority: str
+
+    return v2
+
+
+def test_diagnose_store_reports_rows_missing_a_required_property() -> None:
+    store = _ticket_store_v1([{"id": "t1"}, {"id": "t2"}, {"id": "t3", "priority": "p1"}])
+    ontology = _ticket_ontology_v2()
+
+    assert ontology.diagnose() == []  # the definition alone is clean
+    findings = ontology.diagnose(store=store)
+
+    assert len(findings) == 1  # one finding per (type, property), never per row
+    finding = findings[0]
+    assert finding.code == "INVALID_RECORD"
+    assert finding.severity == "error"
+    assert finding.location == "ObjectTypeDef['Ticket'].properties['priority']"
+    assert "2" in finding.message  # count of current rows missing it
+    assert "priority" in finding.message
+
+
+def test_diagnose_store_reports_a_stored_value_of_the_wrong_type() -> None:
+    v1 = Ontology("tickets", scope_levels=["org"])
+
+    @v1.object(layer="L0", api_name="Ticket", scope="unscoped")
+    class TicketV1(OntologyObject):
+        id: str = prop(primary_key=True)
+        rank: str
+
+    store = InMemoryStore(v1.registry)
+    store.insert("Ticket", {"id": "t1", "rank": "high"}, _SOURCE)
+    store.insert("Ticket", {"id": "t2", "rank": "low"}, _SOURCE)
+
+    v2 = Ontology("tickets", scope_levels=["org"])
+
+    @v2.object(layer="L0", api_name="Ticket", scope="unscoped")
+    class TicketV2(OntologyObject):
+        id: str = prop(primary_key=True)
+        rank: int
+
+    findings = v2.diagnose(store=store)
+
+    assert len(findings) == 1
+    finding = findings[0]
+    assert finding.code == "INVALID_RECORD"
+    assert finding.location == "ObjectTypeDef['Ticket'].properties['rank']"
+    assert "2" in finding.message
+    assert "int" in finding.message
+
+
+def test_diagnose_store_reports_a_stored_value_outside_new_choices() -> None:
+    v1 = Ontology("tickets", scope_levels=["org"])
+
+    @v1.object(layer="L0", api_name="Ticket", scope="unscoped")
+    class TicketV1(OntologyObject):
+        id: str = prop(primary_key=True)
+        status: str
+
+    store = InMemoryStore(v1.registry)
+    store.insert("Ticket", {"id": "t1", "status": "pending"}, _SOURCE)
+
+    v2 = Ontology("tickets", scope_levels=["org"])
+
+    @v2.object(layer="L0", api_name="Ticket", scope="unscoped")
+    class TicketV2(OntologyObject):
+        id: str = prop(primary_key=True)
+        status: str = prop(choices=["open", "closed"])
+
+    findings = v2.diagnose(store=store)
+
+    assert [(f.code, f.location) for f in findings] == [
+        ("INVALID_RECORD", "ObjectTypeDef['Ticket'].properties['status']")
+    ]
+
+
+def test_diagnose_store_is_clean_when_rows_match_the_ontology() -> None:
+    store = _ticket_store_v1([{"id": "t1", "priority": "p1"}])
+
+    assert _ticket_ontology_v2().diagnose(store=store) == []
+
+
+def test_validate_store_raises_invalid_record() -> None:
+    store = _ticket_store_v1([{"id": "t1"}])
+    ontology = _ticket_ontology_v2()
+
+    ontology.validate()  # the definition alone still validates
+    with raises_code(ValidationFailed, "INVALID_RECORD") as exc_info:
+        ontology.validate(store=store)
+    assert "priority" in str(exc_info.value)
+
+
+def test_diagnose_store_does_not_raise_when_the_store_read_fails() -> None:
+    class BrokenStore(InMemoryStore):
+        def read_all(self, obj_type: str) -> list[StoredObject]:
+            raise RuntimeError("deliberate store failure")
+
+    ontology = _ticket_ontology_v2()
+    findings = ontology.diagnose(store=BrokenStore(ontology.registry))
+
+    assert [f.code for f in findings] == ["DIAGNOSE_RULE_FAILED"]
+    assert "deliberate store failure" in findings[0].message
+
+
+def test_diagnose_store_accepts_rows_missing_a_property_with_a_default() -> None:
+    store = _ticket_store_v1([{"id": "t1"}])
+    v2 = Ontology("tickets", scope_levels=["org"])
+
+    @v2.object(layer="L0", api_name="Ticket", scope="unscoped")
+    class Ticket(OntologyObject):
+        id: str = prop(primary_key=True)
+        priority: str = "p3"  # hydrate fills the default
+
+    assert v2.diagnose(store=store) == []
+
+
+def test_diagnose_store_falls_back_to_descriptors_for_a_hand_built_type() -> None:
+    store = _ticket_store_v1([{"id": "t1"}, {"id": "t2", "priority": "p1"}])
+    ontology = Ontology("tickets", scope_levels=["org"])
+    ontology.registry.register_object_type(
+        ObjectTypeDef(
+            api_name="Ticket",
+            display_name="Ticket",
+            description="Hand-built, no authored class.",
+            layer="L0",
+            properties=[
+                PropertyDef(name="id", type="str"),
+                PropertyDef(name="priority", type="int"),
+            ],
+            primary_key="id",
+        )
+    )
+
+    findings = ontology.diagnose(store=store)
+
+    locations = {f.location for f in findings if f.code == "INVALID_RECORD"}
+    assert locations == {"ObjectTypeDef['Ticket'].properties['priority']"}
+    (finding,) = [f for f in findings if f.code == "INVALID_RECORD"]
+    assert "2 of 2" in finding.message
+    assert "1 missing" in finding.message
+    assert "expected type 'int'" in finding.message

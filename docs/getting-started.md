@@ -98,6 +98,8 @@ for f in ontology.diagnose():
 
 Diagnostics run advisory checks. Heuristics like `STORED_DERIVABLE` or `CRUD_ACTION_NAME` return warnings. These warnings do not stop execution.
 
+After you edit an ontology that already has stored rows, pass the store: `ontology.diagnose(store=store)` reports rows that would no longer load, and `ontology.validate(store=store)` refuses them with `INVALID_RECORD`.
+
 ## Bind a store and a consumer
 
 Create an in-memory store and seed it with data. Define a consumer to apply security policies.

@@ -256,6 +256,37 @@ class ActionTypeDef(BaseModel):
     capabilities: list[str] = []
 
 
+def target_param_mismatch(action: ActionTypeDef) -> tuple[int, str] | None:
+    """Return (index of the first `target()` param, why) when an action has
+    `scope_semantics="target"` params but none refers to its `target_type`,
+    else None (ontary#40).
+
+    The scope gate resolves targets from those params' `refers_to`, while
+    audit and MCP report `target_type`; with no param of that type the gate
+    checks one object and the audit names another. Extra `target()` params
+    of other types stay allowed (e.g. an unscoped one, recorded in
+    `AuditEntry.unscoped_params`) as long as one names the target type.
+    """
+    targets = [
+        (index, param)
+        for index, param in enumerate(action.parameters)
+        if param.scope_semantics == "target" and param.refers_to is not None
+    ]
+    if not targets or any(
+        param.refers_to == action.target_type for _, param in targets
+    ):
+        return None
+    declared = ", ".join(
+        f"{param.name!r} is target({param.refers_to!r})" for _, param in targets
+    )
+    return targets[0][0], (
+        f"ActionTypeDef {action.api_name!r}: no target() parameter refers "
+        f"to target={action.target_type!r} ({declared}); one target() "
+        "param must refer to the action's target type (use scope_ref() or "
+        "ref() for another type)"
+    )
+
+
 class FunctionDef(BaseModel):
     api_name: str
     description: str
@@ -517,6 +548,10 @@ class OntologyRegistry:
                         f"{param.name!r}: dangling refers_to "
                         f"{param.refers_to!r}"
                     )
+
+            mismatch = target_param_mismatch(action)
+            if mismatch is not None:
+                errors.append(mismatch[1])
 
     def _validate_function_references(self, errors: list[str]) -> None:
         for fn in self._functions.values():

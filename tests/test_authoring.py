@@ -1019,3 +1019,64 @@ class TestAuthoringMistakesAreOntologyInvalid:
         assert "'t'" in message
         assert "min_n=0" in message
         assert ">= 1" in message
+
+
+class TestActionTargetMismatchIsOntologyInvalid:
+    """ontary#40: a `target(X)` param on an action declared with `target=Y`
+    is refused at decoration time. The scope gate would follow the param
+    (X) while audit and MCP report the declared target (Y)."""
+
+    @staticmethod
+    def _org_and_ticket(
+        ontology: Ontology,
+    ) -> tuple[type[OntologyObject], type[OntologyObject]]:
+        @ontology.object(layer="L0", scope="unscoped")
+        class Org(OntologyObject):
+            id: str = prop(primary_key=True)
+
+        @ontology.object(layer="L0", scope="unscoped")
+        class Ticket(OntologyObject):
+            id: str = prop(primary_key=True)
+
+        return Org, Ticket
+
+    def test_target_param_of_another_type_is_refused_at_decoration(self) -> None:
+        from ontary import ActionContext, ActionParams, target
+
+        ontology = Ontology(name="t", scope_levels=["org"])
+        org, ticket = self._org_and_ticket(ontology)
+
+        class CloseTicket(ActionParams):
+            ticket_id: str = target(ticket)
+
+        with raises_code(ValidationFailed, "ONTOLOGY_INVALID") as exc_info:
+
+            @ontology.action(CloseTicket, target=org, roles=["Operator"])
+            def close_ticket(ctx: ActionContext, params: CloseTicket) -> dict[str, Any]:
+                return {}
+
+        message = str(exc_info.value)
+        assert "'CloseTicket'" in message  # the action
+        assert "'ticket_id'" in message  # the param
+        assert "'Ticket'" in message  # its target() type
+        assert "'Org'" in message  # the declared target=
+        assert "target=" in message
+        # Refused before registration: nothing landed on the ontology.
+        assert "CloseTicket" not in ontology.registry.action_types
+        assert "CloseTicket" not in ontology._action_handlers
+
+    def test_target_param_matching_target_type_is_accepted(self) -> None:
+        from ontary import ActionContext, ActionParams, scope_ref, target
+
+        ontology = Ontology(name="t", scope_levels=["org"])
+        org, ticket = self._org_and_ticket(ontology)
+
+        class CloseTicket(ActionParams):
+            ticket_id: str = target(ticket)
+            org_id: str = scope_ref(org)  # a scope_ref of another type is fine
+
+        @ontology.action(CloseTicket, target=ticket, roles=["Operator"])
+        def close_ticket(ctx: ActionContext, params: CloseTicket) -> dict[str, Any]:
+            return {}
+
+        assert ontology.registry.action_types["CloseTicket"].target_type == "Ticket"
