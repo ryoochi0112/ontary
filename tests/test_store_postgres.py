@@ -267,3 +267,28 @@ def test_missing_postgres_extra_names_the_install_command() -> None:
 
     assert "ontary[postgres]" in str(exc_info.value)
     assert isinstance(exc_info.value.__cause__, ModuleNotFoundError)
+
+
+def test_live_primary_key_uniqueness_is_a_storage_constraint(
+    postgres_ontology: Ontology, make_store: StoreFactory
+) -> None:
+    """`idx_objects_live_id` backs the `OBJECT_ALREADY_EXISTS` refusal (#34):
+    a writer that bypasses `insert` still cannot add a second live row, while
+    a closed history row with the same id is allowed."""
+    import psycopg
+
+    with _schema() as schema:
+        store = make_store(
+            postgres_ontology.registry, dsn=_dsn_for(schema), backend="postgres"
+        )
+        store.insert("W", {"id": "org-1", "label": "keep"}, SRC)
+        store.close()
+
+        raw_insert = (
+            "INSERT INTO objects (object_type, id, payload, valid_from, valid_to,"
+            " source_system, page_token) VALUES ('W', 'org-1', '{}', 'x', %s, 's', %s)"
+        )
+        with psycopg.connect(_dsn_for(schema), autocommit=True) as conn:
+            with pytest.raises(psycopg.errors.UniqueViolation, match="idx_objects_live_id"):
+                conn.execute(raw_insert, (None, "live-dup"))
+            conn.execute(raw_insert, ("closed", "closed-dup"))

@@ -823,36 +823,92 @@ def test_read_last_returns_the_newest_row_live_or_retired(store: Store) -> None:
     assert store.read_last("Team", "never-existed") is None
 
 
-def test_read_last_is_read_current_while_any_row_is_live(store: Store) -> None:
-    """`read_last` is a SUPERSET of `read_current`, never a different pick.
+def test_insert_refuses_a_duplicate_live_primary_key(store: Store) -> None:
+    """A second `insert` of a live primary key is refused, not stacked (#34).
 
-    The store does not enforce payload-pk uniqueness among current rows, so
-    two inserts of the same primary key leave two LIVE
-    rows and `read_current` answers with the oldest of them (`row_id ASC`).
-    A `read_last` that simply took the newest row took the OTHER one -- and
-    since the action target gate resolves scope from `read_last` while every
-    consumer read resolves it from `read_current`, the gate authorized
-    against a scope no consumer read can see: the object's real owner was
-    denied and a consumer outside its scope was let in. The sibling above
-    cannot construct this input -- it inserts one row per id, so its two
-    reads can only ever diverge through a retirement.
+    Before the fix every backend accepted it: `read_all` returned both rows
+    and `read_current` kept answering with the older one, so the second write
+    was silently invisible to point reads yet visible to scans. The refusal
+    is a coded conflict and the store is left exactly as it was: one live
+    row and the original payload.
     """
     src = Source(source_system="synthetic")
     store.insert("Team", {"id": "dup-1", "name": "First"}, src)
-    store.insert("Team", {"id": "dup-1", "name": "Second"}, src)
 
+    with raises_code(ConflictError, "OBJECT_ALREADY_EXISTS") as exc_info:
+        store.insert("Team", {"id": "dup-1", "name": "Second"}, src)
+
+    assert "dup-1" in str(exc_info.value)
+    assert [row.payload["name"] for row in store.read_all("Team")] == ["First"]
     current = store.read_current("Team", "dup-1")
     assert current is not None
     assert current.payload["name"] == "First"
-    assert store.read_last("Team", "dup-1") == current
 
-    # ...and with nothing live, `read_last` still answers with the NEWEST
-    # closed row rather than falling back to the oldest one.
-    store.retire_object("Team", "dup-1")
-    assert store.read_current("Team", "dup-1") is None
-    last = store.read_last("Team", "dup-1")
+
+def test_insert_duplicate_refusal_is_scoped_to_the_object_type(store: Store) -> None:
+    """Primary keys are unique per object type, not across the store."""
+    src = Source(source_system="synthetic")
+    store.insert("Team", {"id": "shared-1", "name": "A team"}, src)
+    store.insert("Company", {"id": "shared-1", "name": "A company"}, src)
+
+    team = store.read_current("Team", "shared-1")
+    company = store.read_current("Company", "shared-1")
+    assert team is not None and team.payload["name"] == "A team"
+    assert company is not None and company.payload["name"] == "A company"
+
+
+def test_insert_after_retirement_starts_a_new_live_row(store: Store) -> None:
+    """Uniqueness is among LIVE rows: a retired id may be inserted again.
+
+    Retirement closes the current row; it does not reserve the id forever.
+    Re-ingesting a source record whose object was retired goes through
+    exactly this path (`read_current` is `None`, so ingest inserts), so a
+    refusal here would break re-ingest. `read_last` stays a superset of
+    `read_current`: while a row is live both answer with it, and once
+    nothing is live `read_last` answers with the NEWEST closed row.
+    """
+    src = Source(source_system="synthetic")
+    store.insert("Team", {"id": "re-1", "name": "First"}, src)
+    store.retire_object("Team", "re-1")
+
+    store.insert("Team", {"id": "re-1", "name": "Second"}, src)
+
+    current = store.read_current("Team", "re-1")
+    assert current is not None
+    assert current.payload["name"] == "Second"
+    assert store.read_last("Team", "re-1") == current
+    assert [row.payload["name"] for row in store.read_all("Team")] == ["Second"]
+
+    store.retire_object("Team", "re-1")
+    assert store.read_current("Team", "re-1") is None
+    last = store.read_last("Team", "re-1")
     assert last is not None
     assert last.payload["name"] == "Second"
+
+
+def _make_keyed_widget_handler(
+    ctx: ActionContext, params: _MakeWidgetParams
+) -> dict[str, str]:
+    return {"widget_id": ctx.insert("Widget", {"id": "w-1", "label": "gizmo"})}
+
+
+def test_action_insert_of_an_existing_primary_key_is_refused_and_rolled_back(
+    store_factory: StoreFactory,
+) -> None:
+    """`ctx.insert` inside an action gets the same coded refusal, and the
+    action's transaction leaves the first object untouched."""
+    registry = _widget_registry()
+    store = store_factory(registry)
+    policy = ScopePolicy(levels=["org"], unscoped_types={"Widget"})
+    executor = ActionExecutor(store, registry, policy)
+    executor._register("MakeWidget", _make_keyed_widget_handler, _MakeWidgetParams)
+
+    assert executor.execute(_maker_consumer(), "MakeWidget", {}) == {"widget_id": "w-1"}
+    with raises_code(ConflictError, "OBJECT_ALREADY_EXISTS"):
+        executor.execute(_maker_consumer(), "MakeWidget", {})
+
+    assert len(store.read_all("Widget")) == 1
+    assert [e.outcome for e in store.audit_entries()][-1] != "ok"
 
 
 def test_asof_link_reads_return_links_closed_at_or_after_the_instant(
@@ -1513,7 +1569,8 @@ def test_insert_non_json_serializable_payload_raises_type_error(store: Store) ->
 # current rows (two `insert` calls with the same payload id, or an `update`
 # that mutates a pk into a collision, or an int/str pk pair that collides
 # under any text-cast comparison), so a cursor keyed on the payload pk
-# cannot express the resulting ties. A second review pass found the per-row
+# cannot express the resulting ties. (Since #34 the duplicate `insert` is
+# refused; the pk-mutating `update` still produces the tie.) A second review pass found the per-row
 # identity ALSO could not live on `Lineage`/`StoredObject` (AC8: a narrow
 # consumer could infer how many rows its scope hid, or another tenant's
 # write volume, by gap arithmetic on a dense row counter) -- so `read_page`
@@ -1769,28 +1826,33 @@ def test_read_page_tie_safety_survives_duplicate_payload_pks(
 ) -> None:
     """THE regression this redesign fixes (spec pagination-hardening §5's
     2026-07-25 amendment, proven by review at 502-in/500-out on both
-    backends): the store does not enforce payload-pk uniqueness among
-    CURRENT rows -- two separate `insert` calls with the same payload id
-    yield two current rows, and a cursor keyed on the payload pk cannot
-    express that tie, so it silently drops a row. Ordering by the store's own
-    per-row identity instead means every one of these adversarial rows
-    survives a keyset walk, even at the most adversarial batch size of 1 --
-    this assertion FAILS if the cursor is ever re-keyed on the payload pk.
+    backends): two CURRENT rows can carry the same payload pk, and a cursor
+    keyed on the payload pk cannot express that tie, so it silently drops a
+    row. Ordering by the store's own per-row identity instead means every one
+    of these adversarial rows survives a keyset walk, even at the most
+    adversarial batch size of 1 -- this assertion FAILS if the cursor is ever
+    re-keyed on the payload pk.
 
     AMENDED by M9a: this test used to ALSO insert `{"id": 10}` alongside
     `{"id": "10"}`, since an int-vs-str payload pk collides under any
     text-cast ordering. That input is no longer reachable through the write
     path -- `declared_shape_violation` refuses a value that does not match its
     declared `PropertyType`, which is asserted below rather than dropped.
-    Duplicate pks remain reachable (the store still does not enforce pk
-    uniqueness), so the tie the cursor design must survive is still exercised.
+
+    AMENDED by #34: a second `insert` of a live primary key is now refused
+    (`OBJECT_ALREADY_EXISTS`), so the tie is seeded the one way still
+    reachable -- an `update` that rewrites another object's payload pk to
+    the same value. The store id column stays distinct; the payload pk ties.
     """
-    store.insert("Company", {"id": "dup", "name": "first"}, Source(source_system="s"))
-    store.insert("Company", {"id": "dup", "name": "second"}, Source(source_system="s"))
-    store.insert("Company", {"id": "10", "name": "str-ten"}, Source(source_system="s"))
+    src = Source(source_system="s")
+    store.insert("Company", {"id": "dup", "name": "first"}, src)
+    store.insert("Company", {"id": "other", "name": "second"}, src)
+    store.update("Company", "other", {"id": "dup"}, src)
+    store.insert("Company", {"id": "10", "name": "str-ten"}, src)
 
     walked = _walk_pages(store, "Company", batch=1)
 
+    assert [o.payload["id"] for o in walked] == ["dup", "dup", "10"]
     assert [o.payload["name"] for o in walked] == ["first", "second", "str-ten"]
 
     # The other half of the old adversarial pair, now refused at the seam.
@@ -1802,15 +1864,15 @@ def test_read_all_full_count_with_duplicate_payload_pks(store: Store) -> None:
     """Scaled-down pin of the review's 502-in/500-out finding: `read_all`
     must return every current row regardless of duplicate payload pks -- it
     is its own single query/pass ordered by `row_id`, never a payload-pk
-    comparison that could tie/collide."""
+    comparison that could tie/collide. Since #34 the ties are seeded through
+    pk-rewriting `update`s, the only write that can still produce them."""
     total = 12
+    src = Source(source_system="s")
     for i in range(total):
-        # 4 distinct payload ids, each reused 3x -- current rows sharing a
-        # duplicate business key, exactly the case the store does not (and
-        # per spec, is not required to) prevent.
-        store.insert(
-            "Company", {"id": f"c{i % 4}", "name": f"row-{i}"}, Source(source_system="s")
-        )
+        store.insert("Company", {"id": f"c{i}", "name": f"row-{i}"}, src)
+    for i in range(4, total):
+        # 4 distinct payload ids, each shared by 3 current rows.
+        store.update("Company", f"c{i}", {"id": f"c{i % 4}"}, src)
 
     assert len(store.read_all("Company")) == total
 

@@ -154,6 +154,17 @@ def retire_object_refusal(
     )
 
 
+def object_already_exists(object_type: str, obj_id: str) -> ConflictError:
+    """Build the coded refusal for an insert whose primary key is already
+    live. Each backend checks inside its own serialized transaction; the SQL
+    backends also carry a partial unique index as a storage backstop."""
+    return ConflictError(
+        f"{object_type} object {obj_id!r} already exists -- update it, or "
+        "retire it before inserting the same primary key again",
+        code="OBJECT_ALREADY_EXISTS",
+    )
+
+
 def live_link_not_found(
     link_type: str, from_id: str, to_id: str
 ) -> ValidationFailed:
