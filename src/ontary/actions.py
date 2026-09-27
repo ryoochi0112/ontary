@@ -38,7 +38,7 @@ from ontary.model import CapabilityHandle, LinkHandle, OntologyObject, hydrate
 from ontary.scope import ScopePolicy, resolve_owning_scope
 from ontary.security import Consumer, covers_scope
 from ontary.store import AuditEntry, Source, Store, StoredObject
-from ontary.typesys import _to_storage_scalar, choice_value, validate_scalar
+from ontary.typesys import _to_storage_scalar, choice_value, struct_value, validate_scalar
 
 TypedHandler = Callable[["ActionContext", BaseModel], dict[str, Any]]
 P = TypeVar("P")
@@ -980,15 +980,23 @@ class ActionExecutor:
         if isinstance(params, BaseModel):
             return params.model_dump(mode="json")
         declared = {p.name: p for p in action_def.parameters}
-        unwrapped = {
-            name: choice_value(value, declared[name].choices) if name in declared else value
-            for name, value in params.items()
-        }
+        unwrapped = {}
+        for name, value in params.items():
+            param = declared.get(name)
+            if param is not None:
+                if param.type == "struct" and param.fields is not None:
+                    value = struct_value(value, param.fields)
+                value = choice_value(value, param.choices)
+            unwrapped[name] = value
         return {
-            name: _to_storage_scalar(value, declared[name].type)
+            name: _to_storage_scalar(
+                value, declared[name].type, fields=declared[name].fields
+            )
             if name in declared
             and value is not None
-            and validate_scalar(value, declared[name].type) is None
+            and validate_scalar(
+                value, declared[name].type, fields=declared[name].fields
+            ) is None
             else value
             for name, value in unwrapped.items()
         }
@@ -1063,12 +1071,17 @@ class ActionExecutor:
                 continue
             type_error = self._type_mismatch(param, value)
             if type_error is not None:
+                location = (
+                    f"{param.name}.{type_error}"
+                    if param.type == "struct" and ": " in type_error
+                    else f"parameter {param.name!r} {type_error}"
+                )
                 self._error(
                     consumer,
                     action_name,
                     action_def,
                     params,
-                    f"{action_name!r}: parameter {param.name!r} {type_error}",
+                    f"{action_name!r}: {location}",
                     invocation_id,
                 )
 
@@ -1175,7 +1188,7 @@ class ActionExecutor:
         single source of truth for `PropertyType` -> python-type checks,
         including the bool-is-not-int guard and ISO-8601 datetime
         parsing) or outside its declared `choices` (#42)."""
-        return validate_scalar(value, param.type, param.choices)
+        return validate_scalar(value, param.type, param.choices, fields=param.fields)
 
     def _enforce_scope(
         self,
