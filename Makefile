@@ -12,7 +12,7 @@ lint:
 # at 44a9cf9. Named test files are admitted one at a time, and only files that
 # are already clean under --strict.
 typecheck:
-	uv run mypy src examples scripts tests/test_typing_surface.py tests/test_typed_action_context.py tests/test_choice_properties.py
+	uv run mypy src examples scripts tests/test_typing_surface.py tests/test_typed_action_context.py tests/test_choice_properties.py tests/test_struct_properties_core.py tests/test_struct_properties_writes.py tests/test_struct_properties_authoring.py tests/test_struct_properties_reads.py tests/test_struct_properties_actions.py tests/test_struct_properties_mcp.py
 
 test:
 	uv run pytest -q
