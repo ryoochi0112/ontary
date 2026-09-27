@@ -154,6 +154,55 @@ them as an `ObjectTypeDef` and link to it with a `LinkTypeDef` instead. Changing
 set of choices is a schema change. Removing a value leaves stored rows that the
 narrower declaration refuses on read, so plan that change like any other migration.
 
+### Rules and status transitions
+
+Use a transition graph for the allowed moves of one choice property. Use a rule
+for an invariant that can be decided from one object, and use an action
+precondition for an operation-specific condition such as permission, request
+context, or another object. A cross-object check stays in the action; a rule is
+not a place to look up other objects.
+
+```python
+from enum import StrEnum
+
+from ontary import Ontology, OntologyObject, prop
+from ontary.meta import TransitionDef
+
+_ontology = Ontology("orders")
+
+
+class OrderStatus(StrEnum):
+    PENDING = "pending"
+    PAID = "paid"
+    SHIPPED = "shipped"
+
+
+@_ontology.object(layer="L0", scope="unscoped")
+class Order(OntologyObject):
+    id: str = prop(primary_key=True)
+    status: OrderStatus = prop(transitions=TransitionDef(
+        initial=("pending",),
+        moves={"pending": ("paid",), "paid": ("shipped",), "shipped": ()},
+    ))
+    paid: bool = False
+
+
+@_ontology.rule(Order, "shipped_needs_payment", message="payment is required")
+def shipped_needs_payment(order: Order) -> bool:
+    return order.status != OrderStatus.SHIPPED or order.paid
+```
+
+Keep each rule pure: the predicate should decide from the typed object it
+receives and should not write data or consult external state. It receives the
+full new object with every declared property, including properties restricted
+from consumers. The engine does not enforce purity. A failed rule refuses the
+write, and the refusal includes the rule name and its message.
+
+The `initial` states apply to objects created through an action. Ingest and
+direct store inserts may start at any declared state. An ingest update of an
+existing row must still follow the transition graph; it cannot move that row to
+a state the graph does not allow.
+
 ### Interfaces
 
 Foundry interfaces define a common contract across object types. **No equivalent

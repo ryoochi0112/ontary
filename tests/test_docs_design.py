@@ -16,6 +16,7 @@ from ontary.meta import (
     LinkTypeDef,
     ObjectTypeDef,
     PropertyDef,
+    TransitionDef,
 )
 from ontary.scope import ScopePolicy
 from ontary.store import Store
@@ -38,6 +39,8 @@ ILLUSTRATIVE = (
     "CancelSubscription",
     "DeleteEmployee",
     "EngagementScoreSnapshot",
+    "Order",
+    "OrderStatus",
     "OffboardEmployee",
     "RemoveEmployee",
     "Survey2024",
@@ -61,6 +64,7 @@ ENGINE_IDENTIFIERS = {
     "ObjectTypeDef",
     "PropertyDef",
     "ScopePolicy",
+    "TransitionDef",
 }
 
 # These are the actual objects behind the engine names that may be used as
@@ -138,6 +142,7 @@ def _sdk_vocabulary() -> set[str]:
     cited_models = (
         ObjectTypeDef,
         PropertyDef,
+        TransitionDef,
         LinkTypeDef,
         ActionTypeDef,
         FunctionDef,
@@ -167,6 +172,113 @@ def test_design_guide_heading_order_matches_translation() -> None:
     """Bilingual drift must not reorder, add, or remove an EN/JA guide entry."""
     english, japanese = DESIGN_GUIDES
     assert _headings(english) == _headings(japanese)
+
+
+def _rules_transitions_section(path: Path) -> str:
+    match = re.search(
+        r"(?ms)^### Rules and status transitions\n(.*?)(?=^### |^## |\Z)",
+        path.read_text(),
+    )
+    return "" if match is None else match.group(1)
+
+
+@pytest.mark.parametrize("path", DESIGN_GUIDES, ids=lambda path: path.name)
+def test_design_guide_explains_rules_and_transitions(path: Path) -> None:
+    """The two guides explain the same write guarantees and authoring choices."""
+    section = _rules_transitions_section(path)
+    assert section, f"{path.name}: missing Rules and status transitions section"
+    assert "prop(transitions=TransitionDef(" in section
+    assert "@_ontology.rule(Order," in section
+
+    if path.name.endswith(".ja.md"):
+        required = (
+            "遷移グラフ",
+            "アクションの事前条件",
+            "別オブジェクト",
+            "純粋",
+            "すべてのプロパティ",
+            "ingest",
+            "宣言済みの任意の状態",
+            "既存行",
+            "ルール名",
+        )
+    else:
+        required = (
+            "transition graph",
+            "action precondition",
+            "cross-object",
+            "pure",
+            "every declared property",
+            "ingest",
+            "any declared state",
+            "existing row",
+            "rule name",
+        )
+    normalized = re.sub(r"\s+", " ", section).casefold()
+    missing = [phrase for phrase in required if phrase.casefold() not in normalized]
+    assert not missing, f"{path.name}: rules/transitions section omits {missing}"
+
+
+@pytest.mark.parametrize(
+    "path",
+    (_DOCS / "api-reference.md", _DOCS / "api-reference.ja.md"),
+    ids=lambda path: path.name,
+)
+def test_api_reference_documents_transitions_rules_and_mcp_schema(path: Path) -> None:
+    """Both API references document the public authoring and MCP contracts."""
+    text = path.read_text()
+    required = [
+        "prop(transitions=...",
+        "Ontology.rule",
+        "list_object_types",
+        "`transitions`",
+        "`rules`",
+        "TRANSITION_NOT_ALLOWED",
+        "RULE_VIOLATED",
+        "model_dump()",
+    ]
+    if path.name.endswith(".ja.md"):
+        required.extend(("`TransitionDef`", "`ontary.meta`", "`ontary.__all__`"))
+    else:
+        required.extend(("import `TransitionDef` from", "`ontary.meta`", "`ontary.__all__`"))
+    missing = [phrase for phrase in required if phrase not in text]
+    assert not missing, f"{path.name}: API reference omits {missing}"
+
+
+def test_unreleased_changelog_covers_declared_rules_and_transitions() -> None:
+    changelog = (_ROOT / "CHANGELOG.md").read_text()
+    unreleased_match = re.search(r"(?ms)^## \[Unreleased\]\n(.*?)(?=^## \[|\Z)", changelog)
+    assert unreleased_match is not None
+    unreleased = unreleased_match.group(1)
+    added_match = re.search(r"(?ms)^### Added\n(.*?)(?=^### |\Z)", unreleased)
+    changed_match = re.search(r"(?ms)^### Changed\n(.*?)(?=^### |\Z)", unreleased)
+    assert added_match is not None, "Unreleased changelog is missing ### Added"
+    assert changed_match is not None, "Unreleased changelog is missing ### Changed"
+
+    added = added_match.group(1)
+    for phrase in (
+        "#44",
+        "transitions",
+        "rules",
+        "TRANSITION_NOT_ALLOWED",
+        "RULE_VIOLATED",
+        "SCHEMA_VERSION",
+        "unchanged",
+    ):
+        assert phrase in added, f"Unreleased Added omits {phrase!r}"
+
+    changed = changed_match.group(1)
+    for phrase in (
+        "current row",
+        "transaction",
+        "list_object_types",
+        "`transitions`",
+        "`rules`",
+        "RuleDef",
+        "callable",
+        "model_dump",
+    ):
+        assert phrase in changed, f"Unreleased Changed omits {phrase!r}"
 
 
 def test_design_guide_identifier_set_matches_translation() -> None:

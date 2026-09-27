@@ -266,8 +266,11 @@ keep working on the same class.
 path refuses any other value.
 
 `transitions=TransitionDef(initial=(...), moves={...})` declares allowed moves on
-a choice property. Enum members with string values are accepted as states. A
-primary key cannot have transitions.
+a choice property. String values and `StrEnum` members are accepted as states;
+plain `Enum` members are not. A primary key cannot have transitions.
+
+Use `prop(transitions=...)` to attach the graph, and import `TransitionDef` from
+`ontary.meta`; it is not exported from `ontary.__all__`.
 
 #### `Ontology.rule(cls, name, *, message)`
 
@@ -1250,6 +1253,11 @@ tools carry `ToolAnnotations(readOnlyHint=True)`; `execute_action` carries
 | `traverse_links` | Follow a link | `readOnlyHint=True` |
 | `execute_action` | Run an action | `destructiveHint=True` |
 | `call_function` | Call a function | `readOnlyHint=True` |
+
+`list_object_types` includes a `transitions` key on every property. Its value is
+`null` when the property has no graph, or an object with the complete `initial`
+state list and `moves` mapping when it does. Each object type also has a `rules`
+list containing each rule's `name` and `message`; rule code is never included.
 
 `query_objects(obj_type, where=None, order_by=None, limit=None, after=None)` is always bounded
 on the MCP surface: an omitted `limit` uses the server default cap of 100 rows,

@@ -260,8 +260,12 @@ ontology.validate(store=store)  # 編集したオントロジーを提供する�
 それ以外の値は、どの書き込み経路でも拒否されます。
 
 `transitions=TransitionDef(initial=(...), moves={...})` は choice プロパティで
-許可する状態遷移を宣言します。文字列値を持つ Enum メンバーも状態として指定できます。
+許可する状態遷移を宣言します。文字列または `StrEnum` メンバーを状態として指定できます。
+通常の `Enum` メンバーは状態として受け付けられません。
 主キーには transitions を宣言できません。
+
+グラフは `prop(transitions=...)` で指定し、`TransitionDef` は
+`ontary.meta` から import します。`ontary.__all__` からは公開されません。
 
 #### `Ontology.rule(cls, name, *, message)`
 
@@ -1218,6 +1222,10 @@ server = build_mcp_server(ontology, store, consumer, *, name=None,
 | `traverse_links` | リンクを辿る | `readOnlyHint=True` |
 | `execute_action` | Action の実行 | `destructiveHint=True` |
 | `call_function` | Function の呼び出し | `readOnlyHint=True` |
+
+`list_object_types` はすべてのプロパティに `transitions` キーを含めます。グラフがない場合は
+`null`、ある場合は完全な `initial` 状態リストと `moves` の対応を返します。各オブジェクト型には
+`rules` リストもあり、各ルールの `name` と `message` を含みます。ルールのコードは含まれません。
 
 `query_objects(obj_type, where=None, order_by=None, limit=None, after=None)` は MCP surface では常に
 上限付きです。`limit` を省略するとサーバーのデフォルト上限 100 行を使い、明示する
