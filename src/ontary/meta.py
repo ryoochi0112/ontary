@@ -24,6 +24,7 @@ __all__ = [
     "Cardinality",
     "Sensitivity",
     "PropertyDef",
+    "StructFieldDef",
     "ObjectTypeDef",
     "LinkTypeDef",
     "ActionParameterDef",
@@ -72,10 +73,48 @@ def _choices_declaration_violation(
     return None
 
 
+class StructFieldDef(BaseModel):
+    name: str
+    type: PropertyType
+    choices: tuple[str, ...] | None = None
+    required: bool = True
+
+    @model_validator(mode="before")
+    @classmethod
+    def _valid_declaration(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        name = data.get("name")
+        if data.get("type") not in {"str", "int", "float", "bool", "date", "datetime"}:
+            raise ValidationFailed(
+                f"StructFieldDef {name!r}: type must be a scalar str/int/float/bool/date/datetime",
+                code="ONTOLOGY_INVALID",
+            )
+        violation = _choices_declaration_violation(data.get("type"), data.get("choices"))
+        if violation is not None:
+            raise ValidationFailed(f"StructFieldDef {name!r}: {violation}", code="ONTOLOGY_INVALID")
+        return data
+
+
+def _fields_declaration_violation(
+    prop_type: PropertyType, fields: tuple[StructFieldDef, ...] | None
+) -> str | None:
+    if prop_type == "struct":
+        if not fields:
+            return "struct fields must be non-empty"
+        names = [field.name for field in fields]
+        if len(names) != len(set(names)):
+            return "struct fields contain a duplicate name"
+    elif fields is not None:
+        return "fields are only valid on 'struct' declarations"
+    return None
+
+
 class PropertyDef(BaseModel):
     name: str
     type: PropertyType
     choices: tuple[str, ...] | None = None
+    fields: tuple[StructFieldDef, ...] | None = None
     required: bool = True
     sensitivity: Sensitivity = Field(default_factory=Sensitivity)
     scope_level: ScopeLevel = None
@@ -94,6 +133,13 @@ class PropertyDef(BaseModel):
                 code="ONTOLOGY_INVALID",
             )
         return data
+
+    @model_validator(mode="after")
+    def _valid_fields(self) -> PropertyDef:
+        violation = _fields_declaration_violation(self.type, self.fields)
+        if violation is not None:
+            raise ValidationFailed(f"PropertyDef {self.name!r}: {violation}", code="ONTOLOGY_INVALID")
+        return self
 
 
 class ObjectTypeDef(BaseModel):
@@ -244,6 +290,7 @@ class ActionParameterDef(BaseModel):
     name: str
     type: PropertyType
     choices: tuple[str, ...] | None = None
+    fields: tuple[StructFieldDef, ...] | None = None
     required: bool = True
     refers_to: str | None = None
     scope_semantics: Literal["target", "scope"] | None = None
@@ -262,6 +309,15 @@ class ActionParameterDef(BaseModel):
                 code="ONTOLOGY_INVALID",
             )
         return data
+
+    @model_validator(mode="after")
+    def _valid_fields(self) -> ActionParameterDef:
+        violation = _fields_declaration_violation(self.type, self.fields)
+        if violation is not None:
+            raise ValidationFailed(
+                f"ActionParameterDef {self.name!r}: {violation}", code="ONTOLOGY_INVALID"
+            )
+        return self
 
 
 class CapabilityDef(BaseModel):

@@ -263,6 +263,7 @@ DEMOTED_NAMES_BY_MODULE = {
         "ObjectTypeDef",
         "OntologyRegistry",
         "PropertyDef",
+        "StructFieldDef",
         "PropertyType",
         "ScopeLevel",
     },

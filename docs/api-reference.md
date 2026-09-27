@@ -104,7 +104,7 @@ integration.
 ### `ontary.meta`
 
 `ActionParameterDef`, `ActionTypeDef`, `FunctionDef`, `LinkTypeDef`,
-`ObjectTypeDef`, `OntologyRegistry`, `PropertyDef`, `PropertyType`, `ScopeLevel`.
+`ObjectTypeDef`, `OntologyRegistry`, `PropertyDef`, `StructFieldDef`, `PropertyType`, `ScopeLevel`.
 
 ### `ontary.ontology`
 

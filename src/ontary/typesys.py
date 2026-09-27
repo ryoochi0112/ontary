@@ -10,13 +10,18 @@ the only place either lives.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import date, datetime
 from enum import Enum
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
+
+from pydantic import BaseModel
+
+if TYPE_CHECKING:
+    from ontary.meta import StructFieldDef
 
 PropertyType = Literal[
-    "str", "int", "float", "bool", "date", "datetime", "json"
+    "str", "int", "float", "bool", "date", "datetime", "json", "struct"
 ]
 
 PYTHON_TYPES: dict[PropertyType, tuple[type, ...]] = {
@@ -27,6 +32,7 @@ PYTHON_TYPES: dict[PropertyType, tuple[type, ...]] = {
     "date": (date, str),
     "datetime": (datetime, str),
     "json": (dict, list, str, int, float, bool),
+    "struct": (dict,),
 }
 
 
@@ -90,7 +96,12 @@ def _naive_datetime_violation(value: datetime) -> str | None:
     return None
 
 
-def _to_storage_scalar(value: Any, prop_type: PropertyType) -> Any:
+def _to_storage_scalar(
+    value: Any,
+    prop_type: PropertyType,
+    *,
+    fields: Sequence[StructFieldDef] | None = None,
+) -> Any:
     """Return the JSON-safe scalar representation used by every store.
 
     A ``date``/``datetime`` object becomes its own ``isoformat()`` spelling,
@@ -98,6 +109,17 @@ def _to_storage_scalar(value: Any, prop_type: PropertyType) -> Any:
     ``eq`` on the string surface keeps matching the spelling that was
     written (#38).
     """
+    if prop_type == "struct" and fields is None:
+        raise ValueError("struct fields declaration is required")
+    if prop_type == "struct" and isinstance(value, Mapping):
+        assert fields is not None
+        by_name = {field.name: field for field in fields}
+        return {
+            name: _to_storage_scalar(inner, by_name[name].type)
+            if name in by_name and inner is not None
+            else inner
+            for name, inner in value.items()
+        }
     if prop_type == "datetime" and isinstance(value, datetime):
         return value.isoformat()
     if (
@@ -127,6 +149,49 @@ def choice_value(value: Any, choices: tuple[str, ...] | None) -> Any:
     return value
 
 
+def struct_value(value: Any, fields: Sequence[StructFieldDef]) -> Any:
+    """Normalize model and declared inner choice values before validation."""
+    if isinstance(value, BaseModel):
+        value = value.model_dump()
+    if not isinstance(value, Mapping):
+        return value
+    choices_by_name = {field.name: field.choices for field in fields}
+    return {
+        name: choice_value(inner, choices_by_name[name])
+        if name in choices_by_name
+        else inner
+        for name, inner in value.items()
+    }
+
+
+def _struct_violation(
+    value: Any,
+    fields: Sequence[StructFieldDef] | None,
+    *,
+    stored: bool,
+) -> str | None:
+    if fields is None:
+        return "struct fields declaration is required"
+    if not isinstance(value, Mapping):
+        return f"expected type 'struct', got {type(value).__name__}"
+    by_name = {field.name: field for field in fields}
+    for name in value:
+        if name not in by_name:
+            return f"{name}: unknown field"
+    for field in fields:
+        if field.name not in value or value[field.name] is None:
+            if field.required:
+                return f"{field.name}: required field missing"
+            continue
+        inner = value[field.name]
+        violation = validate_scalar(inner, field.type, field.choices)
+        if violation is None and stored:
+            violation = _storage_scalar_violation(inner, field.type, field.choices)
+        if violation is not None:
+            return f"{field.name}: {violation}"
+    return None
+
+
 def normalize_choice_values(
     payload: Mapping[str, Any],
     choices_by_name: Mapping[str, tuple[str, ...] | None],
@@ -142,6 +207,8 @@ def _storage_scalar_violation(
     value: Any,
     prop_type: PropertyType,
     choices: tuple[str, ...] | None = None,
+    *,
+    fields: Sequence[StructFieldDef] | None = None,
 ) -> str | None:
     """Validate a scalar already read from durable JSON storage.
 
@@ -149,6 +216,8 @@ def _storage_scalar_violation(
     the promised storage representation. Keeping this separate prevents
     Pydantic from accepting a coercible datetime-shaped string as a date.
     """
+    if prop_type == "struct":
+        return _struct_violation(value, fields, stored=True)
     if prop_type == "date":
         if not isinstance(value, str):
             return (
@@ -167,6 +236,8 @@ def validate_scalar(
     value: Any,
     prop_type: PropertyType,
     choices: tuple[str, ...] | None = None,
+    *,
+    fields: Sequence[StructFieldDef] | None = None,
 ) -> str | None:
     """Return an error message if `value` doesn't match `prop_type`, else None.
 
@@ -188,6 +259,8 @@ def validate_scalar(
       so) or a `str` that parses as ISO-8601 and carries a time component (a
       date-only string is a `date`).
     """
+    if prop_type == "struct":
+        return _struct_violation(value, fields, stored=False)
     expected_types = PYTHON_TYPES[prop_type]
     if isinstance(value, bool) and prop_type != "bool":
         return f"expected type {prop_type!r}, got bool"

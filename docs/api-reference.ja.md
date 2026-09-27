@@ -101,7 +101,7 @@ Python 3.12+。コアパッケージの依存は `pydantic` のみ。エクス�
 ### `ontary.meta`
 
 `ActionParameterDef`、`ActionTypeDef`、`FunctionDef`、`LinkTypeDef`、
-`ObjectTypeDef`、`OntologyRegistry`、`PropertyDef`、`PropertyType`、`ScopeLevel`。
+`ObjectTypeDef`、`OntologyRegistry`、`PropertyDef`、`StructFieldDef`、`PropertyType`、`ScopeLevel`。
 
 ### `ontary.ontology`
 
