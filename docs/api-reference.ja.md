@@ -585,7 +585,7 @@ Action は、型付きパラメータクラスと、
 | --- | --- |
 | `.insert(obj_type, payload) -> str` | 作成。primary key を省略した payload には、ランタイムの `id_factory` から自動で採番される。すでに有効な primary key は `OBJECT_ALREADY_EXISTS` で拒否される |
 | `.update(obj_type, obj_id, changes)` | 更新。primary key を別の値に変える変更は `PRIMARY_KEY_IMMUTABLE` で拒否される |
-| `.create_link(link_api_name, from_id, to_id)` | リンク作成。両端の id はリンク型が宣言する端点型の有効なオブジェクトである必要があり、そうでなければ `LINK_ENDPOINT_NOT_FOUND` で拒否 |
+| `.create_link(link_api_name, from_id, to_id)` | リンク作成。両端の id はリンク型が宣言する端点型の有効なオブジェクトである必要があり、そうでなければ `LINK_ENDPOINT_NOT_FOUND` で拒否。有効なリンクと同一なら no-op |
 | `.retire(obj_type, obj_id)` | オブジェクトをリタイアし、そのオブジェクト型についてリンク型が宣言している側でそのオブジェクトを参照するすべての live link を cascade-close |
 | `.unlink(link_api_name, from_id, to_id)` | 1 本の live link を閉じる |
 | `.read_current(obj_type, obj_id) -> StoredObject \| None` | 読み取り |
@@ -812,6 +812,14 @@ capture_action_writes() -> ContextManager[list[WriteRecord]]
 書き込みません。端点の検査はカーディナリティより先に行います。同じアクション
 トランザクション内で先に insert したオブジェクトは有効として扱います。
 
+`create_link` は冪等です。有効なリンクと同一のリンクを作成する呼び出しは、どの
+カーディナリティでも no-op になります。何も書き込まず、`WriteRecord` も記録せず、
+正常に返ります。以前は MANY_TO_MANY のリンクが重複し、MANY_TO_ONE のリンクは自分自身に
+対して `CARDINALITY_VIOLATION` で拒否されていました。同一リンクの検査はカーディナリティ
+より先に行います。対象は有効なリンクだけです。`close_link` の後は同じペアを再び
+リンクでき、閉じた行は履歴として残ります。SQL バックエンドは有効なリンクに対する
+部分ユニークインデックスでもこれを保証します。
+
 primary key は変更できません。`update` は、primary key を別の値に変える変更を
 `ValidationFailed`（code `PRIMARY_KEY_IMMUTABLE`）で拒否し、ストアは変更しません。
 これにより、ストアの id と payload の primary key は常に一致します。現在と同じ値を
@@ -979,6 +987,8 @@ client.ingest_links(
 `OWNED_PROPERTY_REFUSED` になります。端点に有効な行がないリンクのペアは、
 カーディナリティ違反と同様にペア単位で `LINK_ENDPOINT_NOT_FOUND` として拒否します。
 他のペアはそのまま登録されるため、オブジェクトをリンクより先に ingest してください。
+リンクの読み込みの再実行は冪等です。有効なリンクと同一のペアは no-op になり、
+`inserted_ids` にはそのまま含まれるため、2 回目の実行は 1 回目と同じレポートを返します。
 
 ---
 

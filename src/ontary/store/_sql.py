@@ -173,6 +173,19 @@ _PAGE_TOKEN_INDEX_PREFIX: DialectText = {
     "postgres": "",
 }
 
+_LIVE_LINK_INDEX_PREFIX: DialectText = {
+    "sqlite": (
+        "\n"
+        "-- At most ONE live row per (tenant, link_type, from_id, to_id) (#37).\n"
+        "-- Every backend treats an identical live link as a no-op inside its\n"
+        "-- own serialized transaction; this partial index is the storage\n"
+        "-- backstop, so a writer that bypasses the store still cannot duplicate\n"
+        "-- a live link. Closed rows are not covered: a pair may be linked again\n"
+        "-- after its link is closed.\n"
+    ),
+    "postgres": "",
+}
+
 _LIVE_ID_INDEX_PREFIX: DialectText = {
     "sqlite": (
         "\n"
@@ -290,6 +303,17 @@ TABLE_SPECS: tuple[TableSpec, ...] = (
                 on_newline={"sqlite": True, "postgres": False},
                 sqlite_order=5,
                 postgres_order=10,
+            ),
+            IndexSpec(
+                "idx_links_live_pair",
+                "links",
+                ("tenant", "link_type", "from_id", "to_id"),
+                unique=True,
+                where="valid_to IS NULL",
+                prefix=_LIVE_LINK_INDEX_PREFIX,
+                on_newline=True,
+                sqlite_order=9,
+                postgres_order=12,
             ),
         ),
         prefix="\n",

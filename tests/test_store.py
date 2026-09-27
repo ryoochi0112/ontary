@@ -90,7 +90,33 @@ def test_hot_path_indexes_exist(
         for table in ("objects", "links")
         for row in store._conn.execute(f"PRAGMA index_list({table})").fetchall()
     }
-    assert {"idx_objects_type_id", "idx_links_from", "idx_links_to"} <= names
+    assert {
+        "idx_objects_type_id",
+        "idx_links_from",
+        "idx_links_to",
+        "idx_links_live_pair",
+    } <= names
+
+
+def test_live_link_uniqueness_is_a_storage_constraint(
+    sqlite_registry: OntologyRegistry, make_store: StoreFactory
+) -> None:
+    """`idx_links_live_pair` backs the identical-link no-op (#37): a writer
+    that bypasses `create_link` still cannot add a second live row for one
+    (tenant, link_type, from_id, to_id), while a closed row is allowed."""
+    import sqlite3
+
+    store = make_store(sqlite_registry)
+    assert isinstance(store, ObjectStore)
+
+    raw_insert = (
+        "INSERT INTO links (link_type, from_id, to_id, valid_from, valid_to)"
+        " VALUES ('belongsToDepartment', 't1', 'd1', 'x', ?)"
+    )
+    store._conn.execute(raw_insert, (None,))
+    with pytest.raises(sqlite3.IntegrityError, match="UNIQUE"):
+        store._conn.execute(raw_insert, (None,))
+    store._conn.execute(raw_insert, ("closed",))
 
 
 def test_live_primary_key_uniqueness_is_a_storage_constraint(

@@ -501,6 +501,11 @@ class InMemoryStore:
             read_current=self.read_current,
             read_last=self.read_last,
         )
+        if to_id in self.links_from(link_type, from_id):
+            # #37: an identical live link already exists -- a no-op, checked
+            # before cardinality so a re-run never trips over itself. Nothing
+            # is written, so no write record is captured either.
+            return
 
         if link_def.cardinality in (Cardinality.ONE_TO_ONE, Cardinality.MANY_TO_ONE):
             existing_from = self.links_from(link_type, from_id)

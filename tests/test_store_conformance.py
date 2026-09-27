@@ -299,6 +299,22 @@ def one_to_many_store(store_factory: StoreFactory) -> Store:
 
 
 @pytest.fixture
+def many_to_many_store(store_factory: StoreFactory) -> Store:
+    registry = build_registry()
+    registry.register_link_type(
+        LinkTypeDef(
+            api_name="servesDepartment",
+            from_type="Team",
+            to_type="Department",
+            cardinality=Cardinality.MANY_TO_MANY,
+            description="A team serves many departments and vice versa.",
+        )
+    )
+    registry.validate()
+    return store_factory(registry)
+
+
+@pytest.fixture
 def one_to_one_store(store_factory: StoreFactory) -> Store:
     registry = build_registry()
     registry.register_link_type(
@@ -2055,6 +2071,85 @@ def test_create_link_many_to_one_second_parent_raises_cardinality(
 
     # a different from_id is unaffected
     store.create_link("belongsToDepartment", "team-2", "dept-a")
+
+
+# -- links + idempotence (#37) ----------------------------------------------
+
+
+def test_recreating_an_identical_many_to_many_link_is_a_no_op(
+    many_to_many_store: Store,
+) -> None:
+    """#37: the second identical `create_link` inserts nothing -- one live
+    row, one history row -- for the cardinality that used to duplicate."""
+    _seed_teams_and_departments(many_to_many_store, "team-1", "dept-a", "dept-b")
+    many_to_many_store.create_link("servesDepartment", "team-1", "dept-a")
+    many_to_many_store.create_link("servesDepartment", "team-1", "dept-a")
+
+    assert many_to_many_store.links_from("servesDepartment", "team-1") == ["dept-a"]
+    assert many_to_many_store.links_to("servesDepartment", "dept-a") == ["team-1"]
+    assert _link_history_rows(many_to_many_store, "servesDepartment", "team-1", "dept-a") == [
+        None
+    ]
+
+    # a genuinely new pair on the same from_id is still created
+    many_to_many_store.create_link("servesDepartment", "team-1", "dept-b")
+    assert many_to_many_store.links_from("servesDepartment", "team-1") == ["dept-a", "dept-b"]
+
+
+def test_recreating_an_identical_many_to_one_link_is_a_no_op(store: Store) -> None:
+    """The identical link is a no-op BEFORE cardinality: it used to raise
+    `CARDINALITY_VIOLATION` against itself. A different target still raises."""
+    _seed_teams_and_departments(store, "team-1", "dept-a", "dept-b")
+    store.create_link("belongsToDepartment", "team-1", "dept-a")
+    store.create_link("belongsToDepartment", "team-1", "dept-a")
+
+    assert store.links_from("belongsToDepartment", "team-1") == ["dept-a"]
+    assert _link_history_rows(store, "belongsToDepartment", "team-1", "dept-a") == [None]
+
+    with raises_code(ConflictError, "CARDINALITY_VIOLATION"):
+        store.create_link("belongsToDepartment", "team-1", "dept-b")
+
+
+def test_recreating_an_identical_one_to_one_link_is_a_no_op(
+    one_to_one_store: Store,
+) -> None:
+    _seed_teams_and_departments(one_to_one_store, "team-1", "dept-a")
+    one_to_one_store.create_link("assignedDepartment", "team-1", "dept-a")
+    one_to_one_store.create_link("assignedDepartment", "team-1", "dept-a")
+
+    assert one_to_one_store.links_from("assignedDepartment", "team-1") == ["dept-a"]
+    assert _link_history_rows(one_to_one_store, "assignedDepartment", "team-1", "dept-a") == [
+        None
+    ]
+
+
+def test_recreating_a_closed_link_starts_a_new_live_row(
+    many_to_many_store: Store,
+) -> None:
+    """Only a LIVE identical link is a no-op: after `close_link`, the same
+    pair is created again as a second row, keeping the closed one."""
+    _seed_teams_and_departments(many_to_many_store, "team-1", "dept-a")
+    many_to_many_store.create_link("servesDepartment", "team-1", "dept-a")
+    assert many_to_many_store.close_link("servesDepartment", "team-1", "dept-a") is True
+    many_to_many_store.create_link("servesDepartment", "team-1", "dept-a")
+
+    rows = _link_history_rows(many_to_many_store, "servesDepartment", "team-1", "dept-a")
+    assert len(rows) == 2
+    assert sorted(row is None for row in rows) == [False, True]
+    assert many_to_many_store.links_from("servesDepartment", "team-1") == ["dept-a"]
+
+
+def test_capture_records_no_write_for_an_identical_link(authority_store: Store) -> None:
+    """Nothing was written, so the action's write record stays empty."""
+    _seed_authority_endpoints(authority_store)
+    authority_store.create_link("ownedLink", "esc-1", "ticket-1")
+
+    with authority_store.capture_action_writes() as writes:
+        authority_store.create_link("ownedLink", "esc-1", "ticket-1")
+
+    assert writes == []
+    assert authority_store.links_from("ownedLink", "esc-1") == ["ticket-1"]
+
 
 
 def test_close_link_closes_live_row_without_inserting(store: Store) -> None:

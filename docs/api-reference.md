@@ -599,7 +599,7 @@ the action's own `Source`.
 | --- | --- |
 | `.insert(obj_type, payload) -> str` | Create. A payload omitting the type's primary key gets one auto-minted from the runtime's `id_factory`; a primary key that is already live is refused with `OBJECT_ALREADY_EXISTS` |
 | `.update(obj_type, obj_id, changes)` | Update. A change that gives the primary key a different value is refused with `PRIMARY_KEY_IMMUTABLE` |
-| `.create_link(link_api_name, from_id, to_id)` | Link. Both ids must be live objects of the link's declared endpoint types, or the call is refused with `LINK_ENDPOINT_NOT_FOUND` |
+| `.create_link(link_api_name, from_id, to_id)` | Link. Both ids must be live objects of the link's declared endpoint types, or the call is refused with `LINK_ENDPOINT_NOT_FOUND`. A link identical to a live one is a no-op |
 | `.retire(obj_type, obj_id)` | Retire the object and cascade-close every live link that references the object on the side its link type declares for that object type |
 | `.unlink(link_api_name, from_id, to_id)` | Close one live link |
 | `.read_current(obj_type, obj_id) -> StoredObject \| None` | Read |
@@ -834,6 +834,14 @@ as some other type is refused with `ValidationFailed` and code
 before cardinality. An object inserted earlier in the same action transaction counts
 as live.
 
+`create_link` is idempotent: creating a link identical to a live one, for any
+cardinality, is a no-op. Nothing is written, no `WriteRecord` is captured, and the
+call returns normally; it used to duplicate a MANY_TO_MANY link and to refuse a
+MANY_TO_ONE link with `CARDINALITY_VIOLATION` against itself. The identical-link check
+runs before cardinality. Only a live link counts: after `close_link`, the same pair
+may be linked again, and the closed row is kept as history. The SQL backends back
+this with a partial unique index on live links.
+
 A primary key is immutable. `update` refuses a change that gives the primary key a
 different value with `ValidationFailed` and code `PRIMARY_KEY_IMMUTABLE`, and the store
 is left unchanged. This keeps the store id and the payload primary key equal. Repeating
@@ -1006,7 +1014,9 @@ ontology-owned type raises `OWNED_TYPE_REFUSED`; supplying an ontology-owned pro
 raises `OWNED_PROPERTY_REFUSED`. A link pair whose endpoint has no live row of the
 declared endpoint type is rejected per pair with `LINK_ENDPOINT_NOT_FOUND`, like a
 cardinality violation; the other pairs still land, so ingest objects before their
-links.
+links. Re-running a link load is idempotent: a pair identical to a live link is a
+no-op and is still listed in `inserted_ids`, so the second run returns the same
+report as the first.
 
 ---
 
