@@ -33,6 +33,15 @@ you**.
   and still commits the other pairs. Before, such a link was stored dangling.
   Ingest objects before their links. Fixes
   [ontary#36](https://github.com/ryoochi0112/ontary/issues/36).
+- `create_link` is now idempotent for every cardinality: a link identical to a
+  live one is a no-op (nothing written, no `WriteRecord`), checked before
+  cardinality. Before, a MANY_TO_MANY re-create inserted a duplicate row and a
+  MANY_TO_ONE re-create raised `CARDINALITY_VIOLATION` against itself; re-running
+  `ingest_links` is now idempotent and returns the same report. The store schema
+  gains a partial unique index `idx_links_live_pair` on live links as a storage
+  backstop; `SCHEMA_VERSION` stays 12, which this release introduces, so a store
+  created from an unreleased 12 lacks the index but is still guarded by the
+  engine check. Fixes [ontary#37](https://github.com/ryoochi0112/ontary/issues/37).
 
 ## [0.15.0] — 2026-09-27
 

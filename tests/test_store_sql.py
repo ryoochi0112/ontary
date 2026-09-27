@@ -66,6 +66,8 @@ _EXPECTED_POSTGRES_DDL = (
     "CREATE INDEX IF NOT EXISTS idx_links_to ON links (tenant, link_type, to_id);\n"
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_objects_live_id\n"
     "    ON objects (tenant, object_type, id) WHERE valid_to IS NULL;\n"
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_links_live_pair\n"
+    "    ON links (tenant, link_type, from_id, to_id) WHERE valid_to IS NULL;\n"
 )
 
 
@@ -203,6 +205,15 @@ _EXPECTED_SQLITE_DDL = (
     "-- id may be inserted again after its object is retired.\n"
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_objects_live_id\n"
     "    ON objects (tenant, object_type, id) WHERE valid_to IS NULL;\n"
+    "\n"
+    "-- At most ONE live row per (tenant, link_type, from_id, to_id) (#37).\n"
+    "-- Every backend treats an identical live link as a no-op inside its\n"
+    "-- own serialized transaction; this partial index is the storage\n"
+    "-- backstop, so a writer that bypasses the store still cannot duplicate\n"
+    "-- a live link. Closed rows are not covered: a pair may be linked again\n"
+    "-- after its link is closed.\n"
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_links_live_pair\n"
+    "    ON links (tenant, link_type, from_id, to_id) WHERE valid_to IS NULL;\n"
 )
 
 

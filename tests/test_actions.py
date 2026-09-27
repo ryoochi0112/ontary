@@ -1990,12 +1990,14 @@ def test_retire_business_verb_cascades_both_link_directions_and_audits_writes(
     ]
 
 
-def test_retire_deduplicates_duplicate_links_and_audits_success() -> None:
-    """Two ordinary assign calls can create duplicate live links.
+def test_retire_after_a_repeated_assign_closes_the_single_link_and_audits_success() -> None:
+    """Two ordinary assign calls used to create duplicate live links; since
+    #37 the second identical `create_link` is a no-op, so the retire cascade
+    finds exactly one live link and audits exactly one unlink.
 
-    The old fixture could not construct this input through a consumer action;
-    the duplicate state is deliberately built through two calls to the
-    AssignEmployeeToDepartment business verb instead of direct link insertion.
+    The state is still built through two calls to the
+    AssignEmployeeToDepartment business verb rather than direct link
+    insertion, so the no-op is exercised through an action too.
     """
     client, store = _lifecycle_client()
     store.insert("Employee", {"id": "employee-1"}, SRC)
@@ -2009,10 +2011,9 @@ def test_retire_deduplicates_duplicate_links_and_audits_success() -> None:
             "employee_id": "employee-1",
             "department_id": "department-1",
         }
-    assert store.links_from("employeeDepartment", "employee-1") == [
-        "department-1",
-        "department-1",
-    ]
+    assert store.links_from("employeeDepartment", "employee-1") == ["department-1"]
+    # the second assign wrote nothing, and its audit entry says so
+    assert store.audit_entries()[-1].writes == []
 
     result = client.execute("OffboardEmployee", {"employee_id": "employee-1"})
 

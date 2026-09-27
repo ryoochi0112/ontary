@@ -584,6 +584,25 @@ def test_bulk_link_missing_endpoint_reported_per_pair(
     assert store.links_to("belongsToDepartment", "dept-a") == ["team-1", "team-2"]
 
 
+def test_bulk_link_rerun_is_idempotent(
+    store: ObjectStore, registry: OntologyRegistry
+) -> None:
+    """#37: loading the same pairs twice yields the same report and the
+    same links -- no duplicate rows, no self-inflicted cardinality error."""
+    src = Source(source_system="synthetic")
+    for team in ("team-1", "team-2"):
+        store.insert("Team", {"id": team, "name": team}, src)
+    store.insert("Department", {"id": "dept-a", "name": "A"}, src)
+    pairs = [("team-1", "dept-a"), ("team-2", "dept-a")]
+
+    first = bulk_link(store, registry, "belongsToDepartment", pairs, src)
+    second = bulk_link(store, registry, "belongsToDepartment", pairs, src)
+
+    assert first.ok and second.ok
+    assert second.inserted_ids == first.inserted_ids == ["team-1->dept-a", "team-2->dept-a"]
+    assert store.links_to("belongsToDepartment", "dept-a") == ["team-1", "team-2"]
+
+
 def test_bulk_link_unknown_link_type_rejected(
     store: ObjectStore, registry: OntologyRegistry
 ) -> None:

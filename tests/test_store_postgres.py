@@ -269,6 +269,31 @@ def test_missing_postgres_extra_names_the_install_command() -> None:
     assert isinstance(exc_info.value.__cause__, ModuleNotFoundError)
 
 
+def test_live_link_uniqueness_is_a_storage_constraint(
+    postgres_ontology: Ontology, make_store: StoreFactory
+) -> None:
+    """`idx_links_live_pair` backs the identical-link no-op (#37): a writer
+    that bypasses `create_link` still cannot add a second live row for one
+    (tenant, link_type, from_id, to_id), while a closed row is allowed."""
+    import psycopg
+
+    with _schema() as schema:
+        store = make_store(
+            postgres_ontology.registry, dsn=_dsn_for(schema), backend="postgres"
+        )
+        store.close()
+
+        raw_insert = (
+            "INSERT INTO links (link_type, from_id, to_id, valid_from, valid_to)"
+            " VALUES ('l', 'a', 'b', 'x', %s)"
+        )
+        with psycopg.connect(_dsn_for(schema), autocommit=True) as conn:
+            conn.execute(raw_insert, (None,))
+            with pytest.raises(psycopg.errors.UniqueViolation, match="idx_links_live_pair"):
+                conn.execute(raw_insert, (None,))
+            conn.execute(raw_insert, ("closed",))
+
+
 def test_live_primary_key_uniqueness_is_a_storage_constraint(
     postgres_ontology: Ontology, make_store: StoreFactory
 ) -> None:
