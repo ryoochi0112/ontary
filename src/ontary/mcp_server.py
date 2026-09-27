@@ -619,6 +619,13 @@ def _object_type_payload(defn: ObjectTypeDef) -> dict[str, Any]:
                 "name": p.name,
                 "type": p.type,
                 "choices": None if p.choices is None else list(p.choices),
+                "transitions": None if p.transitions is None else {
+                    "initial": list(p.transitions.initial),
+                    "moves": {
+                        state: list(targets)
+                        for state, targets in p.transitions.moves.items()
+                    },
+                },
                 "fields": None if p.fields is None else [
                     {
                         "name": field.name,
@@ -634,6 +641,10 @@ def _object_type_payload(defn: ObjectTypeDef) -> dict[str, Any]:
                 "scope_level": p.scope_level,
             }
             for p in defn.properties
+        ],
+        "rules": [
+            {"name": rule.name, "message": rule.message}
+            for rule in defn.rules
         ],
     }
 
