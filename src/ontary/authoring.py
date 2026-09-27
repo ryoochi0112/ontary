@@ -33,7 +33,12 @@ from pydantic import BaseModel, Field, RootModel, ValidationError
 
 from ontary.actions import ActionContext, TypedHandler
 from ontary.client import OntologyRuntime
-from ontary.diagnose import Finding, _collect_findings, _store_row_findings
+from ontary.diagnose import (
+    Finding,
+    _collect_findings,
+    _store_row_findings,
+    _stored_rule_findings,
+)
 from ontary.errors import ValidationFailed
 from ontary.functions import FunctionHandler, FunctionRegistry
 from ontary.meta import (
@@ -1181,26 +1186,26 @@ class Ontology:
         """Convenience: builds `.definition` (if not already built) and
         validates it -- equivalent to `ontology.definition.validate()`.
 
-        With a `store`, also sweeps its current rows (see `diagnose`) and
-        raises `ValidationFailed` with code `INVALID_RECORD` when any row
-        would fail hydration under this ontology (ontary#40). A store read
-        error propagates as-is.
+        With a `store`, also sweeps its current rows (see `diagnose`).
+        Hydration failures raise `INVALID_RECORD`; otherwise broken declared
+        rules raise `RULE_VIOLATED`. A store read error propagates as-is.
         """
         definition = self.definition
         definition.validate()
         if store is None:
             return
-        findings = [
-            finding
-            for api_name in sorted(definition.registry.object_types)
-            for finding in _store_row_findings(
-                definition, store, api_name, self._classes
+        findings: list[Finding] = []
+        for api_name in sorted(definition.registry.object_types):
+            findings.extend(
+                _store_row_findings(definition, store, api_name, self._classes)
             )
-        ]
+            findings.extend(_stored_rule_findings(definition, store, api_name))
         if findings:
+            message = "; ".join(finding.message for finding in findings)
+            if any(finding.code == "INVALID_RECORD" for finding in findings):
+                raise ValidationFailed(message, code="INVALID_RECORD")
             raise ValidationFailed(
-                "; ".join(finding.message for finding in findings),
-                code="INVALID_RECORD",
+                message, code="RULE_VIOLATED"
             )
 
     def _build_diagnostic_policy(self) -> ScopePolicy:
@@ -1251,10 +1256,10 @@ class Ontology:
 
         With a ``store``, also sweep its current rows (``Store.read_all``)
         and report, per (type, property), how many rows ``hydrate`` would
-        refuse under this ontology -- a property made required, a changed
-        type, or narrowed ``choices`` -- as ``INVALID_RECORD`` findings
-        (ontary#40). The sweep reads every current row, so it is explicit
-        here rather than run at ``bind()``.
+        refuse under this ontology as ``INVALID_RECORD`` findings, plus one
+        ``RULE_VIOLATED`` finding per declared rule broken by current rows.
+        The sweep reads every current row, so it is explicit here rather
+        than run at ``bind()``.
         """
         if self._definition is not None:
             definition = self._definition
