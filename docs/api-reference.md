@@ -635,6 +635,34 @@ Every attempt is audited — `ok`, `denied`, and `error` alike.
 What a handler receives instead of a raw store handle. Writes are auto-stamped with
 the action's own `Source`.
 
+**Typed members.** These take the ontology's own classes and `LinkHandle`s, so
+`mypy` checks the class, the returned type, each link endpoint's type, and every
+attribute a handler assigns before `save`. `create`'s keyword names are checked at
+runtime only.
+
+| Member | Purpose |
+| --- | --- |
+| `.get(cls, obj_id) -> T \| None` | Read one current object |
+| `.all(cls) -> list[T]` | Every current object of `cls` |
+| `.create(cls, **values) -> T` | Create and return the object. A missing primary key is minted from the runtime's `id_factory`; a name that is not a declared property is refused with `INVALID_RECORD` |
+| `.save(obj)` | Write the declared properties changed since this context handed `obj` out, and nothing when none changed. Only an object from `get`, `all`, `create` or `traverse` can be saved (`OBJECT_NOT_LOADED` otherwise); a changed primary key is refused with `PRIMARY_KEY_IMMUTABLE` |
+| `.link(handle, from_, to)` | Link. Each end is an object or its id, typed by the handle; same rules as `create_link` |
+| `.unlink(handle, from_, to)` | Close one live link, ends as for `link` |
+| `.traverse(handle, anchor) -> list[To]` | The `To` objects linked from `anchor`; `reverse=True` returns the `From` objects linked to it |
+| `.retire(obj)` / `.retire(cls, obj_id)` | Retire, with the same link cascade as the string form |
+
+A typed handler reads an object, changes it, and saves it:
+
+```python
+order = ctx.get(Order, params.order_id)
+order.status = "shipped"          # mypy checks the field name and type
+ctx.save(order)                   # writes only `status`
+```
+
+**String members.** The earlier surface, which takes type and link names as strings
+and payloads as dicts. PR 2 of [ontary#41](https://github.com/ryoochi0112/ontary/issues/41)
+deprecates it in favour of the typed members.
+
 | Member | Purpose |
 | --- | --- |
 | `.insert(obj_type, payload) -> str` | Create. A payload omitting the type's primary key gets one auto-minted from the runtime's `id_factory`; a primary key that is already live is refused with `OBJECT_ALREADY_EXISTS` |
@@ -1318,6 +1346,7 @@ table below is generated from it.
 | `LINK_NOT_FOUND` | A link closure found no matching live link. |
 | `NON_NUMERIC_AGGREGATE` | `GuardedQuery.aggregate`'s `value_field` is declared a non-numeric `PropertyType` (anything other than `int`/`float`, such as str/json/datetime/bool). It is checked against the declared type before rows are iterated or coerced, so values that merely look numeric cannot bypass the type contract (spec `m35-sdk-refactor` §6 AC7). `func="count"` is exempt and accepts any declared type. |
 | `OBJECT_NOT_FOUND` | An update targeted a non-existent object. |
+| `OBJECT_NOT_LOADED` | ActionContext.save got an object this action context did not hand out; load it with ctx.get(...) or ctx.create(...) first, so only the fields the handler changed are written. |
 | `OBJECT_RETIRE_NOT_FOUND` | A retirement targeted an object with no stored row. |
 | `PRIMARY_KEY_IMMUTABLE` | An update tried to change an object's primary key; a primary key is immutable, so retire the object and insert a new one instead. |
 | `ONTOLOGY_INVALID` | A declaration was rejected: `validate()` found invalid cross-references, or an authoring call (`@ontology.object(...)`, `ontology.link(...)`, `.definition`) refused a kwarg of the wrong shape: a misspelled `scope`/`cardinality` literal, a rule not wrapped in a list, a non-callable `row_visibility`, empty `scope_levels`, or `min_n` below 1. |
@@ -1338,7 +1367,7 @@ table below is generated from it.
 | `MIN_N_VIOLATION` | An aggregate would be computed over fewer than min_n distinct contributors. |
 | `VISIBILITY_DENIED` | A single-object read/write targeted an object outside the consumer's scope. |
 
-*49 codes across 7 kinds.*
+*50 codes across 7 kinds.*
 
 ---
 

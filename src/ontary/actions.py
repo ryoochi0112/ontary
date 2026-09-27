@@ -17,12 +17,12 @@ from __future__ import annotations
 import json
 from collections.abc import Callable, Mapping
 from datetime import datetime
-from typing import Any, NoReturn, TypeVar, cast
+from typing import Any, Literal, NoReturn, TypeVar, cast, overload
 
 from pydantic import BaseModel, ValidationError
 
 from ontary._runtime import default_clock, default_id_factory
-from ontary._typed_api import resolve_capability
+from ontary._typed_api import api_name_for, resolve_capability
 from ontary.audit import CapabilityAccessRecord, _audit_error_code
 from ontary.errors import (
     ConflictError,
@@ -33,7 +33,7 @@ from ontary.errors import (
     ValidationFailed,
 )
 from ontary.meta import ActionParameterDef, ActionTypeDef, OntologyRegistry
-from ontary.model import CapabilityHandle
+from ontary.model import CapabilityHandle, LinkHandle, OntologyObject, hydrate
 from ontary.scope import ScopePolicy, resolve_owning_scope
 from ontary.security import Consumer, covers_scope
 from ontary.store import AuditEntry, Source, Store, StoredObject
@@ -41,6 +41,9 @@ from ontary.typesys import _to_storage_scalar, validate_scalar
 
 TypedHandler = Callable[["ActionContext", BaseModel], dict[str, Any]]
 P = TypeVar("P")
+_O = TypeVar("_O", bound=OntologyObject)
+_F = TypeVar("_F", bound=OntologyObject)
+_T = TypeVar("_T", bound=OntologyObject)
 
 _REMOVAL_REFUSAL_CODES = frozenset(
     "OBJECT_RETIRE_NOT_FOUND OBJECT_ALREADY_RETIRED LINK_NOT_FOUND UNDECLARED_SOURCE_REMOVAL".split()
@@ -78,6 +81,7 @@ class ActionContext:
         "_declared_capabilities",
         "_capability_providers",
         "_capability_accesses",
+        "_loaded",
     )
 
     def __init__(
@@ -102,6 +106,11 @@ class ActionContext:
         self._capability_accesses = (
             capability_accesses if capability_accesses is not None else []
         )
+        # Objects this context handed out via `get`/`all`/`create`/`traverse`,
+        # keyed by `id(obj)`: (the object itself, its api_name, its declared
+        # property values at hand-out). `save` diffs against the snapshot, and
+        # holding the object keeps its `id()` from being reused (#41).
+        self._loaded: dict[int, tuple[OntologyObject, str, dict[str, Any]]] = {}
 
     @property
     def consumer(self) -> Consumer:
@@ -152,6 +161,175 @@ class ActionContext:
         )
         return cast("P", provider)
 
+    # -- typed surface (#41) ---------------------------------------------------
+
+    def _registry_or_raise(self, operation: str) -> OntologyRegistry:
+        if self._registry is None:
+            raise InternalError(
+                f"ActionContext.{operation} requires the executor's ontology registry",
+                code="INTERNAL_ERROR",
+            )
+        return self._registry
+
+    def _api_name(self, cls: type[OntologyObject], operation: str) -> str:
+        return api_name_for(cls, self._registry_or_raise(operation), owner="action")
+
+    def _property_names(self, api_name: str) -> list[str]:
+        obj_def = self._registry_or_raise("save").get_object_type(api_name)
+        return [p.name for p in obj_def.properties]
+
+    def _hand_out(self, cls: type[_O], stored: StoredObject) -> _O:
+        obj = hydrate(cls, stored, self._consumer.kind)
+        api_name = stored.lineage.object_type
+        snapshot = obj.model_dump(include=set(self._property_names(api_name)))
+        self._loaded[id(obj)] = (obj, api_name, snapshot)
+        return obj
+
+    def _object_id(self, obj: OntologyObject, operation: str) -> tuple[str, str]:
+        api_name = self._api_name(type(obj), operation)
+        primary_key = self._registry_or_raise(operation).get_object_type(api_name).primary_key
+        return api_name, str(getattr(obj, primary_key))
+
+    def _link_type(self, link: LinkHandle[Any, Any], operation: str) -> str:
+        registry = self._registry_or_raise(operation)
+        self._api_name(link.from_cls, operation)
+        self._api_name(link.to_cls, operation)
+        try:
+            registry.get_link_type(link.api_name)
+        except ValidationFailed as exc:
+            raise ValidationFailed(
+                f"link {link.api_name!r} is not registered on this action's ontology",
+                code="UNKNOWN_NAME",
+            ) from exc
+        return link.api_name
+
+    def _endpoint_id(self, endpoint: OntologyObject | str, operation: str) -> str:
+        if isinstance(endpoint, OntologyObject):
+            return self._object_id(endpoint, operation)[1]
+        return endpoint
+
+    def get(self, cls: type[_O], obj_id: str) -> _O | None:
+        """The current `cls` object `obj_id`, or `None` when there is none.
+
+        Same trust tier as `read_current`: unredacted and unscoped, since a
+        handler is trusted ontology-author code. The object is remembered, so
+        `save(obj)` can write back only what the handler changed."""
+        stored = self._store.read_current(self._api_name(cls, "get"), obj_id)
+        return None if stored is None else self._hand_out(cls, stored)
+
+    def all(self, cls: type[_O]) -> list[_O]:
+        """Every current `cls` object (the trusted tier of `read_all`)."""
+        return [
+            self._hand_out(cls, stored)
+            for stored in self._store.read_all(self._api_name(cls, "all"))
+        ]
+
+    def create(self, cls: type[_O], /, **values: Any) -> _O:
+        """Create a `cls` object from `values` and return it.
+
+        A missing primary key is filled from the runtime's `id_factory`, as
+        `insert` does. The keyword names are checked here, at runtime only (the
+        class and the returned type are checked by mypy): a name that is not a
+        declared property is refused with `INVALID_RECORD`. The raw store
+        deliberately accepts undeclared keys (see `declared_shape_violation`),
+        so without this check a misspelled field would be stored silently."""
+        api_name = self._api_name(cls, "create")
+        declared = set(self._property_names(api_name))
+        unknown = sorted(set(values) - declared)
+        if unknown:
+            raise ValidationFailed(
+                f"ActionContext.create({cls.__name__}): unknown "
+                f"propert{'y' if len(unknown) == 1 else 'ies'} "
+                f"{', '.join(repr(name) for name in unknown)}; "
+                f"declared: {', '.join(sorted(declared))}",
+                code="INVALID_RECORD",
+            )
+        obj_id = self._insert(api_name, values)
+        stored = self._store.read_current(api_name, obj_id)
+        if stored is None:
+            raise InternalError(
+                f"ActionContext.create: {api_name} {obj_id!r} was not readable "
+                "right after its insert",
+                code="INTERNAL_ERROR",
+            )
+        return self._hand_out(cls, stored)
+
+    def save(self, obj: OntologyObject) -> None:
+        """Write the declared properties of `obj` that changed since this
+        context handed it out, and nothing when none did.
+
+        Only an object from this context's `get`, `all`, `create` or
+        `traverse` can be saved (`OBJECT_NOT_LOADED` otherwise): the diff
+        needs its snapshot, and a hand-built object would overwrite fields
+        the handler never read. A changed primary key is refused by the store
+        (`PRIMARY_KEY_IMMUTABLE`)."""
+        entry = self._loaded.get(id(obj))
+        if entry is None or entry[0] is not obj:
+            raise ValidationFailed(
+                f"ActionContext.save: this {type(obj).__name__} was not loaded "
+                "by this action context -- get it with ctx.get(...) or "
+                "ctx.create(...) first",
+                code="OBJECT_NOT_LOADED",
+            )
+        _, api_name, snapshot = entry
+        names = self._property_names(api_name)
+        current = obj.model_dump(include=set(names))
+        changes = {
+            name: getattr(obj, name) for name in names if current.get(name) != snapshot.get(name)
+        }
+        if not changes:
+            return
+        primary_key = self._registry_or_raise("save").get_object_type(api_name).primary_key
+        self._store.update(api_name, str(snapshot[primary_key]), changes, self._source)
+        self._loaded[id(obj)] = (obj, api_name, current)
+
+    def link(self, link: LinkHandle[_F, _T], from_: _F | str, to: _T | str, /) -> None:
+        """Create a `link` from `from_` to `to` (an object or its id).
+
+        Same rules as `create_link`: both ends must be live, and re-creating
+        an identical live link is a no-op."""
+        operation = "link"
+        self._store.create_link(
+            self._link_type(link, operation),
+            self._endpoint_id(from_, operation),
+            self._endpoint_id(to, operation),
+        )
+
+    @overload
+    def traverse(self, link: LinkHandle[_F, _T], anchor: _F | str, /) -> list[_T]: ...
+    @overload
+    def traverse(
+        self, link: LinkHandle[_F, _T], anchor: _T | str, /, *, reverse: Literal[True]
+    ) -> list[_F]: ...
+    def traverse(
+        self,
+        link: LinkHandle[_F, _T],
+        anchor: _F | _T | str,
+        /,
+        *,
+        reverse: bool = False,
+    ) -> list[_T] | list[_F]:
+        """The objects `link` reaches from `anchor` (an object or its id):
+        its `To` objects, or with `reverse=True` its `From` objects. Trusted
+        tier, like `links_from`/`links_to`."""
+        operation = "traverse"
+        link_api_name = self._link_type(link, operation)
+        anchor_id = self._endpoint_id(anchor, operation)
+        if reverse:
+            from_ids = self._store.links_to(link_api_name, anchor_id)
+            return self._hand_out_ids(link.from_cls, from_ids)
+        to_ids = self._store.links_from(link_api_name, anchor_id)
+        return self._hand_out_ids(link.to_cls, to_ids)
+
+    def _hand_out_ids(self, cls: type[_O], ids: list[str]) -> list[_O]:
+        api_name = self._api_name(cls, "traverse")
+        found = []
+        for obj_id in ids:
+            stored = self._store.read_current(api_name, obj_id)
+            if stored is not None:
+                found.append(self._hand_out(cls, stored))
+        return found
+
     def insert(self, obj_type: str, payload: dict[str, Any]) -> str:
         """Insert a new object, source-stamped with this action's `Source`.
 
@@ -163,6 +341,9 @@ class ActionContext:
         that already went through it. `store.insert`'s own `uuid.uuid4()`
         fallback (see `prepare_insert`) is reserved for callers that reach
         the store directly, bypassing this context."""
+        return self._insert(obj_type, payload)
+
+    def _insert(self, obj_type: str, payload: dict[str, Any]) -> str:
         if self._registry is not None:
             primary_key = self._registry.get_object_type(obj_type).primary_key
             if payload.get(primary_key) is None:
@@ -193,7 +374,17 @@ class ActionContext:
                 code="CALLER_TRANSACTION_REFUSED",
             )
 
-    def retire(self, obj_type: str, obj_id: str) -> None:
+    @overload
+    def retire(self, obj: OntologyObject, /) -> None: ...
+    @overload
+    def retire(self, cls: type[OntologyObject], obj_id: str, /) -> None: ...
+    @overload
+    def retire(self, obj_type: str, obj_id: str) -> None: ...
+    def retire(
+        self,
+        obj_type: OntologyObject | type[OntologyObject] | str,
+        obj_id: str | None = None,
+    ) -> None:
         """Retire an object and close every distinct live link touching it.
 
         The executor constructs this context inside its engine-owned
@@ -206,6 +397,16 @@ class ActionContext:
             raise InternalError(
                 "ActionContext.retire requires the executor's ontology registry",
                 code="INTERNAL_ERROR",
+            )
+        if isinstance(obj_type, OntologyObject):
+            self._loaded.pop(id(obj_type), None)
+            obj_type, obj_id = self._object_id(obj_type, "retire")
+        elif isinstance(obj_type, type):
+            obj_type = self._api_name(obj_type, "retire")
+        if obj_id is None:
+            raise ValidationFailed(
+                f"ActionContext.retire({obj_type!r}) needs an object id",
+                code="INVALID_PARAMS",
             )
         self._store.retire_object(obj_type, obj_id)
 
@@ -226,10 +427,26 @@ class ActionContext:
                 for from_id in self._store.links_to(link_def.api_name, obj_id):
                     unlink_once(link_def.api_name, from_id, obj_id)
 
-    def unlink(self, link_api_name: str, from_id: str, to_id: str) -> None:
-        """Close one live link inside the current action transaction."""
+    @overload
+    def unlink(self, link: LinkHandle[_F, _T], from_: _F | str, to: _T | str, /) -> None: ...
+    @overload
+    def unlink(self, link_api_name: str, from_id: str, to_id: str) -> None: ...
+    def unlink(
+        self,
+        link_api_name: LinkHandle[Any, Any] | str,
+        from_id: OntologyObject | str,
+        to_id: OntologyObject | str,
+    ) -> None:
+        """Close one live link inside the current action transaction. The
+        typed form takes a `LinkHandle` and each end as an object or its id."""
         self._require_action_transaction("unlink")
-        self._store.close_link(link_api_name, from_id, to_id)
+        if isinstance(link_api_name, LinkHandle):
+            link_api_name = self._link_type(link_api_name, "unlink")
+        self._store.close_link(
+            link_api_name,
+            self._endpoint_id(from_id, "unlink"),
+            self._endpoint_id(to_id, "unlink"),
+        )
 
     def read_current(self, obj_type: str, obj_id: str) -> StoredObject | None:
         """Trusted raw (unredacted, unscoped) read of one current row.

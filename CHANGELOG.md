@@ -11,6 +11,20 @@ you**.
 
 ## [Unreleased]
 
+### Added
+
+- A typed `ActionContext` surface. `ctx.get(Order, id) -> Order | None`,
+  `ctx.all(Order)`, `ctx.create(Order, **values) -> Order`, and `ctx.save(order)`
+  read and write through the ontology's own classes. `save` writes only the declared
+  properties changed since the context handed the object out. `ctx.link`,
+  `ctx.unlink` and `ctx.traverse` take a `LinkHandle` with each end as an object or
+  its id, and `ctx.retire(order)` or `ctx.retire(Order, id)` retires. `mypy`
+  checks the class, the returned type, each link endpoint's type, and every
+  attribute assigned before `save`. The new code `OBJECT_NOT_LOADED` (kind
+  `validation`) refuses `save` on an object this context did not hand out. The
+  string members are unchanged; PR 2 of
+  [ontary#41](https://github.com/ryoochi0112/ontary/issues/41) deprecates them.
+
 ### Changed
 
 - **Breaking (store schema):** `SCHEMA_VERSION` is now 13. `audit_log` has a new

@@ -164,6 +164,14 @@ ERROR_CODES: dict[str, ErrorCodeInfo] = {
             "is immutable, so retire the object and insert a new one instead."
         ),
     ),
+    "OBJECT_NOT_LOADED": ErrorCodeInfo(
+        kind="validation",
+        description=(
+            "ActionContext.save got an object this action context did not hand "
+            "out; load it with ctx.get(...) or ctx.create(...) first, so only "
+            "the fields the handler changed are written."
+        ),
+    ),
     "OBJECT_RETIRE_NOT_FOUND": ErrorCodeInfo(
         kind="validation",
         description="A retirement targeted an object with no stored row.",
