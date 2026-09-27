@@ -43,6 +43,24 @@ you**.
   created from an unreleased 12 lacks the index but is still guarded by the
   engine check. Fixes [ontary#37](https://github.com/ryoochi0112/ontary/issues/37).
 
+### Fixed
+
+- An offset-aware `datetime` object is now accepted wherever a `datetime` property
+  or parameter takes a value: `Store.insert`/`update` (and so `ActionContext`),
+  `bulk_upsert`/`client.ingest`, `where` operands, and action parameters in both
+  the typed and the dict form. It is persisted as its own `isoformat()` spelling,
+  offset preserved, so `eq` keeps matching what was written and the typed read
+  hydrates it back to an equal `datetime`. A naive `datetime` object is refused
+  with a message that names the problem (`INVALID_RECORD`, `INVALID_PARAMS`, or
+  `OPERATOR_TYPE_MISMATCH` by path). Before, every `datetime` object was refused
+  with "expected type 'datetime', got datetime", and a naive one slipped through
+  the typed action form as a naive string. ISO strings behave exactly as before.
+  A `date` object in a dict-form action parameter is likewise converted instead of
+  failing the JSON round-trip check. Fixes
+  [ontary#38](https://github.com/ryoochi0112/ontary/issues/38).
+- `docs/api-reference` listed `PropertyType` without `"date"`; the literal now
+  matches the code.
+
 ## [0.15.0] — 2026-09-27
 
 ```bash

@@ -37,7 +37,7 @@ from ontary.model import CapabilityHandle
 from ontary.scope import ScopePolicy, resolve_owning_scope
 from ontary.security import Consumer, covers_scope
 from ontary.store import AuditEntry, Source, Store, StoredObject
-from ontary.typesys import validate_scalar
+from ontary.typesys import _to_storage_scalar, validate_scalar
 
 TypedHandler = Callable[["ActionContext", BaseModel], dict[str, Any]]
 P = TypeVar("P")
@@ -477,15 +477,7 @@ class ActionExecutor:
 
         action_def, fn, params_cls = self._resolve_handler(action_name)
 
-        params_dict: dict[str, Any] = (
-            # mode="json" so e.g. a `datetime` param serializes to a JSON-
-            # safe string here (both for declared-shape/`validate_scalar`
-            # checks below and the audit trail) -- the handler still
-            # receives the original typed `params` instance, untouched.
-            params.model_dump(mode="json")
-            if isinstance(params, BaseModel)
-            else params
-        )
+        params_dict = self._params_to_dict(action_def, params)
 
         if consumer.role not in action_def.executable_by_roles:
             self._deny(
@@ -498,6 +490,9 @@ class ActionExecutor:
                 code="PERMISSION_DENIED",
             )
 
+        self._validate_typed_datetime_params(
+            consumer, action_name, action_def, params, params_dict, invocation_id
+        )
         self._validate_params(consumer, action_name, action_def, params_dict, invocation_id)
         self._validate_params_json_safe(
             consumer, action_name, action_def, params_dict, invocation_id
@@ -695,6 +690,69 @@ class ActionExecutor:
             )
         )
         raise ActionError(message, code="INVALID_PARAMS")
+
+    @staticmethod
+    def _params_to_dict(
+        action_def: ActionTypeDef, params: dict[str, Any] | BaseModel
+    ) -> dict[str, Any]:
+        """The JSON-shaped view of `params` that declared-shape validation,
+        the JSON round-trip check, and the audit trail all see. The handler
+        still receives the original typed `params` instance, untouched.
+
+        Typed form: `model_dump(mode="json")`, so a `datetime` param becomes
+        a JSON-safe string (see `_validate_typed_datetime_params` for the
+        naive-object hole that dump would open).
+
+        Dict form: a `date`/`datetime` object under a declared parameter is
+        converted to the same ISO spelling the store would persist, so it
+        survives the JSON round-trip check (#38); a naive `datetime` is left
+        as-is for `_validate_params` to refuse with a message that says so.
+        """
+        if isinstance(params, BaseModel):
+            return params.model_dump(mode="json")
+        declared = {p.name: p for p in action_def.parameters}
+        return {
+            name: _to_storage_scalar(value, declared[name].type)
+            if name in declared
+            and value is not None
+            and validate_scalar(value, declared[name].type) is None
+            else value
+            for name, value in params.items()
+        }
+
+    def _validate_typed_datetime_params(
+        self,
+        consumer: Consumer,
+        action_name: str,
+        action_def: ActionTypeDef,
+        params: dict[str, Any] | BaseModel,
+        params_dict: dict[str, Any],
+        invocation_id: str,
+    ) -> None:
+        """Typed form only: `model_dump(mode="json")` renders a NAIVE
+        `datetime` as a naive string, which the string rule accepts. The
+        declared `datetime` attributes are therefore checked as objects,
+        and a naive one is refused under the same `INVALID_PARAMS` code as
+        every other undeclared shape (#38). Runs after the role gate, like
+        the rest of parameter validation."""
+        if not isinstance(params, BaseModel):
+            return
+        for param in action_def.parameters:
+            if param.type != "datetime":
+                continue
+            value = getattr(params, param.name, None)
+            if not isinstance(value, datetime):
+                continue
+            mismatch = validate_scalar(value, param.type)
+            if mismatch is not None:
+                self._error(
+                    consumer,
+                    action_name,
+                    action_def,
+                    params_dict,
+                    f"{action_name!r}: parameter {param.name!r} {mismatch}",
+                    invocation_id,
+                )
 
     def _validate_params(
         self,

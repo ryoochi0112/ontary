@@ -355,8 +355,13 @@ Function 集計の狭い例外は、下記の「フィルター」と「集計�
 
 > **ハイドレーション。** 型付き読み取りは `datetime` 型のプロパティを実際の
 > `datetime` にパースします（Pydantic 経由）。文字列 surface は保存されたままの
-> ISO-8601 文字列を返します。ストアが永続化する内容は変わりません — 型付き
-> クライアントの取り出し時のハイドレーションだけがパースします。
+> ISO-8601 文字列を返します。書き込み時は、ISO 文字列に加えて `date` オブジェクトと
+> オフセット付き（aware）の `datetime` オブジェクトも受け付け、その `isoformat()` の
+> 綴りをオフセットを保ったまま永続化します。naive な `datetime` オブジェクトは理由を
+> 示すメッセージ付きで拒否します（ストア・取り込み経路では `INVALID_RECORD`、Action
+> パラメータでは `INVALID_PARAMS`、`where` の operand では `OPERATOR_TYPE_MISMATCH`）。
+> naive な ISO *文字列* は従来どおり受け付けます。ストアが永続化する内容を書き換える
+> ことはありません — 型付きクライアントの取り出し時のハイドレーションだけがパースします。
 
 > **リダクションの形。** リダクションされたフィールドは、型付き surface では `None`
 > として返り、名前が `redacted_fields` に載ります。しかし**文字列 surface と MCP では
@@ -392,7 +397,8 @@ payload と lineage を分離した凍結オブジェクトです。`_object_typ
 `{"contains": "x", "ne": "x"}` は 1 つの値を除いた部分文字列一致になります。空の
 mapping は拒否されます。比較演算子は宣言済みの `int`、`float`、`date`、`datetime`
 プロパティで使えます。`date` と `datetime` の operand は、プロパティが保存するのと
-同じ ISO-8601 文字列（または `date` 値）です。`datetime` には時刻部分が必要です。日付
+同じ ISO-8601 文字列か、`date` 値・オフセット付きの `datetime` 値（先にその綴りへ
+変換されます）です。`datetime` には時刻部分が必要です。日付
 だけの文字列は、オフセット付きの列に決して一致しない naive な深夜 0 時として扱われる
 のではなく、`OPERATOR_TYPE_MISMATCH` になります。4 つの比較演算子は `datetime` を瞬間
 として比較するため、別の UTC オフセットで書いた operand も同じ時刻なら一致します。
@@ -1135,7 +1141,7 @@ stateful セッションでも、各 request はその request 自身のトー�
 | `FunctionDef` | `api_name`, `description`, `input_description`, `output_description`, `capabilities` |
 | `Sensitivity` | `ai_usable`, `human_visible` |
 
-`PropertyType` は `Literal["str", "int", "float", "bool", "datetime", "json"]`。
+`PropertyType` は `Literal["str", "int", "float", "bool", "date", "datetime", "json"]`。
 
 **`OntologyRegistry`** が記述子を保持し、相互参照を検証します。`validate()` は、
 リンク端点の参照切れ、Action 対象の参照切れ、api_name の重複、properties に無い主キーに

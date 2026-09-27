@@ -23,7 +23,7 @@ PYTHON_TYPES: dict[PropertyType, tuple[type, ...]] = {
     "float": (float, int),
     "bool": (bool,),
     "date": (date, str),
-    "datetime": (str,),
+    "datetime": (datetime, str),
     "json": (dict, list, str, int, float, bool),
 }
 
@@ -71,8 +71,33 @@ def _datetime_string_violation(value: str) -> str | None:
     )
 
 
+def _naive_datetime_violation(value: datetime) -> str | None:
+    """Why ``value`` is not an acceptable ``datetime`` object, or ``None``.
+
+    A naive ``datetime`` names no instant, so it can never be compared with
+    the offset-aware values the property otherwise holds. The refusal is
+    deliberately narrower than the string rule (a naive ISO *string* is
+    still accepted, unchanged): a caller holding a real ``datetime`` is one
+    ``tzinfo=`` away from saying which instant they mean.
+    """
+    if value.tzinfo is None or value.utcoffset() is None:
+        return (
+            "expected an offset-aware datetime (tzinfo set), got a naive one: "
+            f"{value.isoformat()!r}"
+        )
+    return None
+
+
 def _to_storage_scalar(value: Any, prop_type: PropertyType) -> Any:
-    """Return the JSON-safe scalar representation used by every store."""
+    """Return the JSON-safe scalar representation used by every store.
+
+    A ``date``/``datetime`` object becomes its own ``isoformat()`` spelling,
+    offset preserved -- the store persists exactly what the caller said, so
+    ``eq`` on the string surface keeps matching the spelling that was
+    written (#38).
+    """
+    if prop_type == "datetime" and isinstance(value, datetime):
+        return value.isoformat()
     if (
         prop_type == "date"
         and isinstance(value, date)
@@ -127,8 +152,10 @@ def validate_scalar(
     - a declared ``"date"`` value is either a real ``datetime.date`` (but
       never its ``datetime.datetime`` subclass) or the exact ISO storage form
       ``YYYY-MM-DD``.
-    - a declared `"datetime"` value (always a `str` at this layer) parses as
-      ISO-8601 and carries a time component (a date-only string is a `date`).
+    - a declared ``"datetime"`` value is either an offset-aware
+      ``datetime.datetime`` (a naive one is refused with a message that says
+      so) or a `str` that parses as ISO-8601 and carries a time component (a
+      date-only string is a `date`).
     """
     expected_types = PYTHON_TYPES[prop_type]
     if isinstance(value, bool) and prop_type != "bool":
@@ -139,6 +166,8 @@ def validate_scalar(
         return f"expected type {prop_type!r}, got {type(value).__name__}"
     if prop_type == "date" and isinstance(value, str):
         return _date_string_violation(value)
+    if prop_type == "datetime" and isinstance(value, datetime):
+        return _naive_datetime_violation(value)
     if prop_type == "datetime" and isinstance(value, str):
         violation = _datetime_string_violation(value)
         if violation is not None:
