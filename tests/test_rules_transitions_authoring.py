@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from enum import StrEnum
+from enum import Enum, StrEnum
 from typing import assert_type
 
 from conftest import raises_code
@@ -50,6 +50,32 @@ def test_enum_transition_states_and_typed_rule_are_registered() -> None:
     assert obj.rules[0].check({"id": "o-1", "status": "pending"})
     assert type(seen[0]) is Order and seen[0].status is Status.PENDING
     assert paid_first(seen[0])
+
+
+class PlainStatus(Enum):
+    PENDING = "pending"
+    PAID = "paid"
+    SHIPPED = "shipped"
+
+
+def test_plain_enum_transition_states_are_accepted() -> None:
+    ontology = Ontology("orders", ["org"])
+    plain_graph = TransitionDef(
+        initial=(PlainStatus.PENDING,),
+        moves={
+            PlainStatus.PENDING: (PlainStatus.PAID,),
+            PlainStatus.PAID: (PlainStatus.SHIPPED,),
+            PlainStatus.SHIPPED: (),
+        },
+    )
+
+    @ontology.object(layer="L0", scope="unscoped", owned=True)
+    class Order(OntologyObject):
+        id: str = prop(primary_key=True)
+        status: PlainStatus = prop(transitions=plain_graph)
+
+    assert plain_graph == GRAPH
+    assert ontology.registry.get_object_type("Order").properties[1].transitions == GRAPH
 
 
 def test_non_choice_transition_is_refused_through_authoring() -> None:

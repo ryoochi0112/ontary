@@ -98,17 +98,56 @@ class StructFieldDef(BaseModel):
         return data
 
 
+def _str_enum_value(state: Any) -> Any:
+    """An ``Enum`` member as its value (the str check then refuses a non-str
+    value); anything else unchanged."""
+    if isinstance(state, Enum):
+        return state.value
+    return state
+
+
+def _unwrap_str_enum_states(data: dict[str, Any]) -> dict[str, Any]:
+    """Accept string-valued ``Enum`` members (plain ``Enum`` or ``StrEnum``) as
+    states, as a choice property accepts them as values (#42)."""
+    data = dict(data)
+    initial = data.get("initial")
+    if isinstance(initial, (list, tuple)):
+        data["initial"] = tuple(_str_enum_value(state) for state in initial)
+    moves = data.get("moves")
+    if isinstance(moves, dict):
+        data["moves"] = {
+            _str_enum_value(source): (
+                tuple(_str_enum_value(target) for target in targets)
+                if isinstance(targets, (list, tuple))
+                else targets
+            )
+            for source, targets in moves.items()
+        }
+    return data
+
+
 class TransitionDef(BaseModel):
     """Allowed start states and moves for a choice property."""
 
     initial: tuple[str, ...]
     moves: dict[str, tuple[str, ...]]
 
+    def __init__(
+        self,
+        *,
+        initial: Sequence[str | Enum],
+        moves: Mapping[Any, Sequence[str | Enum]],
+    ) -> None:
+        # Typed for authors: states may be string-valued Enum members, which
+        # `_valid_states` stores as their plain values.
+        super().__init__(initial=initial, moves=moves)
+
     @model_validator(mode="before")
     @classmethod
     def _valid_states(cls, data: Any) -> Any:
         if not isinstance(data, dict):
             return data
+        data = _unwrap_str_enum_states(data)
         initial = data.get("initial")
         if isinstance(initial, (list, tuple)):
             if not initial:

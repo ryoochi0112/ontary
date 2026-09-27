@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from enum import Enum
 from typing import Any
 
 import pytest
@@ -70,6 +71,26 @@ def test_transition_requires_initial_state() -> None:
     ],
 )
 def test_transition_states_must_be_strings(
+    initial: tuple[Any, ...], moves: dict[Any, tuple[Any, ...]]
+) -> None:
+    with raises_code(ValidationFailed, "ONTOLOGY_INVALID") as excinfo:
+        TransitionDef(initial=initial, moves=moves)
+    assert "state" in str(excinfo.value) and "str" in str(excinfo.value)
+
+
+class _IntStatus(Enum):
+    PENDING = 1
+
+
+@pytest.mark.parametrize(
+    "initial,moves",
+    [
+        ((_IntStatus.PENDING,), MOVES),
+        (("pending",), {_IntStatus.PENDING: ("paid",)}),
+        (("pending",), {"pending": (_IntStatus.PENDING,)}),
+    ],
+)
+def test_transition_refuses_non_str_enum_states(
     initial: tuple[Any, ...], moves: dict[Any, tuple[Any, ...]]
 ) -> None:
     with raises_code(ValidationFailed, "ONTOLOGY_INVALID") as excinfo:

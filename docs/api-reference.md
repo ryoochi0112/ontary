@@ -266,8 +266,8 @@ keep working on the same class.
 path refuses any other value.
 
 `transitions=TransitionDef(initial=(...), moves={...})` declares allowed moves on
-a choice property. String values and `StrEnum` members are accepted as states;
-plain `Enum` members are not. A primary key cannot have transitions.
+a choice property. String values and string-valued `Enum` members (plain `Enum`
+or `StrEnum`) are accepted as states. A primary key cannot have transitions.
 
 Use `prop(transitions=...)` to attach the graph, and import `TransitionDef` from
 `ontary.meta`; it is not exported from `ontary.__all__`.

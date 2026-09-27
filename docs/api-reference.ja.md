@@ -260,8 +260,8 @@ ontology.validate(store=store)  # 編集したオントロジーを提供する�
 それ以外の値は、どの書き込み経路でも拒否されます。
 
 `transitions=TransitionDef(initial=(...), moves={...})` は choice プロパティで
-許可する状態遷移を宣言します。文字列または `StrEnum` メンバーを状態として指定できます。
-通常の `Enum` メンバーは状態として受け付けられません。
+許可する状態遷移を宣言します。文字列、または値が文字列の `Enum` メンバー
+（通常の `Enum` または `StrEnum`）を状態として指定できます。
 主キーには transitions を宣言できません。
 
 グラフは `prop(transitions=...)` で指定し、`TransitionDef` は
