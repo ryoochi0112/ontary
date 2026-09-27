@@ -1570,7 +1570,8 @@ def test_insert_non_json_serializable_payload_raises_type_error(store: Store) ->
 # that mutates a pk into a collision, or an int/str pk pair that collides
 # under any text-cast comparison), so a cursor keyed on the payload pk
 # cannot express the resulting ties. (Since #34 the duplicate `insert` is
-# refused; the pk-mutating `update` still produces the tie.) A second review pass found the per-row
+# refused, and since #75 so is the pk-mutating `update`, so no write can
+# seed such a tie any more.) A second review pass found the per-row
 # identity ALSO could not live on `Lineage`/`StoredObject` (AC8: a narrow
 # consumer could infer how many rows its scope hid, or another tenant's
 # write volume, by gap arithmetic on a dense row counter) -- so `read_page`
@@ -1839,20 +1840,23 @@ def test_read_page_tie_safety_survives_duplicate_payload_pks(
     path -- `declared_shape_violation` refuses a value that does not match its
     declared `PropertyType`, which is asserted below rather than dropped.
 
-    AMENDED by #34: a second `insert` of a live primary key is now refused
-    (`OBJECT_ALREADY_EXISTS`), so the tie is seeded the one way still
-    reachable -- an `update` that rewrites another object's payload pk to
-    the same value. The store id column stays distinct; the payload pk ties.
+    AMENDED by #34 and #75: a second `insert` of a live primary key is
+    refused (`OBJECT_ALREADY_EXISTS`), and so is an `update` that changes a
+    primary key (`PRIMARY_KEY_IMMUTABLE`). Those were the last write paths
+    that could seed a payload-pk tie among current rows, so the tie is now
+    unreachable; this test pins the refusal and keeps the batch-1 keyset walk
+    over the rows that remain.
     """
     src = Source(source_system="s")
     store.insert("Company", {"id": "dup", "name": "first"}, src)
     store.insert("Company", {"id": "other", "name": "second"}, src)
-    store.update("Company", "other", {"id": "dup"}, src)
+    with raises_code(ValidationFailed, "PRIMARY_KEY_IMMUTABLE"):
+        store.update("Company", "other", {"id": "dup"}, src)
     store.insert("Company", {"id": "10", "name": "str-ten"}, src)
 
     walked = _walk_pages(store, "Company", batch=1)
 
-    assert [o.payload["id"] for o in walked] == ["dup", "dup", "10"]
+    assert [o.payload["id"] for o in walked] == ["dup", "other", "10"]
     assert [o.payload["name"] for o in walked] == ["first", "second", "str-ten"]
 
     # The other half of the old adversarial pair, now refused at the seam.
@@ -1862,43 +1866,51 @@ def test_read_page_tie_safety_survives_duplicate_payload_pks(
 
 def test_read_all_full_count_with_duplicate_payload_pks(store: Store) -> None:
     """Scaled-down pin of the review's 502-in/500-out finding: `read_all`
-    must return every current row regardless of duplicate payload pks -- it
-    is its own single query/pass ordered by `row_id`, never a payload-pk
-    comparison that could tie/collide. Since #34 the ties are seeded through
-    pk-rewriting `update`s, the only write that can still produce them."""
+    must return every current row -- it is its own single query/pass ordered
+    by `row_id`, never a payload-pk comparison that could tie/collide. Since
+    #34 and #75 no write can seed a payload-pk tie among current rows: the
+    pk-rewriting `update`s that used to are refused, and the count holds."""
     total = 12
     src = Source(source_system="s")
     for i in range(total):
         store.insert("Company", {"id": f"c{i}", "name": f"row-{i}"}, src)
     for i in range(4, total):
-        # 4 distinct payload ids, each shared by 3 current rows.
-        store.update("Company", f"c{i}", {"id": f"c{i % 4}"}, src)
+        with raises_code(ValidationFailed, "PRIMARY_KEY_IMMUTABLE"):
+            store.update("Company", f"c{i}", {"id": f"c{i % 4}"}, src)
 
-    assert len(store.read_all("Company")) == total
+    current = store.read_all("Company")
+    assert len(current) == total
+    assert len({o.payload["id"] for o in current}) == total
 
 
-def test_read_page_and_read_all_only_current_after_pk_changing_update(
-    store: Store,
-) -> None:
-    """An `update` that changes the payload primary key's own VALUE (not
-    just another property) must still leave exactly one current row behind:
-    `read_page`/`read_all` order by the store's own row identity, which an
-    update to any payload field -- including the declared pk -- never
-    touches."""
-    obj_id = store.insert("Company", {"id": "orig", "name": "Acme"}, Source(source_system="s"))
-    store.update(
-        "Company", obj_id, {"id": "renamed", "name": "Acme"}, Source(source_system="s")
-    )
+def test_update_refuses_a_primary_key_change(store: Store) -> None:
+    """A primary key is immutable (#75). An `update` whose changes give the
+    pk a different value is refused with `PRIMARY_KEY_IMMUTABLE` -- whether
+    or not the new value is live -- and leaves the row untouched, so the
+    store id and the payload pk always agree. Repeating the SAME pk value in
+    the changes is not a change and stays accepted."""
+    src = Source(source_system="s")
+    obj_id = store.insert("Company", {"id": "orig", "name": "Acme"}, src)
+    store.insert("Company", {"id": "taken", "name": "Other"}, src)
+
+    for new_pk in ("renamed", "taken"):
+        with raises_code(ValidationFailed, "PRIMARY_KEY_IMMUTABLE") as exc_info:
+            store.update("Company", obj_id, {"id": new_pk, "name": "New"}, src)
+        assert exc_info.value.kind == "validation"
+
+    current = store.read_current("Company", obj_id)
+    assert current is not None
+    assert current.payload == {"id": "orig", "name": "Acme"}
+
+    store.update("Company", obj_id, {"id": "orig", "name": "Acme Corp"}, src)
 
     all_current = store.read_all("Company")
-    assert len(all_current) == 1
-    assert all_current[0].payload["id"] == "renamed"
-
+    assert sorted((o.payload["id"], o.payload["name"]) for o in all_current) == [
+        ("orig", "Acme Corp"),
+        ("taken", "Other"),
+    ]
     paged = store.read_page("Company")
-    assert len(paged) == 1
-    assert paged[0].obj.payload["id"] == "renamed"
-    # short page (1 row, default batch DEFAULT_BATCH): this walk is
-    # exhausted -- the only signal, no separate cursor/flag.
+    assert sorted(row.obj.payload["id"] for row in paged) == ["orig", "taken"]
 
 
 def test_read_page_ordering_identical_across_backends_for_same_inserts() -> None:

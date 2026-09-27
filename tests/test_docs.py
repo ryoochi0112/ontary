@@ -118,6 +118,7 @@ REMOVED_SINCE_080_ERROR_CODES = frozenset(
 ADDED_SINCE_080_ERROR_CODES = frozenset(
     {
         "OBJECT_ALREADY_EXISTS",
+        "PRIMARY_KEY_IMMUTABLE",
     }
 )
 NEW_ENGLISH_DOCS = tuple(
