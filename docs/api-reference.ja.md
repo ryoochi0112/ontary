@@ -245,7 +245,7 @@ ontology.validate(store=store)  # 編集したオントロジーを提供する�
 ためのものです。可視だが値が無い optional フィールドも `None` になりますが、
 こちらには決して現れません。
 
-#### `prop(*, primary_key=False, sensitivity=None, scope_level=None, required=None, property_type=None, choices=None, **field_kwargs)`
+#### `prop(*, primary_key=False, sensitivity=None, scope_level=None, required=None, property_type=None, choices=None, transitions=None, **field_kwargs)`
 
 `pydantic.Field(...)` にオントロジーのメタデータを足したもの。認識されない kwargs は
 そのまま `Field` に渡るので、`prop(default=None, description="...")` は期待どおりに
@@ -258,6 +258,25 @@ ontology.validate(store=store)  # 編集したオントロジーを提供する�
 
 `choices=["open", "closed"]` は `str` プロパティの値をその集合に限定します。
 それ以外の値は、どの書き込み経路でも拒否されます。
+
+`transitions=TransitionDef(initial=(...), moves={...})` は choice プロパティで
+許可する状態遷移を宣言します。文字列値を持つ Enum メンバーも状態として指定できます。
+主キーには transitions を宣言できません。
+
+#### `Ontology.rule(cls, name, *, message)`
+
+`@ontology.object` で `cls` を登録した後、型付きの述語をデコレートします。
+
+```python
+@ontology.rule(Order, "shipped_needs_payment", message="payment required")
+def shipped_needs_payment(order: Order) -> bool:
+    return order.status != OrderStatus.SHIPPED or order.paid_at is not None
+```
+
+述語は保存済みの行全体から復元されたオブジェクトを受け取り、そのオブジェクトだけを
+読み取る必要があります。名前とメッセージは型宣言に表示され、関数本体はエクスポート
+されるスキーマデータには含まれません。`ontology.definition` でオントロジーが固定
+されるまでルールを登録できます。
 
 #### 選択肢プロパティ: `Enum` と `Literal`
 

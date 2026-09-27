@@ -251,7 +251,7 @@ Two attributes are attached by the engine on a read, and are **not** model field
 `redacted_fields` is what distinguishes "hidden from you" from "genuinely stored as
 `None`" — a visible-but-absent optional field is `None` too, but never appears here.
 
-#### `prop(*, primary_key=False, sensitivity=None, scope_level=None, required=None, property_type=None, choices=None, **field_kwargs)`
+#### `prop(*, primary_key=False, sensitivity=None, scope_level=None, required=None, property_type=None, choices=None, transitions=None, **field_kwargs)`
 
 `pydantic.Field(...)` plus ontology metadata. Unrecognized kwargs pass straight
 through to `Field`, so `prop(default=None, description="...")` behaves as expected.
@@ -264,6 +264,25 @@ keep working on the same class.
 
 `choices=["open", "closed"]` limits a `str` property to those values. Every write
 path refuses any other value.
+
+`transitions=TransitionDef(initial=(...), moves={...})` declares allowed moves on
+a choice property. Enum members with string values are accepted as states. A
+primary key cannot have transitions.
+
+#### `Ontology.rule(cls, name, *, message)`
+
+Decorate a typed predicate after registering `cls` with `@ontology.object`:
+
+```python
+@ontology.rule(Order, "shipped_needs_payment", message="payment required")
+def shipped_needs_payment(order: Order) -> bool:
+    return order.status != OrderStatus.SHIPPED or order.paid_at is not None
+```
+
+The predicate receives a hydrated object built from the full stored row and
+must read only that object. Its name and message appear in the type declaration;
+the callable is omitted from exported schema data. Rules can be registered
+until `ontology.definition` freezes the ontology.
 
 #### Choice properties: `Enum` and `Literal`
 

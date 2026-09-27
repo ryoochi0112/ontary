@@ -46,8 +46,10 @@ from ontary.meta import (
     ObjectTypeDef,
     OntologyRegistry,
     PropertyDef,
+    RuleDef,
     Sensitivity,
     StructFieldDef,
+    TransitionDef,
     target_param_mismatch,
 )
 from ontary.model import ActionParams as ActionParams
@@ -59,7 +61,8 @@ from ontary.model import hydrate as hydrate
 from ontary.ontology import OntologyDef
 from ontary.scope import RowVisibilityFn, ScopePolicy, ScopeRule
 from ontary.store import Store
-from ontary.typesys import PropertyType
+from ontary.store.values import Lineage, StoredObject
+from ontary.typesys import PropertyType, choice_value
 
 __all__ = [
     "ActionParams",
@@ -99,6 +102,7 @@ def prop(
     required: bool | None = None,
     property_type: PropertyType | None = None,
     choices: Sequence[str] | None = None,
+    transitions: TransitionDef | None = None,
     **field_kwargs: Any,
 ) -> Any:
     """`pydantic.Field(...)` plus ontology metadata, stashed in
@@ -118,6 +122,8 @@ def prop(
         ontary_meta["property_type"] = property_type
     if choices is not None:
         ontary_meta["choices"] = choices
+    if transitions is not None:
+        ontary_meta["transitions"] = transitions
 
     extra = dict(field_kwargs.pop("json_schema_extra", None) or {})
     extra["ontary"] = ontary_meta
@@ -330,6 +336,22 @@ def _repair_optional_default(field_info: Any, is_optional: bool) -> bool:
     return False
 
 
+def _normalized_transitions(
+    graph: TransitionDef | None, choices: tuple[str, ...] | None
+) -> TransitionDef | None:
+    if graph is None:
+        return None
+    return TransitionDef(
+        initial=tuple(choice_value(state, choices) for state in graph.initial),
+        moves={
+            choice_value(source, choices): tuple(
+                choice_value(target, choices) for target in targets
+            )
+            for source, targets in graph.moves.items()
+        },
+    )
+
+
 def _derive_properties(cls: type["OntologyObject"]) -> tuple[list[PropertyDef], str]:
     """Introspects `cls.model_fields` -> `(PropertyDef list, primary_key)`.
     Raises `ValidationFailed` with code `ONTOLOGY_INVALID` for a reserved field name, an
@@ -417,12 +439,21 @@ def _derive_properties(cls: type["OntologyObject"]) -> tuple[list[PropertyDef], 
 
         if meta.get("primary_key"):
             primary_keys.append(field_name)
+            if meta.get("transitions") is not None:
+                raise ValidationFailed(
+                    f"{cls.__name__}.{field_name}: transitions cannot govern a primary key; "
+                    "move transitions to a choice property",
+                    code="ONTOLOGY_INVALID",
+                )
+
+        graph = _normalized_transitions(meta.get("transitions"), choices)
 
         props.append(
             PropertyDef(
                 name=field_name,
                 type=property_type,
                 choices=tuple(choices) if choices is not None else None,
+                transitions=graph,
                 fields=fields,
                 required=required,
                 sensitivity=sensitivity,
@@ -848,6 +879,41 @@ class Ontology:
             "before linking it)",
             code="ONTOLOGY_INVALID",
         )
+
+    def rule(
+        self, cls: type[_T], name: str, *, message: str
+    ) -> Callable[[Callable[[_T], bool]], Callable[[_T], bool]]:
+        """Register a typed predicate over the complete storage-form row."""
+
+        def decorator(fn: Callable[[_T], bool]) -> Callable[[_T], bool]:
+            self._check_not_frozen(f"rule {name!r}")
+            api_name = self._registered_api_name(cls)
+            obj_def = self.registry.get_object_type(api_name)
+
+            def check(row: dict[str, Any]) -> bool:
+                object_id = str(row[obj_def.primary_key])
+                stored = StoredObject(
+                    payload=row,
+                    lineage=Lineage(
+                        object_type=api_name,
+                        object_id=object_id,
+                        valid_from="",
+                        valid_to=None,
+                        source_system="rule",
+                        source_id=None,
+                        extracted_at=None,
+                    ),
+                )
+                return bool(fn(hydrate(cls, stored, "human")))
+
+            rule = RuleDef(name=name, message=message, check=check)
+            candidate = ObjectTypeDef.model_validate(
+                {**obj_def.__dict__, "rules": (*obj_def.rules, rule)}
+            )
+            obj_def.rules = candidate.rules
+            return fn
+
+        return decorator
 
     def link(
         self,
