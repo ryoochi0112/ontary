@@ -62,6 +62,7 @@ from ontary.store._shared import (
     encode_audit_entry,
     live_link_not_found,
     merge_update,
+    object_already_exists,
     prepare_insert,
     resolve_link_type,
     retire_object_refusal,
@@ -344,6 +345,8 @@ class PostgresStore:
         encoded = json.dumps(payload)
         now = _utcnow_iso()
         with self.transaction() as conn:
+            if self.read_current(obj_type, obj_id) is not None:
+                raise object_already_exists(obj_type, obj_id)
             with conn.cursor() as cur:
                 cur.execute(
                     """

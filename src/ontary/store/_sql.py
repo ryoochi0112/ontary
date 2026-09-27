@@ -75,6 +75,7 @@ class IndexSpec:
     table: str
     columns: tuple[str, ...]
     unique: bool = False
+    where: str = ""
     prefix: DialectText = ""
     on_newline: bool | Mapping[Dialect, bool] = False
     sqlite_order: int = 0
@@ -171,6 +172,19 @@ _PAGE_TOKEN_INDEX_PREFIX: DialectText = {
     "postgres": "",
 }
 
+_LIVE_ID_INDEX_PREFIX: DialectText = {
+    "sqlite": (
+        "\n"
+        "-- At most ONE live row per (tenant, object_type, id) (#34). Every\n"
+        "-- backend refuses a duplicate `insert` with `OBJECT_ALREADY_EXISTS`\n"
+        "-- inside its own serialized transaction; this partial index is the\n"
+        "-- storage backstop, so a writer that bypasses the store still cannot\n"
+        "-- create a second live row. Closed history rows are not covered: an\n"
+        "-- id may be inserted again after its object is retired.\n"
+    ),
+    "postgres": "",
+}
+
 
 TABLE_SPECS: tuple[TableSpec, ...] = (
     TableSpec(
@@ -232,6 +246,17 @@ TABLE_SPECS: tuple[TableSpec, ...] = (
                 on_newline={"sqlite": True, "postgres": False},
                 sqlite_order=7,
                 postgres_order=8,
+            ),
+            IndexSpec(
+                "idx_objects_live_id",
+                "objects",
+                ("tenant", "object_type", "id"),
+                unique=True,
+                where="valid_to IS NULL",
+                prefix=_LIVE_ID_INDEX_PREFIX,
+                on_newline=True,
+                sqlite_order=8,
+                postgres_order=11,
             ),
         ),
         prefix=_OBJECTS_PREFIX,
@@ -358,7 +383,8 @@ def _render_table(table: TableSpec, dialect: Dialect) -> str:
 def _render_index(index: IndexSpec, dialect: Dialect) -> str:
     create = "CREATE UNIQUE INDEX IF NOT EXISTS" if index.unique else "CREATE INDEX IF NOT EXISTS"
     head = f"{create} {index.name}"
-    target = f"ON {index.table} ({', '.join(index.columns)});"
+    where = f" WHERE {index.where}" if index.where else ""
+    target = f"ON {index.table} ({', '.join(index.columns)}){where};"
     if _dialect_bool(index.on_newline, dialect):
         target = f"\n    {target}"
     else:
@@ -395,12 +421,12 @@ LIMIT 1
 # `read_last` must be a SUPERSET of `read_current`, never a different pick:
 # the action target gate resolves scope from it while every consumer read
 # resolves scope from `read_current`, so the two disagreeing means the gate
-# authorizes against a scope no consumer read can see.  The store does not
-# enforce payload-pk uniqueness among current rows, so
-# "newest row" alone was not enough -- two live rows made `row_id DESC` pick
-# the opposite row to `read_current`'s `row_id ASC`.  Hence: live rows first
-# and, among them, `read_current`'s own `row_id ASC` pick; only with nothing
-# live does this fall back to the newest CLOSED row (`-row_id` ascending).
+# authorizes against a scope no consumer read can see.  An id has at most one
+# live row (`idx_objects_live_id`, #34) but may have many closed ones -- an
+# update's superseded versions, or a retired object inserted again -- so
+# "newest row" alone is not the rule.  Hence: the live row first and, only
+# with nothing live, the newest CLOSED row (`-row_id` ascending).  The
+# `row_id ASC` tie-break among live rows is kept as defense in depth.
 OBJECT_LAST_SELECT_TEMPLATE = f"""
 SELECT {_OBJECT_COLUMN_LIST} FROM objects
 WHERE object_type = {{p}} AND id = {{p}} AND tenant = {{p}}

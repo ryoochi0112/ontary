@@ -147,10 +147,10 @@ class Store(Protocol):
         REQUIRED of a backend: this is a SUPERSET of `read_current`, never a
         different pick. Whenever `read_current` returns a row, `read_last`
         MUST return that same row; only with nothing live may it answer with
-        the newest CLOSED row. The store does not enforce payload-pk
-        uniqueness among current rows, so "newest row"
-        alone does not satisfy this -- two live rows of one id make "newest"
-        and "current" different rows. The gate resolves scope from
+        the newest CLOSED row. Since #34 `insert` refuses a live
+        duplicate (`OBJECT_ALREADY_EXISTS`), so an id has at most one live
+        row and it is also the newest; the live-first rule is still REQUIRED
+        so this contract does not silently depend on that uniqueness. The gate resolves scope from
         `read_last` while every consumer read resolves it from
         `read_current`, so a backend that let them disagree would authorize
         actions against a scope no consumer read can see. Engine-internal /

@@ -63,6 +63,8 @@ _EXPECTED_POSTGRES_DDL = (
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_objects_page_token ON objects (page_token);\n"
     "CREATE INDEX IF NOT EXISTS idx_links_from ON links (tenant, link_type, from_id);\n"
     "CREATE INDEX IF NOT EXISTS idx_links_to ON links (tenant, link_type, to_id);\n"
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_objects_live_id\n"
+    "    ON objects (tenant, object_type, id) WHERE valid_to IS NULL;\n"
 )
 
 
@@ -190,6 +192,15 @@ _EXPECTED_SQLITE_DDL = (
     "-- rather than silently letting two rows share a cursor).\n"
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_objects_page_token\n"
     "    ON objects (page_token);\n"
+    "\n"
+    "-- At most ONE live row per (tenant, object_type, id) (#34). Every\n"
+    "-- backend refuses a duplicate `insert` with `OBJECT_ALREADY_EXISTS`\n"
+    "-- inside its own serialized transaction; this partial index is the\n"
+    "-- storage backstop, so a writer that bypasses the store still cannot\n"
+    "-- create a second live row. Closed history rows are not covered: an\n"
+    "-- id may be inserted again after its object is retired.\n"
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_objects_live_id\n"
+    "    ON objects (tenant, object_type, id) WHERE valid_to IS NULL;\n"
 )
 
 

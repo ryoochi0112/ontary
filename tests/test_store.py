@@ -10,7 +10,7 @@ from conftest import raises_code
 
 from ontary.errors import ConflictError
 from ontary.meta import Cardinality, LinkTypeDef, OntologyRegistry
-from ontary.store import ObjectStore, Store
+from ontary.store import ObjectStore, Source, Store
 
 RegistryFactory = Callable[..., OntologyRegistry]
 StoreFactory = Callable[..., Store]
@@ -91,3 +91,24 @@ def test_hot_path_indexes_exist(
         for row in store._conn.execute(f"PRAGMA index_list({table})").fetchall()
     }
     assert {"idx_objects_type_id", "idx_links_from", "idx_links_to"} <= names
+
+
+def test_live_primary_key_uniqueness_is_a_storage_constraint(
+    sqlite_registry: OntologyRegistry, make_store: StoreFactory
+) -> None:
+    """`idx_objects_live_id` backs the `OBJECT_ALREADY_EXISTS` refusal (#34):
+    a writer that bypasses `insert` still cannot add a second live row, while
+    a closed history row with the same id is allowed."""
+    import sqlite3
+
+    store = make_store(sqlite_registry)
+    assert isinstance(store, ObjectStore)
+    store.insert("Team", {"id": "t1", "name": "A"}, Source(source_system="s"))
+
+    raw_insert = (
+        "INSERT INTO objects (object_type, id, payload, valid_from, valid_to,"
+        " source_system, page_token) VALUES ('Team', 't1', '{}', 'x', ?, 's', ?)"
+    )
+    with pytest.raises(sqlite3.IntegrityError, match="UNIQUE"):
+        store._conn.execute(raw_insert, (None, "live-dup"))
+    store._conn.execute(raw_insert, ("closed", "closed-dup"))
