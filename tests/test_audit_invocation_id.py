@@ -47,9 +47,11 @@ def _build() -> tuple[Ontology, Any, Any]:
 
     @ontology.action(TouchParams, target=Org, roles=["Admin"], api_name="Touch")
     def _touch(ctx: ActionContext, params: TouchParams) -> dict[str, str]:
-        if ctx.read_current("Org", params.org_id) is None:
+        org = ctx.get(Org, params.org_id)
+        if org is None:
             raise ActionError("no such org", code="PRECONDITION_FAILED")
-        ctx.update("Org", params.org_id, {"touched": True})
+        org.touched = True
+        ctx.save(org)
         return {"org_id": params.org_id}
 
     class FailParams(ActionParams):

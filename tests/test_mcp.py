@@ -122,7 +122,7 @@ def _base_library_ontology(
     ontology.link(
         "inLibrary", Shelf, Library, Cardinality.MANY_TO_ONE, description="Shelf -> its library"
     )
-    ontology.link(
+    onShelf = ontology.link(
         "onShelf",
         Book,
         Shelf,
@@ -155,9 +155,10 @@ def _base_library_ontology(
         api_name="RelocateBook",
     )
     def _relocate(ctx: ActionContext, params: _RelocateBookParams) -> dict[str, str]:
-        if ctx.read_current("Book", params.book_id) is None:
+        book = ctx.get(Book, params.book_id)
+        if book is None:
             raise ActionError(f"book {params.book_id!r} does not exist", code="PRECONDITION_FAILED")
-        ctx.create_link("onShelf", params.book_id, params.shelf_id)
+        ctx.link(onShelf, book, params.shelf_id)
         return {"book_id": params.book_id}
 
     @ontology.function(
@@ -1326,7 +1327,10 @@ def _build_relabel_ontology() -> tuple[Ontology, type[OntologyObject]]:
     def _relabel(ctx: ActionContext, params: _RelabelBookParams) -> dict[str, str]:
         # `Book.title` is not declared ontology-owned, so this write is
         # refused (UNDECLARED_SOURCE_WRITE) before it ever reaches the store.
-        ctx.update("Book", params.book_id, {"title": "Relabeled"})
+        book = ctx.get(Book, params.book_id)
+        assert book is not None
+        book.title = "Relabeled"
+        ctx.save(book)
         return {"book_id": params.book_id}
 
     class _ReturnNestedParams(ActionParams):

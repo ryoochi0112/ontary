@@ -156,12 +156,14 @@ def _escalate_ticket(ctx: ActionContext, params: EscalateTicketParams) -> dict[s
     """Same precondition + write as the pre-M4b `fixtures._escalate_ticket_handler`
     (existence check, then a `Ticket.escalated=True` update) -- now via
     `ActionContext` instead of closing over a raw `ObjectStore`."""
-    if ctx.read_current("Ticket", params.ticket_id) is None:
+    ticket = ctx.get(Ticket, params.ticket_id)
+    if ticket is None:
         raise ActionError(
             f"ticket {params.ticket_id!r} does not exist",
             code="PRECONDITION_FAILED",
         )
-    ctx.update("Ticket", params.ticket_id, {"escalated": True})
+    ticket.escalated = True
+    ctx.save(ticket)
     return {"ticket_id": params.ticket_id}
 
 
@@ -180,19 +182,18 @@ class OpenEscalationParams(ActionParams):
     description="Escalates a Ticket and opens an Escalation.",
 )
 def _open_escalation(ctx: ActionContext, params: OpenEscalationParams) -> dict[str, str]:
-    if ctx.read_current("Ticket", params.ticket_id) is None:
+    ticket = ctx.get(Ticket, params.ticket_id)
+    if ticket is None:
         raise ActionError(
             f"ticket {params.ticket_id!r} does not exist",
             code="PRECONDITION_FAILED",
         )
-    ctx.update("Ticket", params.ticket_id, {"escalated": True})
-    escalation_id = ctx.insert(
-        "Escalation",
-        {"reason": params.reason, "state": "open"},
-    )
-    ctx.create_link("escalationOnTicket", escalation_id, params.ticket_id)
-    ctx.create_link("escalationAssignedTo", escalation_id, params.agent_id)
-    return {"escalation_id": escalation_id}
+    ticket.escalated = True
+    ctx.save(ticket)
+    escalation = ctx.create(Escalation, reason=params.reason, state="open")
+    ctx.link(escalationOnTicket, escalation, ticket)
+    ctx.link(escalationAssignedTo, escalation, params.agent_id)
+    return {"escalation_id": escalation.id}
 
 
 class ResolveTicketParams(ActionParams):
@@ -208,9 +209,17 @@ class ResolveTicketParams(ActionParams):
     description="Resolves the escalation and clears the ticket's escalated flag.",
 )
 def _resolve_ticket(ctx: ActionContext, params: ResolveTicketParams) -> dict[str, str]:
-    ctx.update("Escalation", params.escalation_id, {"state": "resolved"})
-    for ticket_id in ctx.links_from("escalationOnTicket", params.escalation_id):
-        ctx.update("Ticket", ticket_id, {"escalated": False})
+    escalation = ctx.get(Escalation, params.escalation_id)
+    if escalation is None:
+        raise ActionError(
+            f"escalation {params.escalation_id!r} does not exist",
+            code="PRECONDITION_FAILED",
+        )
+    escalation.state = "resolved"
+    ctx.save(escalation)
+    for ticket in ctx.traverse(escalationOnTicket, escalation):
+        ticket.escalated = False
+        ctx.save(ticket)
     return {"escalation_id": params.escalation_id}
 
 
@@ -227,9 +236,9 @@ class ArchiveTicketParams(ActionParams):
     description="Releases the assignment and retires the escalation.",
 )
 def _archive_ticket(ctx: ActionContext, params: ArchiveTicketParams) -> dict[str, str]:
-    for agent_id in ctx.links_from("escalationAssignedTo", params.escalation_id):
-        ctx.unlink("escalationAssignedTo", params.escalation_id, agent_id)
-    ctx.retire("Escalation", params.escalation_id)
+    for agent in ctx.traverse(escalationAssignedTo, params.escalation_id):
+        ctx.unlink(escalationAssignedTo, params.escalation_id, agent)
+    ctx.retire(Escalation, params.escalation_id)
     return {"escalation_id": params.escalation_id}
 
 

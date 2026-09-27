@@ -802,7 +802,8 @@ def test_action_insert_without_primary_key_fills_id_from_runtime_id_factory(
     )
     executor._register("MakeWidget", _make_widget_handler, _MakeWidgetParams)
 
-    result = executor.execute(_maker_consumer(), "MakeWidget", {})
+    with pytest.warns(DeprecationWarning, match="ActionContext"):
+        result = executor.execute(_maker_consumer(), "MakeWidget", {})
 
     assert result["widget_id"] == "t1-2"
     stored = store.read_current("Widget", "t1-2")
@@ -1021,8 +1022,9 @@ def test_action_insert_of_an_existing_primary_key_is_refused_and_rolled_back(
     executor = ActionExecutor(store, registry, policy)
     executor._register("MakeWidget", _make_keyed_widget_handler, _MakeWidgetParams)
 
-    assert executor.execute(_maker_consumer(), "MakeWidget", {}) == {"widget_id": "w-1"}
-    with raises_code(ConflictError, "OBJECT_ALREADY_EXISTS"):
+    with pytest.warns(DeprecationWarning, match="ActionContext"):
+        assert executor.execute(_maker_consumer(), "MakeWidget", {}) == {"widget_id": "w-1"}
+    with pytest.warns(DeprecationWarning, match="ActionContext"), raises_code(ConflictError, "OBJECT_ALREADY_EXISTS"):
         executor.execute(_maker_consumer(), "MakeWidget", {})
 
     assert len(store.read_all("Widget")) == 1

@@ -21,9 +21,18 @@ you**.
   its id, and `ctx.retire(order)` or `ctx.retire(Order, id)` retires. `mypy`
   checks the class, the returned type, each link endpoint's type, and every
   attribute assigned before `save`. The new code `OBJECT_NOT_LOADED` (kind
-  `validation`) refuses `save` on an object this context did not hand out. The
-  string members are unchanged; PR 2 of
-  [ontary#41](https://github.com/ryoochi0112/ontary/issues/41) deprecates them.
+  `validation`) refuses `save` on an object this context did not hand out.
+
+### Deprecated
+
+- The string `ActionContext` members now emit a `DeprecationWarning` that names the
+  typed replacement: `insert` → `create`, `update` → `get` + `save`, `create_link`
+  → `link`, `read_current` → `get`, `read_all` → `all`, and `links_from` /
+  `links_to` → `traverse`. The string forms of `retire` and `unlink` warn as well;
+  their typed forms keep the same names. `retire`'s own link cascade does not warn.
+  The string members are removed in 0.18.0
+  ([ontary#41](https://github.com/ryoochi0112/ontary/issues/41)). The README, the
+  docs, and `examples/tickets` now use the typed members.
 
 ### Changed
 

@@ -659,25 +659,32 @@ order.status = "shipped"          # mypy checks the field name and type
 ctx.save(order)                   # writes only `status`
 ```
 
-**String members.** The earlier surface, which takes type and link names as strings
-and payloads as dicts. PR 2 of [ontary#41](https://github.com/ryoochi0112/ontary/issues/41)
-deprecates it in favour of the typed members.
+**String members (deprecated).** The earlier surface, which takes type and link names
+as strings and payloads as dicts. Since 0.17.0 each call emits a `DeprecationWarning`
+that names its typed replacement. The string members are removed in 0.18.0
+([ontary#41](https://github.com/ryoochi0112/ontary/issues/41)). `retire` and `unlink`
+keep their names; only the string form of each is deprecated.
+
+| Member | Purpose | Replacement |
+| --- | --- | --- |
+| `.insert(obj_type, payload) -> str` | Create. A payload omitting the type's primary key gets one auto-minted from the runtime's `id_factory`; a primary key that is already live is refused with `OBJECT_ALREADY_EXISTS` | `.create(cls, **values)` |
+| `.update(obj_type, obj_id, changes)` | Update. A change that gives the primary key a different value is refused with `PRIMARY_KEY_IMMUTABLE` | `.get` + assignment + `.save(obj)` |
+| `.create_link(link_api_name, from_id, to_id)` | Link. Both ids must be live objects of the link's declared endpoint types, or the call is refused with `LINK_ENDPOINT_NOT_FOUND`. A link identical to a live one is a no-op | `.link(handle, from_, to)` |
+| `.retire(obj_type, obj_id)` | Retire the object and cascade-close every live link that references the object on the side its link type declares for that object type | `.retire(obj)` / `.retire(cls, obj_id)` |
+| `.unlink(link_api_name, from_id, to_id)` | Close one live link | `.unlink(handle, from_, to)` |
+| `.read_current(obj_type, obj_id) -> StoredObject \| None` | Read | `.get(cls, obj_id)` |
+| `.read_all(obj_type) -> list[StoredObject]` | Enumerate current rows | `.all(cls)` |
+| `.links_from(link_api_name, from_id) -> list[str]` | Traverse | `.traverse(handle, anchor)` |
+| `.links_to(link_api_name, to_id) -> list[str]` | Traverse | `.traverse(handle, anchor, reverse=True)` |
+
+**Other members.** Not deprecated.
 
 | Member | Purpose |
 | --- | --- |
-| `.insert(obj_type, payload) -> str` | Create. A payload omitting the type's primary key gets one auto-minted from the runtime's `id_factory`; a primary key that is already live is refused with `OBJECT_ALREADY_EXISTS` |
-| `.update(obj_type, obj_id, changes)` | Update. A change that gives the primary key a different value is refused with `PRIMARY_KEY_IMMUTABLE` |
-| `.create_link(link_api_name, from_id, to_id)` | Link. Both ids must be live objects of the link's declared endpoint types, or the call is refused with `LINK_ENDPOINT_NOT_FOUND`. A link identical to a live one is a no-op |
-| `.retire(obj_type, obj_id)` | Retire the object and cascade-close every live link that references the object on the side its link type declares for that object type |
-| `.unlink(link_api_name, from_id, to_id)` | Close one live link |
-| `.read_current(obj_type, obj_id) -> StoredObject \| None` | Read |
-| `.read_all(obj_type) -> list[StoredObject]` | Enumerate current rows |
-| `.links_from(link_api_name, from_id) -> list[str]` | Traverse |
-| `.links_to(link_api_name, to_id) -> list[str]` | Traverse |
 | `.capability(handle) -> P` | Fetch a declared capability |
 | `.consumer` | The calling `Consumer` |
 
-`read_current` and `read_all` are trusted handler reads: raw, unredacted, and
+`get` and `all`, like the deprecated `read_current` and `read_all`, are trusted handler reads: raw, unredacted, and
 unscoped. They are intentionally not guarded consumer queries. In particular, filtering
 an enumeration by scope or sensitivity could hide an existing row from an id allocator
 and cause id reuse.

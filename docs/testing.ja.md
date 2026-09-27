@@ -54,9 +54,11 @@ class EscalateTicket(ActionParams):
     api_name="EscalateTicket",
 )
 def escalate(ctx: ActionContext, params: EscalateTicket) -> dict[str, str]:
-    if ctx.read_current("Ticket", params.ticket_id) is None:
+    ticket = ctx.get(Ticket, params.ticket_id)
+    if ticket is None:
         raise ActionError("ticket does not exist", code="PRECONDITION_FAILED")
-    ctx.update("Ticket", params.ticket_id, {"escalated": True})
+    ticket.escalated = True
+    ctx.save(ticket)
     return {"ticket_id": params.ticket_id}
 
 ontology.validate()

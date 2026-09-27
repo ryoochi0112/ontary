@@ -59,7 +59,7 @@ The core developer experience: the model you write reads like the
 operation it describes, and the type checker catches mistakes.
 
 - **A typed action context.** `ctx.get(Order, id)` returns an `Order`, and
-  `ctx.update(order, status=...)` is checked by `mypy`. The string-based
+  `order.status = ...; ctx.save(order)` is checked by `mypy`. The string-based
   context API is deprecated and removed one minor later.
 - **Choice properties** (Enum and `Literal`), and **structured properties**
   such as an amount with its currency, or a name in two languages.

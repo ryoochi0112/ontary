@@ -328,7 +328,7 @@ def _ontology() -> tuple[Ontology, Any]:
 
     @ontology.action(TouchParams, target=Record, roles=["Operator"], api_name="Touch")
     def _touch(ctx: ActionContext, params: TouchParams) -> dict[str, str]:
-        ctx.insert("Record", {"id": params.id})
+        ctx.create(Record, id=params.id)
         return {"id": params.id}
 
     class AdminOnlyParams(ActionParams):
@@ -338,7 +338,7 @@ def _ontology() -> tuple[Ontology, Any]:
         AdminOnlyParams, target=Record, roles=["Admin"], api_name="AdminOnly"
     )
     def _admin_only(ctx: ActionContext, params: AdminOnlyParams) -> dict[str, str]:
-        ctx.insert("Record", {"id": params.id})
+        ctx.create(Record, id=params.id)
         return {"id": params.id}
 
     class FailParams(ActionParams):
