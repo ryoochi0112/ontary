@@ -157,7 +157,7 @@ ACTION_TYPES = [
     ActionTypeDef(
         api_name="CheckoutBook",
         display_name="Checkout Book",
-        target_type="Loan",
+        target_type="Book",
         executable_by_roles=["Librarian"],
         description="Check a book out on loan",
         parameters=[
@@ -227,7 +227,7 @@ ACTION_TYPES = [
     ActionTypeDef(
         api_name="CheckoutBookTyped",
         display_name="Checkout Book (typed)",
-        target_type="Loan",
+        target_type="Book",
         executable_by_roles=["Librarian"],
         description="Typed-invocation twin of CheckoutBook (ActionContext test)",
         parameters=[
@@ -243,7 +243,7 @@ ACTION_TYPES = [
     ActionTypeDef(
         api_name="CheckoutBookTypedRefused",
         display_name="Checkout Book (typed, then authority-refused write)",
-        target_type="Loan",
+        target_type="Book",
         executable_by_roles=["Librarian"],
         description=(
             "Typed handler that writes via ActionContext, then attempts "

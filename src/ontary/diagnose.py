@@ -3,7 +3,9 @@
 The core rules mirror the conditions checked by ``OntologyDef.validate`` and
 its registry/policy validators.  They read descriptor data only; no rule
 mutates the registry, policy, or store.  Later DX tasks can extend ``RULES``
-with advisory rules without changing the collector contract.
+with advisory rules without changing the collector contract.  The one
+store-reading check, ``_store_row_findings``, runs only when a caller passes
+a store (ontary#40).
 """
 
 from __future__ import annotations
@@ -11,7 +13,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from ontary.meta import (
     ActionTypeDef,
@@ -19,6 +21,7 @@ from ontary.meta import (
     ObjectTypeDef,
     PropertyDef,
     Sensitivity,
+    target_param_mismatch,
 )
 from ontary.scope import (
     CustomResolver,
@@ -30,10 +33,11 @@ from ontary.scope import (
     incoherent_scope_declarations,
     unscoped_scope_parameter_declarations,
 )
-from ontary.typesys import validate_scalar
+from ontary.typesys import _storage_scalar_violation, validate_scalar
 
 if TYPE_CHECKING:
     from ontary.ontology import OntologyDef
+    from ontary.store import Store
 
 __all__ = ["Finding"]
 
@@ -320,6 +324,20 @@ def _registry_action_findings(
                         "parameter reference.",
                     )
                 )
+
+        mismatch = target_param_mismatch(action)
+        if mismatch is not None:
+            index, message = mismatch
+            findings.append(
+                _error(
+                    "ONTOLOGY_INVALID",
+                    f"{base}.parameters[{index}]",
+                    message,
+                    "Point the action's target= at the parameter's type, "
+                    "or mark the parameter scope_ref()/ref() instead of "
+                    "target().",
+                )
+            )
     return tuple(findings)
 
 
@@ -754,8 +772,18 @@ RULES: tuple[DiagnosticRule, ...] = (
 )
 
 
-def _collect_findings(definition: "OntologyDef") -> list[Finding]:
-    """Run every rule, turning an unexpected rule failure into a finding."""
+def _collect_findings(
+    definition: "OntologyDef",
+    *,
+    store: Store | None = None,
+    classes: Mapping[str, type[BaseModel]] | None = None,
+) -> list[Finding]:
+    """Run every rule, turning an unexpected rule failure into a finding.
+
+    With a ``store``, also sweep its current rows (``_store_row_findings``),
+    one object type at a time, so a failed read of one type is reported
+    as a finding and the other types are still swept.
+    """
     findings: list[Finding] = []
     for rule in RULES:
         try:
@@ -769,4 +797,122 @@ def _collect_findings(definition: "OntologyDef") -> list[Finding]:
                     "Fix the reported rule error and run diagnose() again.",
                 )
             )
+    if store is None:
+        return findings
+    for api_name in sorted(definition.registry.object_types):
+        try:
+            findings.extend(
+                _store_row_findings(definition, store, api_name, classes or {})
+            )
+        except Exception as exc:
+            findings.append(
+                _error(
+                    "DIAGNOSE_RULE_FAILED",
+                    f"_store_row_findings[{api_name!r}]",
+                    f"store sweep of {api_name!r} failed: {exc}",
+                    "Fix the reported store error and run diagnose() again.",
+                )
+            )
     return findings
+
+
+def _store_row_findings(
+    definition: "OntologyDef",
+    store: Store,
+    api_name: str,
+    classes: Mapping[str, type[BaseModel]],
+) -> tuple[Finding, ...]:
+    """Report current rows of ``api_name`` that ``hydrate`` would refuse.
+
+    The store persists no registry fingerprint, so an ontology edited
+    after rows were written (a new required property, a changed type or
+    ``choices``) passes ``validate()`` and fails only at the first read
+    with ``INVALID_RECORD`` (ontary#40). This sweep runs the same checks
+    ``hydrate`` runs -- the storage scalar check per property, then the
+    authored class's ``model_validate`` when one is registered -- and
+    reports one finding per (type, property) with a row count, never one
+    per row. A hand-built registry with no class falls back to the
+    descriptors: ``PropertyDef.required`` and ``validate_scalar``.
+    """
+    obj_def = definition.registry.object_types[api_name]
+    cls = classes.get(api_name)
+    rows = store.read_all(api_name)
+    # property name ("" = not attributable to one property) ->
+    # (rows missing a required value, rows with a bad value, first detail)
+    missing: dict[str, int] = {}
+    invalid: dict[str, int] = {}
+    example: dict[str, str] = {}
+
+    for row in rows:
+        row_missing, row_invalid = _row_hydration_failures(obj_def, cls, row.payload)
+        for name in row_missing:
+            missing[name] = missing.get(name, 0) + 1
+        for name, detail in row_invalid.items():
+            if name in row_missing:
+                continue
+            invalid[name] = invalid.get(name, 0) + 1
+            example.setdefault(
+                name, f"{detail} (e.g. id {row.lineage.object_id!r})"
+            )
+
+    findings: list[Finding] = []
+    total = len(rows)
+    base = f"ObjectTypeDef[{api_name!r}]"
+    for name in sorted(set(missing) | set(invalid)):
+        problems: list[str] = []
+        if name in missing:
+            problems.append(f"{missing[name]} missing a required value")
+        if name in invalid:
+            problems.append(f"{invalid[name]} with {example[name]}")
+        what = f"property {name!r}" if name else "payload"
+        findings.append(
+            _error(
+                "INVALID_RECORD",
+                f"{base}.properties[{name!r}]" if name else base,
+                f"ObjectTypeDef {api_name!r} {what}: "
+                f"{missing.get(name, 0) + invalid.get(name, 0)} of {total} "
+                f"current rows would fail hydration ({'; '.join(problems)})",
+                "Backfill or re-ingest the stored rows in the new shape, or "
+                "make the property optional / give it a default.",
+            )
+        )
+    return tuple(findings)
+
+
+def _row_hydration_failures(
+    obj_def: ObjectTypeDef,
+    cls: type[BaseModel] | None,
+    payload: Mapping[str, object],
+) -> tuple[set[str], dict[str, str]]:
+    """Return (properties missing a required value, property -> first
+    violation) for one stored payload, mirroring ``hydrate``'s checks.
+    Property name ``""`` stands for a failure not attributable to one
+    property (e.g. a model-level validator)."""
+    missing: set[str] = set()
+    invalid: dict[str, str] = {}
+    for prop in obj_def.properties:
+        value = payload.get(prop.name)
+        if value is None:
+            # Absent with a class: its model_validate decides (a Pydantic
+            # default may fill it). An explicit null, or no class at all,
+            # fails exactly when the property is not optional.
+            if prop.required and (prop.name in payload or cls is None):
+                missing.add(prop.name)
+            continue
+        violation = _storage_scalar_violation(value, prop.type, prop.choices)
+        if violation is None and cls is None:
+            violation = validate_scalar(value, prop.type, prop.choices)
+        if violation is not None:
+            invalid.setdefault(prop.name, violation)
+    if cls is not None:
+        try:
+            cls.model_validate(payload)
+        except ValidationError as exc:
+            for err in exc.errors():
+                loc = err["loc"]
+                name = str(loc[0]) if loc else ""
+                if err["type"] == "missing":
+                    missing.add(name)
+                else:
+                    invalid.setdefault(name, str(err["msg"]))
+    return missing, invalid

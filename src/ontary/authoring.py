@@ -32,7 +32,7 @@ from pydantic import Field, ValidationError
 
 from ontary.actions import ActionContext, TypedHandler
 from ontary.client import OntologyRuntime
-from ontary.diagnose import Finding, _collect_findings
+from ontary.diagnose import Finding, _collect_findings, _store_row_findings
 from ontary.errors import ValidationFailed
 from ontary.functions import FunctionHandler, FunctionRegistry
 from ontary.meta import (
@@ -46,6 +46,7 @@ from ontary.meta import (
     OntologyRegistry,
     PropertyDef,
     Sensitivity,
+    target_param_mismatch,
 )
 from ontary.model import ActionParams as ActionParams
 from ontary.model import CapabilityHandle as CapabilityHandle
@@ -745,6 +746,9 @@ class Ontology:
                 parameters=parameters,
                 capabilities=capability_names,
             )
+            mismatch = target_param_mismatch(action_def)
+            if mismatch is not None:
+                raise ValidationFailed(mismatch[1], code="ONTOLOGY_INVALID")
             self.registry.register_action_type(action_def)  # dup api_name raises
             params_cls._ontary_api_name = name
             params_cls._ontary_registry = self.registry
@@ -886,10 +890,31 @@ class Ontology:
             )
         return self._definition
 
-    def validate(self) -> None:
+    def validate(self, store: Store | None = None) -> None:
         """Convenience: builds `.definition` (if not already built) and
-        validates it -- equivalent to `ontology.definition.validate()`."""
-        self.definition.validate()
+        validates it -- equivalent to `ontology.definition.validate()`.
+
+        With a `store`, also sweeps its current rows (see `diagnose`) and
+        raises `ValidationFailed` with code `INVALID_RECORD` when any row
+        would fail hydration under this ontology (ontary#40). A store read
+        error propagates as-is.
+        """
+        definition = self.definition
+        definition.validate()
+        if store is None:
+            return
+        findings = [
+            finding
+            for api_name in sorted(definition.registry.object_types)
+            for finding in _store_row_findings(
+                definition, store, api_name, self._classes
+            )
+        ]
+        if findings:
+            raise ValidationFailed(
+                "; ".join(finding.message for finding in findings),
+                code="INVALID_RECORD",
+            )
 
     def _build_diagnostic_policy(self) -> ScopePolicy:
         """Build an unchecked policy snapshot for diagnose's constructor checks.
@@ -929,13 +954,20 @@ class Ontology:
             min_n=self.min_n,
         )
 
-    def diagnose(self) -> list[Finding]:
+    def diagnose(self, store: Store | None = None) -> list[Finding]:
         """Return all validation findings without raising mid-sweep.
 
         If this ontology is still being authored, diagnostics build a
         transient definition from the same pre-freeze structures used by
         ``validate``; the cached definition is left untouched so
         registration can continue afterwards.
+
+        With a ``store``, also sweep its current rows (``Store.read_all``)
+        and report, per (type, property), how many rows ``hydrate`` would
+        refuse under this ontology -- a property made required, a changed
+        type, or narrowed ``choices`` -- as ``INVALID_RECORD`` findings
+        (ontary#40). The sweep reads every current row, so it is explicit
+        here rather than run at ``bind()``.
         """
         if self._definition is not None:
             definition = self._definition
@@ -949,7 +981,7 @@ class Ontology:
                 registry=self.registry,
                 policy=policy,
             )
-        return _collect_findings(definition)
+        return _collect_findings(definition, store=store, classes=self._classes)
 
     def bind(
         self,

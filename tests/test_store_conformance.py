@@ -3008,3 +3008,39 @@ def test_audit_importable_before_store_in_fresh_interpreter() -> None:
         text=True,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_diagnose_store_sweep_reports_rows_an_edited_ontology_cannot_hydrate(
+    store_factory: StoreFactory,
+) -> None:
+    """ontary#40: `Ontology.diagnose(store=...)` reads rows via `read_all`
+    only, so the sweep behaves the same on every backend."""
+    v1 = Ontology("tickets", scope_levels=["org"])
+
+    @v1.object(layer="L0", api_name="Ticket", scope="unscoped")
+    class TicketV1(OntologyObject):
+        id: str = prop(primary_key=True)
+        rank: str | None = None
+
+    store = store_factory(v1.registry)
+    store.insert("Ticket", {"id": "t1"}, Source(source_system="test"))
+    store.insert("Ticket", {"id": "t2", "rank": "high"}, Source(source_system="test"))
+    store.insert("Ticket", {"id": "t3", "rank": "5"}, Source(source_system="test"))
+
+    v2 = Ontology("tickets", scope_levels=["org"])
+
+    @v2.object(layer="L0", api_name="Ticket", scope="unscoped")
+    class TicketV2(OntologyObject):
+        id: str = prop(primary_key=True)
+        rank: int
+
+    findings = v2.diagnose(store=store)
+
+    assert [(f.code, f.location) for f in findings] == [
+        ("INVALID_RECORD", "ObjectTypeDef['Ticket'].properties['rank']")
+    ]
+    # t1 is missing it, t2 cannot parse; t3's "5" hydrates (Pydantic lax int).
+    assert "2 of 3" in findings[0].message
+    assert "1 missing" in findings[0].message
+    with raises_code(ValidationFailed, "INVALID_RECORD"):
+        v2.validate(store=store)

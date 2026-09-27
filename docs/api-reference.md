@@ -168,12 +168,35 @@ Declaration methods, all decorators except `link`:
 | `@ontology.action(params_cls, ...)` | Register a typed action handler |
 | `@ontology.function(...)` | Register a derived-value function |
 | `ontology.capability(proto, ...)` | Declare a capability; returns a `CapabilityHandle` |
-| `ontology.validate()` | Validate and **freeze** registration |
+| `ontology.validate(store=None)` | Validate and **freeze** registration; with a store, also refuse stored rows that no longer hydrate |
+| `ontology.diagnose(store=None)` | Return every `Finding` without raising or freezing; with a store, also sweep its rows |
 | `ontology.bind(store, ...)` | Build an `OntologyRuntime` |
 
 `validate()` (and touching `.definition`) freezes the ontology — any later
 `object`/`link`/`action`/`function` call raises. Call it once, after every
 declaration.
+
+**Checks that teach.** Two modelling mistakes that used to pass `validate()` and
+fail later are now caught where they are written:
+
+- An action whose `target(...)` parameters all refer to another type than its
+  `target=` is refused at `@ontology.action(...)` with `ONTOLOGY_INVALID`, naming
+  the action, the parameters, and both types. Before, the scope gate checked the
+  parameter's object while the audit entry and MCP named `target=`. One `target()`
+  parameter must refer to the `target=` type; extra `target()` parameters of other
+  types are allowed. `validate()` and `diagnose()` apply the same rule to a
+  hand-built `OntologyRegistry`.
+- Rows written before an ontology edit (a property made required, a changed type,
+  narrowed `choices`) fail only when first read, because a store records no
+  fingerprint of the ontology. `diagnose(store=store)` reads every current row
+  with `Store.read_all` and returns one `INVALID_RECORD` finding per type and
+  property, with the number of rows that would fail hydration.
+  `validate(store=store)` raises `INVALID_RECORD` for them. The sweep reads every
+  row, so it runs only when you pass a store, never at `bind()`.
+
+```python
+ontology.validate(store=store)  # before serving an edited ontology
+```
 
 #### `@ontology.object(*, layer, owned=False, api_name=None, description=None, display_name=None, scope: Literal["unscoped"] | Sequence[ScopeRule] | None = None, contributor: Sequence[ScopeRule] | None = None, row_visibility: RowVisibilityFn | None = None)`
 
@@ -246,7 +269,7 @@ All take an `OntologyObject` subclass and pass extra kwargs to `Field`.
 | Marker | Declares |
 | --- | --- |
 | `ref(cls)` | This param refers to an object of `cls` |
-| `target(cls)` | …and it is the action's **target** — scope is enforced against it. For an unscoped type there is no scope to enforce, so `roles=` is the only gate |
+| `target(cls)` | …and it is the action's **target** — scope is enforced against it. For an unscoped type there is no scope to enforce, so `roles=` is the only gate. One `target()` param must refer to the action's `target=` type |
 | `scope_ref(cls)` | …and it names the **scope** the action creates within. It may not refer to an unscoped type (`SCOPE_POLICY_ERROR`) |
 
 These drive `refers_to` / `scope_semantics` on the generated `ActionParameterDef`, so
@@ -1279,7 +1302,7 @@ table below is generated from it.
 | `INVALID_LIMIT` | `GuardedQuery.get_objects`'s (or `OntologyClient.list`'s) `limit` was < 1 -- a silently empty page would hide that the call was malformed rather than legitimately paginated. |
 | `STALE_CURSOR` | An ordered walk's cursor resolved to a row that is no longer current; restart the ordered walk from the first page. |
 | `INVALID_PARAMS` | A call's parameters failed declared-shape validation: an action's params, or a read parameter whose SHAPE is wrong -- an `order_by` that is neither a field name nor a (field, direction) pair, or a `where=` that is not a mapping of field name to condition. A parameter naming something that does not exist is `UNKNOWN_FIELD` instead; this code is about the shape, not the name. |
-| `INVALID_RECORD` | A bulk_upsert record failed declared-shape validation (missing primary key, missing required property, unknown property, or a value that does not match its declared type). The validation kind carries the SAME `INVALID_RECORD` code that `bulk_upsert` already reports: from a caller's point of view, a record not matching the declaration is one failure regardless of which write path noticed. This closes the M9 hole where only ingest checked: `Store.insert`/`update` and therefore `ActionContext.insert`/`update` could commit a row missing a required property or carrying a wrong-typed value, report success, and leave the typed reader unable to hydrate it. The same code wraps a Pydantic `ValidationError` while hydrating a stored `OntologyObject` payload (for example, a non-ISO datetime string), never surfacing a bare traceback; a stored row failing declared-shape validation on read-back is the same failure class ingest carries on write. |
+| `INVALID_RECORD` | A bulk_upsert record failed declared-shape validation (missing primary key, missing required property, unknown property, or a value that does not match its declared type). The validation kind carries the SAME `INVALID_RECORD` code that `bulk_upsert` already reports: from a caller's point of view, a record not matching the declaration is one failure regardless of which write path noticed. This closes the M9 hole where only ingest checked: `Store.insert`/`update` and therefore `ActionContext.insert`/`update` could commit a row missing a required property or carrying a wrong-typed value, report success, and leave the typed reader unable to hydrate it. The same code wraps a Pydantic `ValidationError` while hydrating a stored `OntologyObject` payload (for example, a non-ISO datetime string), never surfacing a bare traceback; a stored row failing declared-shape validation on read-back is the same failure class ingest carries on write. `Ontology.diagnose(store=...)` reports, per type and property, the stored rows that would fail hydration under the current ontology, and `Ontology.validate(store=...)` raises this code for them. |
 | `LINK_ENDPOINT_NOT_FOUND` | A link creation named an endpoint id with no live row of the link type's declared endpoint type -- missing or retired; a link needs a live object at both ends. |
 | `LINK_NOT_FOUND` | A link closure found no matching live link. |
 | `NON_NUMERIC_AGGREGATE` | `GuardedQuery.aggregate`'s `value_field` is declared a non-numeric `PropertyType` (anything other than `int`/`float`, such as str/json/datetime/bool). It is checked against the declared type before rows are iterated or coerced, so values that merely look numeric cannot bypass the type contract (spec `m35-sdk-refactor` §6 AC7). `func="count"` is exempt and accepts any declared type. |

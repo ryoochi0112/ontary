@@ -430,7 +430,10 @@ ERROR_CODES: dict[str, ErrorCodeInfo] = {
             "`ValidationError` while hydrating a stored `OntologyObject` payload "
             "(for example, a non-ISO datetime string), never surfacing a bare "
             "traceback; a stored row failing declared-shape validation on read-"
-            "back is the same failure class ingest carries on write."
+            "back is the same failure class ingest carries on write. "
+            "`Ontology.diagnose(store=...)` reports, per type and property, "
+            "the stored rows that would fail hydration under the current "
+            "ontology, and `Ontology.validate(store=...)` raises this code for them."
         ),
     ),
     "UNKNOWN_FIELD": ErrorCodeInfo(

@@ -45,6 +45,17 @@ you**.
 
 ### Fixed
 
+- `validate()` and `diagnose()` now catch two modelling mistakes that used to pass
+  and fail later. An action whose `target(...)` parameters all refer to another
+  type than its `target=` is refused at `@ontology.action(...)` with
+  `ONTOLOGY_INVALID`; before, the scope gate checked the parameter's object while
+  audit and MCP named `target=`. `OntologyRegistry.validate()` and `diagnose()`
+  apply the same rule to hand-built registries, so a hand-built action with that
+  shape that validated before is now refused. `Ontology.diagnose(store=...)` and
+  `Ontology.validate(store=...)` sweep a store's current rows and report, per type
+  and property, the rows that would fail hydration under an edited ontology
+  (`INVALID_RECORD`); before, the store opened cleanly and the first read failed.
+  Fixes [ontary#40](https://github.com/ryoochi0112/ontary/issues/40).
 - Authoring mistakes are refused where they are written, with
   `ValidationFailed` (`ONTOLOGY_INVALID`) naming the class or link, the kwarg, what
   was given, and the accepted forms. Before, a misspelled `cardinality` escaped as a

@@ -98,6 +98,8 @@ for f in ontology.diagnose():
 
 診断は推奨チェックを実行します。`STORED_DERIVABLE` や `CRUD_ACTION_NAME` などの診断ルールは警告を返します。これらの警告で実行が停止することはありません。
 
+保存済みの行があるオントロジーを編集したら、ストアを渡してください。`ontology.diagnose(store=store)` はもう読み込めない行を報告し、`ontology.validate(store=store)` はそれらを `INVALID_RECORD` として拒否します。
+
 ## ストアとコンシューマーのバインド
 
 インメモリのストアを作成し、初期データを投入します。セキュリティポリシーを適用するコンシューマーを定義します。

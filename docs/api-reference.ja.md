@@ -164,12 +164,35 @@ SDK 利用者向けのテストヘルパーは `make_store`、`consumer`、`rais
 | `@ontology.action(params_cls, ...)` | 型付き Action ハンドラを登録 |
 | `@ontology.function(...)` | 導出値 Function を登録 |
 | `ontology.capability(proto, ...)` | Capability を宣言し `CapabilityHandle` を返す |
-| `ontology.validate()` | 検証して登録を**凍結** |
+| `ontology.validate(store=None)` | 検証して登録を**凍結**。ストアを渡すと、もう復元できない保存済み行も拒否 |
+| `ontology.diagnose(store=None)` | 例外も凍結もせず全 `Finding` を返す。ストアを渡すと行もスイープ |
 | `ontology.bind(store, ...)` | `OntologyRuntime` を構築 |
 
 `validate()`（および `.definition` への接触）はオントロジーを凍結します。以降の
 `object`/`link`/`action`/`function` 呼び出しは例外になります。すべての宣言を終えた
 あとに 1 回だけ呼んでください。
+
+**教えてくれるチェック。** 以前は `validate()` を通って後で失敗していた 2 つの
+モデリングミスを、書いた場所で検出します。
+
+- `target(...)` パラメータがすべて `target=` と別の型を指す Action は、
+  `@ontology.action(...)` の時点で `ONTOLOGY_INVALID` として拒否されます。
+  メッセージには Action、パラメータ、両方の型が入ります。以前はスコープゲートが
+  パラメータ側のオブジェクトを検査し、監査エントリと MCP は `target=` を示していました。
+  `target()` パラメータのうち 1 つは `target=` の型を指す必要があります。
+  別の型を指す追加の `target()` パラメータは許されます。手組みの
+  `OntologyRegistry` にも `validate()` と `diagnose()` が同じ規則を適用します。
+- オントロジー編集（プロパティの必須化、型の変更、`choices` の絞り込み）より前に
+  書かれた行は、最初に読んだときにだけ失敗します。ストアはオントロジーの
+  指紋を記録しないためです。`diagnose(store=store)` は `Store.read_all` で現在の
+  行をすべて読み、型とプロパティごとに `INVALID_RECORD` の Finding を 1 件返します。
+  Finding には復元に失敗する行数が入ります。`validate(store=store)` はそれらを
+  `INVALID_RECORD` として送出します。全行を読むため、スイープはストアを渡したとき
+  だけ動き、`bind()` では動きません。
+
+```python
+ontology.validate(store=store)  # 編集したオントロジーを提供する前に
+```
 
 #### `@ontology.object(*, layer, owned=False, api_name=None, description=None, display_name=None, scope: Literal["unscoped"] | Sequence[ScopeRule] | None = None, contributor: Sequence[ScopeRule] | None = None, row_visibility: RowVisibilityFn | None = None)`
 
@@ -240,7 +263,7 @@ SDK 利用者向けのテストヘルパーは `make_store`、`consumer`、`rais
 | マーカー | 宣言内容 |
 | --- | --- |
 | `ref(cls)` | このパラメータは `cls` のオブジェクトを指す |
-| `target(cls)` | …かつ Action の**対象**である（スコープはこれに対して強制される）。unscoped な型には強制するスコープがないため、`roles=` だけがゲートになる |
+| `target(cls)` | …かつ Action の**対象**である（スコープはこれに対して強制される）。unscoped な型には強制するスコープがないため、`roles=` だけがゲートになる。`target()` パラメータのうち 1 つは Action の `target=` の型を指す |
 | `scope_ref(cls)` | …かつ Action が作成する先の**スコープ**を指す。unscoped な型は指せない（`SCOPE_POLICY_ERROR`） |
 
 これらが生成される `ActionParameterDef` の `refers_to` / `scope_semantics` を決めます。
@@ -1260,7 +1283,7 @@ MCP サーバーでは、この実行時ではなくトランスポートによ�
 | `INVALID_LIMIT` | `GuardedQuery.get_objects`'s (or `OntologyClient.list`'s) `limit` was < 1 -- a silently empty page would hide that the call was malformed rather than legitimately paginated. |
 | `STALE_CURSOR` | An ordered walk's cursor resolved to a row that is no longer current; restart the ordered walk from the first page. |
 | `INVALID_PARAMS` | A call's parameters failed declared-shape validation: an action's params, or a read parameter whose SHAPE is wrong -- an `order_by` that is neither a field name nor a (field, direction) pair, or a `where=` that is not a mapping of field name to condition. A parameter naming something that does not exist is `UNKNOWN_FIELD` instead; this code is about the shape, not the name. |
-| `INVALID_RECORD` | A bulk_upsert record failed declared-shape validation (missing primary key, missing required property, unknown property, or a value that does not match its declared type). The validation kind carries the SAME `INVALID_RECORD` code that `bulk_upsert` already reports: from a caller's point of view, a record not matching the declaration is one failure regardless of which write path noticed. This closes the M9 hole where only ingest checked: `Store.insert`/`update` and therefore `ActionContext.insert`/`update` could commit a row missing a required property or carrying a wrong-typed value, report success, and leave the typed reader unable to hydrate it. The same code wraps a Pydantic `ValidationError` while hydrating a stored `OntologyObject` payload (for example, a non-ISO datetime string), never surfacing a bare traceback; a stored row failing declared-shape validation on read-back is the same failure class ingest carries on write. |
+| `INVALID_RECORD` | A bulk_upsert record failed declared-shape validation (missing primary key, missing required property, unknown property, or a value that does not match its declared type). The validation kind carries the SAME `INVALID_RECORD` code that `bulk_upsert` already reports: from a caller's point of view, a record not matching the declaration is one failure regardless of which write path noticed. This closes the M9 hole where only ingest checked: `Store.insert`/`update` and therefore `ActionContext.insert`/`update` could commit a row missing a required property or carrying a wrong-typed value, report success, and leave the typed reader unable to hydrate it. The same code wraps a Pydantic `ValidationError` while hydrating a stored `OntologyObject` payload (for example, a non-ISO datetime string), never surfacing a bare traceback; a stored row failing declared-shape validation on read-back is the same failure class ingest carries on write. `Ontology.diagnose(store=...)` reports, per type and property, the stored rows that would fail hydration under the current ontology, and `Ontology.validate(store=...)` raises this code for them. |
 | `LINK_ENDPOINT_NOT_FOUND` | A link creation named an endpoint id with no live row of the link type's declared endpoint type -- missing or retired; a link needs a live object at both ends. |
 | `LINK_NOT_FOUND` | A link closure found no matching live link. |
 | `NON_NUMERIC_AGGREGATE` | `GuardedQuery.aggregate`'s `value_field` is declared a non-numeric `PropertyType` (anything other than `int`/`float`, such as str/json/datetime/bool). It is checked against the declared type before rows are iterated or coerced, so values that merely look numeric cannot bypass the type contract (spec `m35-sdk-refactor` §6 AC7). `func="count"` is exempt and accepts any declared type. |
