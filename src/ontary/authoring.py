@@ -29,7 +29,7 @@ from typing import (
     overload,
 )
 
-from pydantic import Field, ValidationError
+from pydantic import BaseModel, Field, RootModel, ValidationError
 
 from ontary.actions import ActionContext, TypedHandler
 from ontary.client import OntologyRuntime
@@ -47,6 +47,7 @@ from ontary.meta import (
     OntologyRegistry,
     PropertyDef,
     Sensitivity,
+    StructFieldDef,
     target_param_mismatch,
 )
 from ontary.model import ActionParams as ActionParams
@@ -152,6 +153,12 @@ def _property_type_for(annotation: Any, field_name: str, class_name: str) -> Pro
         return "json"
     origin = get_origin(annotation)
     if origin in (dict, list) or annotation in (dict, list):
+        if _contains_model(annotation):
+            raise ValidationFailed(
+                f"{class_name}.{field_name}: collections of models are not supported; "
+                "use a linked object type",
+                code="ONTOLOGY_INVALID",
+            )
         return "json"
     raise ValidationFailed(
         f"{class_name}.{field_name}: unmappable annotation {annotation!r} "
@@ -160,6 +167,12 @@ def _property_type_for(annotation: Any, field_name: str, class_name: str) -> Pro
         "prop(property_type=...))",
         code="ONTOLOGY_INVALID",
     )
+
+
+def _contains_model(annotation: Any) -> bool:
+    if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+        return True
+    return any(_contains_model(arg) for arg in get_args(annotation))
 
 
 def _choice_members(
@@ -188,6 +201,110 @@ def _choice_members(
             code="ONTOLOGY_INVALID",
         )
     return members
+
+
+def _struct_fields(
+    annotation: Any, field_name: str, class_name: str, *, opaque_json: bool = False
+) -> tuple[StructFieldDef, ...] | None:
+    """Derive a flat BaseModel's declared scalar fields, if applicable."""
+    if not isinstance(annotation, type) or not issubclass(annotation, BaseModel):
+        return None
+    path = f"{class_name}.{field_name}"
+    if issubclass(annotation, OntologyObject):
+        raise ValidationFailed(
+            f"{path}: an OntologyObject cannot be a struct; use a link",
+            code="ONTOLOGY_INVALID",
+        )
+    if issubclass(annotation, RootModel):
+        raise ValidationFailed(
+            f"{path}: a RootModel cannot be a struct; "
+            "annotate the inner type directly, or use a flat BaseModel",
+            code="ONTOLOGY_INVALID",
+        )
+    fields: list[StructFieldDef] = []
+    for inner_name, inner_info in annotation.model_fields.items():
+        inner_path = f"{path}.{inner_name}"
+        if not opaque_json and (
+            inner_info.default_factory is not None
+            or (not inner_info.is_required() and inner_info.default is not None)
+        ):
+            raise ValidationFailed(
+                f"{inner_path}: struct inner field '{inner_name}' has a default; "
+                "a struct inner field may only default to None "
+                "(make it Optional with `= None`, or set the value at the call site)",
+                code="ONTOLOGY_INVALID",
+            )
+        if any(
+            alias is not None and alias != inner_name
+            for alias in (
+                inner_info.alias,
+                inner_info.validation_alias,
+                inner_info.serialization_alias,
+            )
+        ):
+            raise ValidationFailed(
+                f"{inner_path}: inner aliases are unsupported; use the field name",
+                code="ONTOLOGY_INVALID",
+            )
+        if _field_ontary_meta(inner_info.json_schema_extra):
+            raise ValidationFailed(
+                f"{inner_path}: inner prop() metadata is unsupported; "
+                "mark the whole property",
+                code="ONTOLOGY_INVALID",
+            )
+        inner_annotation, inner_optional = _unwrap_optional(inner_info.annotation)
+        if isinstance(inner_annotation, type) and issubclass(inner_annotation, BaseModel):
+            if issubclass(inner_annotation, OntologyObject):
+                raise ValidationFailed(
+                    f"{inner_path}: an OntologyObject cannot be a struct; use a link",
+                    code="ONTOLOGY_INVALID",
+                )
+            raise ValidationFailed(
+                f"{inner_path}: nested structs are unsupported; "
+                "flatten it, or use a linked object type",
+                code="ONTOLOGY_INVALID",
+            )
+        choices = _choice_members(inner_annotation, inner_name, path)
+        if choices is not None:
+            inner_type: PropertyType = "str"
+        else:
+            inner_type = _property_type_for(inner_annotation, inner_name, path)
+        if inner_type == "json":
+            raise ValidationFailed(
+                f"{inner_path}: json/dict/list/Any inner fields are unsupported; "
+                "use a scalar field",
+                code="ONTOLOGY_INVALID",
+            )
+        fields.append(
+            StructFieldDef(
+                name=inner_name,
+                type=inner_type,
+                choices=choices,
+                required=not inner_optional,
+            )
+        )
+    return tuple(fields)
+
+
+def _apply_struct_type_override(
+    fields: tuple[StructFieldDef, ...] | None,
+    meta: dict[str, Any],
+    field_name: str,
+    class_name: str,
+) -> tuple[StructFieldDef, ...] | None:
+    if fields is None:
+        return None
+    override = meta.get("property_type")
+    if override == "json":
+        return None
+    if override is not None:
+        raise ValidationFailed(
+            f"{class_name}.{field_name}: remove property_type "
+            "(a model annotation derives a struct), or use "
+            "property_type='json' to store it opaque",
+            code="ONTOLOGY_INVALID",
+        )
+    return fields
 
 
 def _refuse_double_choices(meta: dict[str, Any], field_name: str, class_name: str) -> None:
@@ -242,8 +359,30 @@ def _derive_properties(cls: type["OntologyObject"]) -> tuple[list[PropertyDef], 
 
         meta = _field_ontary_meta(field_info.json_schema_extra)
         annotation, is_optional = _unwrap_optional(field_info.annotation)
-        choices = _choice_members(annotation, field_name, cls.__name__)
-        if choices is not None:
+        fields = _apply_struct_type_override(
+            _struct_fields(
+                annotation, field_name, cls.__name__,
+                opaque_json=meta.get("property_type") == "json",
+            ), meta, field_name, cls.__name__
+        )
+        if fields is not None:
+            if meta.get("primary_key"):
+                raise ValidationFailed(
+                    f"{cls.__name__}.{field_name}: a struct cannot be the primary key; "
+                    "use a string primary key",
+                    code="ONTOLOGY_INVALID",
+                )
+            if meta.get("choices") is not None:
+                raise ValidationFailed(
+                    f"{cls.__name__}.{field_name}: a struct declares its inner choices; "
+                    "drop prop(choices=...)",
+                    code="ONTOLOGY_INVALID",
+                )
+            property_type: PropertyType = "struct"
+            choices = None
+        else:
+            choices = _choice_members(annotation, field_name, cls.__name__)
+        if fields is None and choices is not None:
             _refuse_double_choices(meta, field_name, cls.__name__)
             if meta.get("primary_key"):
                 raise ValidationFailed(
@@ -252,8 +391,10 @@ def _derive_properties(cls: type["OntologyObject"]) -> tuple[list[PropertyDef], 
                     "annotate the primary key as str",
                     code="ONTOLOGY_INVALID",
                 )
-            property_type: PropertyType = meta.get("property_type") or "str"
-        else:
+            property_type = meta.get("property_type") or "str"
+        elif fields is None:
+            if get_origin(annotation) in (dict, list) and _contains_model(annotation):
+                _property_type_for(annotation, field_name, cls.__name__)
             property_type = meta.get("property_type") or _property_type_for(
                 annotation, field_name, cls.__name__
             )
@@ -282,6 +423,7 @@ def _derive_properties(cls: type["OntologyObject"]) -> tuple[list[PropertyDef], 
                 name=field_name,
                 type=property_type,
                 choices=tuple(choices) if choices is not None else None,
+                fields=fields,
                 required=required,
                 sensitivity=sensitivity,
                 scope_level=meta.get("scope_level"),
@@ -409,13 +551,34 @@ def _derive_action_params(
             )
             property_type: PropertyType = "str"
             choices = None
+            fields = None
         else:
             refers_to = None
-            choices = _choice_members(annotation, field_name, cls.__name__)
-            if choices is not None:
-                property_type = "str"
+            struct_fields = _struct_fields(
+                annotation, field_name, cls.__name__,
+                opaque_json=meta.get("property_type") == "json",
+            )
+            fields = _apply_struct_type_override(
+                struct_fields, meta, field_name, cls.__name__,
+            )
+            if fields is not None:
+                if meta.get("choices") is not None:
+                    raise ValidationFailed(
+                        f"{cls.__name__}.{field_name}: a struct declares its inner choices; "
+                        "drop prop(choices=...)",
+                        code="ONTOLOGY_INVALID",
+                    )
+                property_type = "struct"
+                choices = None
             else:
-                property_type = _property_type_for(annotation, field_name, cls.__name__)
+                choices = _choice_members(annotation, field_name, cls.__name__)
+            if fields is None and choices is not None:
+                property_type = "str"
+            elif fields is None:
+                property_type = (
+                    "json" if struct_fields is not None
+                    else _property_type_for(annotation, field_name, cls.__name__)
+                )
 
         required = meta.get("required")
         if required is None:
@@ -426,6 +589,7 @@ def _derive_action_params(
                 name=field_name,
                 type=property_type,
                 choices=choices,
+                fields=fields,
                 required=required,
                 refers_to=refers_to,
                 scope_semantics=scope_semantics,

@@ -881,6 +881,11 @@ class GuardedQuery:
                 f"hidden field(s) [{order_field!r}]",
                 code="VISIBILITY_DENIED",
             )
+        if self._property_type(obj_type, order_field) == "struct":
+            raise ValidationFailed(
+                f"order_by is not supported on struct property {order_field!r}",
+                code="INVALID_PARAMS",
+            )
         if direction not in {"asc", "desc"}:
             raise ValidationFailed(
                 "get_objects order_by direction must be 'asc' or 'desc', "
@@ -1006,6 +1011,11 @@ class GuardedQuery:
         the caller's mapping -- see `_normalize_where_condition` for why a
         second read of that mapping was a disclosure.
         """
+        if prop_type == "struct":
+            raise ValidationFailed(
+                f"where is not supported on struct property {field!r}",
+                code="OPERATOR_TYPE_MISMATCH",
+            )
         kind, operator, operand = condition
         if kind in ("bare", "operator"):
             operand = self._unwrap_choice_operand(operand, choices)

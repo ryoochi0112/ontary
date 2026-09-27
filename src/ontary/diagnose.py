@@ -213,7 +213,9 @@ def _registry_owned_default_findings(
                         )
                     )
                 continue
-            mismatch = validate_scalar(default, prop.type, prop.choices)
+            mismatch = validate_scalar(
+                default, prop.type, prop.choices, fields=prop.fields
+            )
             if mismatch is not None:
                 findings.append(
                     _error(
@@ -899,9 +901,13 @@ def _row_hydration_failures(
             if prop.required and (prop.name in payload or cls is None):
                 missing.add(prop.name)
             continue
-        violation = _storage_scalar_violation(value, prop.type, prop.choices)
+        violation = _storage_scalar_violation(
+            value, prop.type, prop.choices, fields=prop.fields
+        )
         if violation is None and cls is None:
-            violation = validate_scalar(value, prop.type, prop.choices)
+            violation = validate_scalar(
+                value, prop.type, prop.choices, fields=prop.fields
+            )
         if violation is not None:
             invalid.setdefault(prop.name, violation)
     if cls is not None:

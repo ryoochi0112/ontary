@@ -17,13 +17,14 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, model_validator
 
 from ontary.errors import ValidationFailed
-from ontary.typesys import PropertyType, normalize_choice_values, validate_scalar
+from ontary.typesys import PropertyType, choice_value, struct_value, validate_scalar
 
 __all__ = [
     "PropertyType",
     "Cardinality",
     "Sensitivity",
     "PropertyDef",
+    "StructFieldDef",
     "ObjectTypeDef",
     "LinkTypeDef",
     "ActionParameterDef",
@@ -72,10 +73,48 @@ def _choices_declaration_violation(
     return None
 
 
+class StructFieldDef(BaseModel):
+    name: str
+    type: PropertyType
+    choices: tuple[str, ...] | None = None
+    required: bool = True
+
+    @model_validator(mode="before")
+    @classmethod
+    def _valid_declaration(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        name = data.get("name")
+        if data.get("type") not in {"str", "int", "float", "bool", "date", "datetime"}:
+            raise ValidationFailed(
+                f"StructFieldDef {name!r}: type must be a scalar str/int/float/bool/date/datetime",
+                code="ONTOLOGY_INVALID",
+            )
+        violation = _choices_declaration_violation(data.get("type"), data.get("choices"))
+        if violation is not None:
+            raise ValidationFailed(f"StructFieldDef {name!r}: {violation}", code="ONTOLOGY_INVALID")
+        return data
+
+
+def _fields_declaration_violation(
+    prop_type: PropertyType, fields: tuple[StructFieldDef, ...] | None
+) -> str | None:
+    if prop_type == "struct":
+        if not fields:
+            return "struct fields must be non-empty"
+        names = [field.name for field in fields]
+        if len(names) != len(set(names)):
+            return "struct fields contain a duplicate name"
+    elif fields is not None:
+        return "fields are only valid on 'struct' declarations"
+    return None
+
+
 class PropertyDef(BaseModel):
     name: str
     type: PropertyType
     choices: tuple[str, ...] | None = None
+    fields: tuple[StructFieldDef, ...] | None = None
     required: bool = True
     sensitivity: Sensitivity = Field(default_factory=Sensitivity)
     scope_level: ScopeLevel = None
@@ -94,6 +133,13 @@ class PropertyDef(BaseModel):
                 code="ONTOLOGY_INVALID",
             )
         return data
+
+    @model_validator(mode="after")
+    def _valid_fields(self) -> PropertyDef:
+        violation = _fields_declaration_violation(self.type, self.fields)
+        if violation is not None:
+            raise ValidationFailed(f"PropertyDef {self.name!r}: {violation}", code="ONTOLOGY_INVALID")
+        return self
 
 
 class ObjectTypeDef(BaseModel):
@@ -132,20 +178,23 @@ class ObjectTypeDef(BaseModel):
         carries no per-property defaults of its own).
         """
         if isinstance(self.owned, dict):
-            return normalize_choice_payload(self, self.owned)
+            return normalize_declared_payload(self, self.owned)
         return {}
 
 
-def normalize_choice_payload(
+def normalize_declared_payload(
     obj_def: "ObjectTypeDef", payload: Mapping[str, Any]
 ) -> dict[str, Any]:
-    """Copy ``payload`` with each `choices`-declared property's ``Enum``
-    member replaced by its value (#42; see `typesys.choice_value`). Every
-    write entry runs this FIRST, before the primary key is read and before
-    `declared_shape_violation`."""
-    return normalize_choice_values(
-        payload, {prop.name: prop.choices for prop in obj_def.properties}
-    )
+    """Normalize declared choices and structs before write validation."""
+    declarations = {prop.name: prop for prop in obj_def.properties}
+    normalized: dict[str, Any] = {}
+    for name, value in payload.items():
+        declared = declarations.get(name)
+        if declared is not None and declared.type == "struct" and declared.fields is not None:
+            normalized[name] = struct_value(value, declared.fields)
+        else:
+            normalized[name] = choice_value(value, declared.choices if declared is not None else None)
+    return normalized
 
 
 def declared_shape_violation(
@@ -200,8 +249,11 @@ def declared_shape_violation(
             continue
         if value is None:
             continue
-        mismatch = validate_scalar(value, declared.type, declared.choices)
+        mismatch = validate_scalar(value, declared.type, declared.choices, fields=declared.fields)
         if mismatch is not None:
+            if declared.type == "struct" and ": " in mismatch:
+                inner, mismatch = mismatch.split(": ", 1)
+                key = f"{key}.{inner}"
             return f"property {key!r} {mismatch}"
     return None
 
@@ -244,6 +296,7 @@ class ActionParameterDef(BaseModel):
     name: str
     type: PropertyType
     choices: tuple[str, ...] | None = None
+    fields: tuple[StructFieldDef, ...] | None = None
     required: bool = True
     refers_to: str | None = None
     scope_semantics: Literal["target", "scope"] | None = None
@@ -262,6 +315,15 @@ class ActionParameterDef(BaseModel):
                 code="ONTOLOGY_INVALID",
             )
         return data
+
+    @model_validator(mode="after")
+    def _valid_fields(self) -> ActionParameterDef:
+        violation = _fields_declaration_violation(self.type, self.fields)
+        if violation is not None:
+            raise ValidationFailed(
+                f"ActionParameterDef {self.name!r}: {violation}", code="ONTOLOGY_INVALID"
+            )
+        return self
 
 
 class CapabilityDef(BaseModel):
@@ -526,8 +588,11 @@ class OntologyRegistry:
                             "property is required"
                         )
                     continue
-                mismatch = validate_scalar(default, prop.type, prop.choices)
+                mismatch = validate_scalar(default, prop.type, prop.choices, fields=prop.fields)
                 if mismatch is not None:
+                    if prop.type == "struct" and ": " in mismatch:
+                        inner, mismatch = mismatch.split(": ", 1)
+                        prop_name = f"{prop_name}.{inner}"
                     errors.append(
                         f"ObjectTypeDef {obj.api_name!r}: owned property "
                         f"{prop_name!r} default {mismatch}"

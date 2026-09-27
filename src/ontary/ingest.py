@@ -23,7 +23,7 @@ from ontary.meta import (
     ObjectTypeDef,
     OntologyRegistry,
     PropertyDef,
-    normalize_choice_payload,
+    normalize_declared_payload,
 )
 from ontary.store import Source, Store
 from ontary.typesys import validate_scalar
@@ -195,8 +195,11 @@ def _validate_record(
             if prop.required:
                 return "INVALID_RECORD", f"property {key!r} is required but null"
             continue
-        mismatch = validate_scalar(value, prop.type, prop.choices)
+        mismatch = validate_scalar(value, prop.type, prop.choices, fields=prop.fields)
         if mismatch is not None:
+            if prop.type == "struct" and ": " in mismatch:
+                inner, mismatch = mismatch.split(": ", 1)
+                key = f"{key}.{inner}"
             return "INVALID_RECORD", f"property {key!r} {mismatch}"
 
     return None
@@ -276,7 +279,7 @@ def bulk_upsert(
             )
             continue
 
-        record = normalize_choice_payload(obj_def, record)
+        record = normalize_declared_payload(obj_def, record)
         rejection = _validate_record(obj_def, record)
         if rejection is not None:
             code, reason = rejection

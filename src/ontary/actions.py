@@ -38,7 +38,7 @@ from ontary.model import CapabilityHandle, LinkHandle, OntologyObject, hydrate
 from ontary.scope import ScopePolicy, resolve_owning_scope
 from ontary.security import Consumer, covers_scope
 from ontary.store import AuditEntry, Source, Store, StoredObject
-from ontary.typesys import _to_storage_scalar, choice_value, validate_scalar
+from ontary.typesys import _to_storage_scalar, choice_value, struct_value, validate_scalar
 
 TypedHandler = Callable[["ActionContext", BaseModel], dict[str, Any]]
 P = TypeVar("P")
@@ -195,10 +195,19 @@ class ActionContext:
         obj_def = self._registry_or_raise("save").get_object_type(api_name)
         return [p.name for p in obj_def.properties]
 
+    def _declared_snapshot(self, obj: OntologyObject, api_name: str) -> dict[str, Any]:
+        properties = self._registry_or_raise("save").get_object_type(api_name).properties
+        struct_names = {p.name for p in properties if p.type == "struct"}
+        snapshot = obj.model_dump(include={p.name for p in properties} - struct_names)
+        for prop in properties:
+            if prop.type == "struct" and prop.fields is not None:
+                snapshot[prop.name] = struct_value(getattr(obj, prop.name), prop.fields)
+        return snapshot
+
     def _hand_out(self, cls: type[_O], stored: StoredObject) -> _O:
         obj = hydrate(cls, stored, self._consumer.kind)
         api_name = stored.lineage.object_type
-        snapshot = obj.model_dump(include=set(self._property_names(api_name)))
+        snapshot = self._declared_snapshot(obj, api_name)
         self._loaded[id(obj)] = (obj, api_name, snapshot)
         return obj
 
@@ -290,7 +299,7 @@ class ActionContext:
             )
         _, api_name, snapshot = entry
         names = self._property_names(api_name)
-        current = obj.model_dump(include=set(names))
+        current = self._declared_snapshot(obj, api_name)
         changes = {
             name: getattr(obj, name) for name in names if current.get(name) != snapshot.get(name)
         }
@@ -978,17 +987,36 @@ class ActionExecutor:
         audit trail, and a dict handler all see the plain string.
         """
         if isinstance(params, BaseModel):
-            return params.model_dump(mode="json")
+            struct_names = {p.name for p in action_def.parameters if p.type == "struct"}
+            dumped = params.model_dump(mode="json", exclude=struct_names)
+            for typed_param in action_def.parameters:
+                if typed_param.type == "struct" and typed_param.fields is not None:
+                    value = struct_value(getattr(params, typed_param.name), typed_param.fields)
+                    dumped[typed_param.name] = (
+                        _to_storage_scalar(value, typed_param.type, fields=typed_param.fields)
+                        if value is not None
+                        and validate_scalar(value, typed_param.type, fields=typed_param.fields) is None
+                        else value
+                    )
+            return dumped
         declared = {p.name: p for p in action_def.parameters}
-        unwrapped = {
-            name: choice_value(value, declared[name].choices) if name in declared else value
-            for name, value in params.items()
-        }
+        unwrapped = {}
+        for name, value in params.items():
+            param = declared.get(name)
+            if param is not None:
+                if param.type == "struct" and param.fields is not None:
+                    value = struct_value(value, param.fields)
+                value = choice_value(value, param.choices)
+            unwrapped[name] = value
         return {
-            name: _to_storage_scalar(value, declared[name].type)
+            name: _to_storage_scalar(
+                value, declared[name].type, fields=declared[name].fields
+            )
             if name in declared
             and value is not None
-            and validate_scalar(value, declared[name].type) is None
+            and validate_scalar(
+                value, declared[name].type, fields=declared[name].fields
+            ) is None
             else value
             for name, value in unwrapped.items()
         }
@@ -1011,6 +1039,26 @@ class ActionExecutor:
         if not isinstance(params, BaseModel):
             return
         for param in action_def.parameters:
+            if param.type == "struct" and param.fields is not None:
+                value = getattr(params, param.name, None)
+                if not isinstance(value, BaseModel):
+                    continue
+                for field in param.fields:
+                    if field.type != "datetime":
+                        continue
+                    inner = getattr(value, field.name, None)
+                    if not isinstance(inner, datetime):
+                        continue
+                    mismatch = validate_scalar(inner, field.type)
+                    if mismatch is not None:
+                        self._error(
+                            consumer,
+                            action_name,
+                            action_def,
+                            params_dict,
+                            f"{action_name!r}: {param.name}.{field.name}: {mismatch}",
+                            invocation_id,
+                        )
             if param.type != "datetime":
                 continue
             value = getattr(params, param.name, None)
@@ -1063,12 +1111,17 @@ class ActionExecutor:
                 continue
             type_error = self._type_mismatch(param, value)
             if type_error is not None:
+                location = (
+                    f"{param.name}.{type_error}"
+                    if param.type == "struct" and ": " in type_error
+                    else f"parameter {param.name!r} {type_error}"
+                )
                 self._error(
                     consumer,
                     action_name,
                     action_def,
                     params,
-                    f"{action_name!r}: parameter {param.name!r} {type_error}",
+                    f"{action_name!r}: {location}",
                     invocation_id,
                 )
 
@@ -1175,7 +1228,7 @@ class ActionExecutor:
         single source of truth for `PropertyType` -> python-type checks,
         including the bool-is-not-int guard and ISO-8601 datetime
         parsing) or outside its declared `choices` (#42)."""
-        return validate_scalar(value, param.type, param.choices)
+        return validate_scalar(value, param.type, param.choices, fields=param.fields)
 
     def _enforce_scope(
         self,

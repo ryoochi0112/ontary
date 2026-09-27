@@ -97,9 +97,14 @@ max-complexity = 16
 python_version = "3.12"
 strict = true
 mypy_path = "src"
-# The Makefile's `make typecheck` passes explicit paths (src, examples, scripts,
-# and the admitted test files); `packages` covers plain `uv run mypy` too.
-packages = ["ontary"]
+# Keep plain `uv run mypy` aligned with the Makefile's admitted paths.
+files = [
+    "src", "examples", "scripts", "tests/test_typing_surface.py",
+    "tests/test_typed_action_context.py", "tests/test_choice_properties.py",
+    "tests/test_struct_properties_core.py", "tests/test_struct_properties_writes.py",
+    "tests/test_struct_properties_authoring.py", "tests/test_struct_properties_reads.py",
+    "tests/test_struct_properties_actions.py", "tests/test_struct_properties_mcp.py",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

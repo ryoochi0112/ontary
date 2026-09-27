@@ -619,6 +619,15 @@ def _object_type_payload(defn: ObjectTypeDef) -> dict[str, Any]:
                 "name": p.name,
                 "type": p.type,
                 "choices": None if p.choices is None else list(p.choices),
+                "fields": None if p.fields is None else [
+                    {
+                        "name": field.name,
+                        "type": field.type,
+                        "required": field.required,
+                        "choices": None if field.choices is None else list(field.choices),
+                    }
+                    for field in p.fields
+                ],
                 "required": p.required,
                 "ai_usable": p.sensitivity.ai_usable,
                 "human_visible": p.sensitivity.human_visible,
@@ -653,6 +662,15 @@ def _action_type_payload(defn: ActionTypeDef) -> dict[str, Any]:
                 "name": p.name,
                 "type": p.type,
                 "choices": None if p.choices is None else list(p.choices),
+                "fields": None if p.fields is None else [
+                    {
+                        "name": field.name,
+                        "type": field.type,
+                        "required": field.required,
+                        "choices": None if field.choices is None else list(field.choices),
+                    }
+                    for field in p.fields
+                ],
                 "required": p.required,
                 "refers_to": p.refers_to,
                 "scope_semantics": p.scope_semantics,

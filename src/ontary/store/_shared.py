@@ -32,7 +32,7 @@ from ontary.meta import (
     ObjectTypeDef,
     OntologyRegistry,
     declared_shape_violation,
-    normalize_choice_payload,
+    normalize_declared_payload,
 )
 from ontary.store.values import StoredObject
 from ontary.typesys import _to_storage_scalar
@@ -263,10 +263,10 @@ def _normalize_payload_scalars(
     obj_def: ObjectTypeDef, payload: dict[str, Any]
 ) -> dict[str, Any]:
     """Copy ``payload`` with declared scalars converted to storage forms."""
-    prop_types = {prop.name: prop.type for prop in obj_def.properties}
+    props = {prop.name: prop for prop in obj_def.properties}
     return {
-        key: _to_storage_scalar(value, prop_types[key])
-        if key in prop_types and value is not None
+        key: _to_storage_scalar(value, props[key].type, fields=props[key].fields)
+        if key in props and value is not None
         else value
         for key, value in payload.items()
     }
@@ -301,7 +301,7 @@ def prepare_insert(
             code="SOURCE_CREATE_REFUSED",
         )
 
-    payload = normalize_choice_payload(obj_def, payload)
+    payload = normalize_declared_payload(obj_def, payload)
     obj_id = payload.get(obj_def.primary_key)
     if obj_id is None:
         obj_id = str(uuid.uuid4())
@@ -385,7 +385,7 @@ def merge_update(
             code="OBJECT_NOT_FOUND",
         )
 
-    payload_changes = normalize_choice_payload(obj_def, payload_changes)
+    payload_changes = normalize_declared_payload(obj_def, payload_changes)
     merged = {**current.payload, **payload_changes}
     violation = declared_shape_violation(obj_def, merged)
     if violation is not None:

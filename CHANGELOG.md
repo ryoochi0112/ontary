@@ -30,6 +30,26 @@ you**.
   accepts an `Enum` member whose value is one of its choices, since it is the
   same declaration. A `str` property without `choices` refuses an `Enum` member
   exactly as before.
+- Struct properties and action parameters (#43). A flat Pydantic model
+  annotation declares `type="struct"` with its inner fields exposed through
+  `PropertyDef.fields` or `ActionParameterDef.fields`. `StructFieldDef` describes
+  each inner field. MCP schema discovery includes `fields` (null for non-structs).
+  An absent optional inner field is stored as explicit `null`, so a dict write
+  hydrates like the equivalent model instance. Struct inner fields may only
+  default to `None`. This additively widens
+  `PropertyType`; `SCHEMA_VERSION` is unchanged.
+
+### Changed
+
+- `list[<BaseModel>]` and `dict[..., <BaseModel>]` annotations now raise
+  `ONTOLOGY_INVALID` with the fix "use a linked object type". Previously they
+  derived `type="json"`; `prop(property_type="json")` does not bypass the refusal.
+- A model annotation with an explicit `prop(property_type=...)` other than
+  `"json"` now raises `ONTOLOGY_INVALID`. `property_type="json"` still stores
+  the model opaque.
+- A `RootModel` annotation now raises `ONTOLOGY_INVALID`, including with an
+  explicit `property_type="json"`. An unadorned `RootModel` was already refused
+  before #43; a property with an explicit JSON override previously accepted it.
 
 ## [0.17.0] — 2026-09-27
 

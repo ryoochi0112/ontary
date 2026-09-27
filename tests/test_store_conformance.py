@@ -3254,3 +3254,60 @@ def test_diagnose_store_sweep_reports_rows_an_edited_ontology_cannot_hydrate(
     assert "1 missing" in findings[0].message
     with raises_code(ValidationFailed, "INVALID_RECORD"):
         v2.validate(store=store)
+
+
+# -- structured-property parity (#43) ----------------------------------------
+
+
+class _ConformanceMoney(BaseModel):
+    value: float
+    currency: Literal["JPY", "USD"]
+    booked: date
+    observed: datetime
+
+
+def test_struct_money_round_trip_and_instance_dict_parity(
+    store_factory: StoreFactory,
+) -> None:
+    local = Ontology("struct-conformance", scope_levels=["org"], min_n=1)
+
+    @local.object(layer="L0", scope="unscoped")
+    class Order(OntologyObject):
+        id: str = prop(primary_key=True)
+        amount: _ConformanceMoney
+
+    local.validate()
+    store = store_factory(local.registry)
+    money = _ConformanceMoney(
+        value=100, currency="JPY", booked=date(2026, 9, 27),
+        observed=datetime(2026, 9, 27, 12, 30, tzinfo=timezone.utc),
+    )
+    plain = {
+        "value": 100.0, "currency": "JPY", "booked": "2026-09-27",
+        "observed": "2026-09-27T12:30:00+00:00",
+    }
+    store.insert("Order", {"id": "model", "amount": money}, Source(source_system="test"))
+    store.insert("Order", {"id": "dict", "amount": plain}, Source(source_system="test"))
+    model_row = store.read_current("Order", "model")
+    dict_row = store.read_current("Order", "dict")
+    assert model_row is not None and dict_row is not None
+    assert model_row.payload["amount"] == dict_row.payload["amount"] == plain
+
+    client = local.bind(store).for_consumer(_date_consumer())
+    typed = client.get(Order, "model")
+    assert typed is not None
+    assert type(typed.amount) is _ConformanceMoney
+    assert typed.amount == money
+    assert type(typed.amount.booked) is date
+    assert type(typed.amount.observed) is datetime
+    untyped = client.get("Order", "model")
+    assert untyped is not None and type(untyped.payload["amount"]) is dict
+    assert untyped.payload["amount"] == plain
+
+    with raises_code(ValidationFailed, "INVALID_RECORD") as excinfo:
+        store.insert(
+            "Order", {"id": "extra", "amount": {**plain, "extra": 1}},
+            Source(source_system="test"),
+        )
+    assert "amount.extra" in str(excinfo.value)
+    assert store.read_current("Order", "extra") is None
