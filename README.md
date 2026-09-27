@@ -131,6 +131,7 @@ exit codes: [CLI reference](docs/cli.md).
 | Command line | [CLI reference](docs/cli.md) · [日本語](docs/cli.ja.md) |
 | Testing your ontology | [Testing](docs/testing.md) · [日本語](docs/testing.ja.md) |
 | Worked recipes | [Tickets reference app](examples/tickets/README.md) |
+| What is planned | [Roadmap](docs/roadmap.md) |
 | Compatibility and migration | [CHANGELOG.md](CHANGELOG.md) · [Compatibility](docs/compatibility.md) |
 | Cutting a release (maintainers) | [Releasing](docs/releasing.md) |
 | Reporting a vulnerability | [Security policy](SECURITY.md) |
