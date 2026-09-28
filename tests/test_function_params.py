@@ -1,13 +1,24 @@
-from typing import Literal
+from typing import Any, Literal
 
 import pytest
 from conftest import raises_code
 from pydantic import ValidationError
 
-from ontary import ActionParams, FunctionParams
+from ontary import (
+    ActionParams,
+    FunctionParams,
+    Ontology,
+    OntologyObject,
+    prop,
+    ref,
+    scope_ref,
+    target,
+)
 from ontary.errors import ValidationFailed
+from ontary.functions import BoundQuery
 from ontary.meta import ActionParameterDef, FunctionDef
 from ontary.model import _class_stamp
+from ontary.store import ObjectStore
 
 
 def _function_def(
@@ -57,3 +68,201 @@ def test_function_def_refuses_scope_semantics(
     assert "ticketStats" in message
     assert "queue_id" in message
     assert "ref()" in message
+
+
+def _ontology() -> Ontology:
+    return Ontology("functions", scope_levels=["org"], min_n=1)
+
+
+def test_typed_function_derives_fields_and_stamps_class() -> None:
+    ontology = _ontology()
+
+    @ontology.object(layer="L0", scope="unscoped")
+    class Queue(OntologyObject):
+        id: str = prop(primary_key=True)
+
+    class Details(FunctionParams):
+        note: str
+
+    class Params(FunctionParams):
+        queue_id: str = ref(Queue)
+        limit: int | None
+        state: Literal["open", "closed"]
+        details: Details
+
+    @ontology.function(Params, api_name="stats")
+    def stats(_query: BoundQuery, params: Params) -> int:
+        return params.limit or 0
+
+    assert stats.__name__ == "stats"
+    assert _class_stamp(Params) == ("stats", ontology.registry)
+    fields = ontology.registry.get_function("stats").parameters
+    assert fields is not None
+    assert [(field.name, field.type, field.required) for field in fields] == [
+        ("queue_id", "str", True),
+        ("limit", "int", False),
+        ("state", "str", True),
+        ("details", "struct", True),
+    ]
+    assert fields[0].refers_to == "Queue"
+    assert fields[1].scope_semantics is None
+    assert fields[2].choices == ("open", "closed")
+    assert fields[3].fields is not None
+    assert fields[3].fields[0].name == "note"
+    assert Params(queue_id="q1", state="open", details=Details(note="ok")).limit is None
+
+
+@pytest.mark.parametrize("marker", [target, scope_ref])
+def test_function_refuses_action_only_markers(marker: Any) -> None:
+    ontology = _ontology()
+
+    @ontology.object(layer="L0", scope="unscoped")
+    class Queue(OntologyObject):
+        id: str = prop(primary_key=True)
+
+    class Params(FunctionParams):
+        queue_id: str = marker(Queue)
+
+    with raises_code(ValidationFailed, "ONTOLOGY_INVALID") as exc_info:
+        @ontology.function(Params)
+        def stats(_query: BoundQuery, _params: Params) -> None:
+            pass
+
+    assert "Params.queue_id" in str(exc_info.value)
+    assert "ref()" in str(exc_info.value)
+    assert "action-only" in str(exc_info.value)
+
+
+def test_function_rejects_wrong_reused_and_foreign_params_class() -> None:
+    ontology = _ontology()
+
+    class Wrong(ActionParams):
+        pass
+
+    with raises_code(ValidationFailed, "ONTOLOGY_INVALID") as wrong:
+        @ontology.function(Wrong)  # type: ignore[type-var]
+        def wrong_fn(_query: BoundQuery, _params: Wrong) -> None:
+            pass
+    assert "FunctionParams" in str(wrong.value)
+
+    class Params(FunctionParams):
+        value: int
+
+    @ontology.function(Params)
+    def first(_query: BoundQuery, _params: Params) -> None:
+        pass
+
+    with raises_code(ValidationFailed, "ONTOLOGY_INVALID") as duplicate:
+        @ontology.function(Params)
+        def second(_query: BoundQuery, _params: Params) -> None:
+            pass
+    assert "first" in str(duplicate.value)
+    assert "already declared" in str(duplicate.value)
+
+    other = _ontology()
+    with raises_code(ValidationFailed, "ONTOLOGY_INVALID") as foreign:
+        @other.function(Params)
+        def third(_query: BoundQuery, _params: Params) -> None:
+            pass
+    assert "another Ontology" in str(foreign.value)
+
+
+def test_typed_function_validates_before_handler_and_audits_error(
+    make_consumer: Any,
+) -> None:
+    ontology = _ontology()
+    seen: list[FunctionParams] = []
+
+    class Params(FunctionParams):
+        count: int
+        state: Literal["open", "closed"]
+
+    @ontology.function(Params, api_name="stats", audit=True)
+    def stats(_query: BoundQuery, params: Params) -> int:
+        seen.append(params)
+        return params.count
+
+    store = ObjectStore(ontology.registry)
+    client = ontology.bind(store).for_consumer(
+        make_consumer(actor_id="u1", role="Member", scope_level="org", scope_id="o1", kind="human")
+    )
+    assert client.call_function("stats", {"count": "2", "state": "open"}) == 2
+    assert isinstance(seen[0], Params)
+    assert seen[0].count == 2
+    instance = Params(count=3, state="closed")
+    bound = BoundQuery(client._query, client._consumer, ontology.registry)
+    assert ontology.definition.functions.call("stats", bound, instance) == 3
+    assert seen[-1] is instance
+    before = len(store.audit_entries())
+    for invalid in (
+        {"state": "open"},
+        {"count": "bad", "state": "open"},
+        {"count": 1, "state": "other"},
+        {"count": 1, "state": "open", "extra": True},
+    ):
+        with raises_code(ValidationFailed, "INVALID_PARAMS") as exc_info:
+            client.call_function("stats", invalid)
+        assert "stats" in str(exc_info.value)
+    assert len(seen) == 2
+    entries = store.audit_entries()[before:]
+    assert len(entries) == 4
+    assert all(entry.outcome == "error" and entry.error_code == "INVALID_PARAMS" for entry in entries)
+
+    class Other(FunctionParams):
+        count: int
+
+    with raises_code(ValidationFailed, "INVALID_PARAMS") as wrong:
+        ontology.definition.functions.call(
+            "stats", bound, Other(count=1)
+        )
+    assert "stats" in str(wrong.value)
+
+
+def test_no_input_and_legacy_modes(make_consumer: Any) -> None:
+    ontology = _ontology()
+
+    @ontology.function(api_name="empty")
+    def empty(_query: BoundQuery) -> str:
+        return "ok"
+
+    with pytest.warns(DeprecationWarning, match="legacy.*0.20.0"):
+        @ontology.function(api_name="legacy")
+        def legacy(_query: BoundQuery, params: dict[str, Any]) -> Any:
+            return params["value"]
+
+    assert ontology.registry.get_function("empty").parameters == []
+    assert ontology.registry.get_function("legacy").parameters is None
+    store = ObjectStore(ontology.registry)
+    client = ontology.bind(store).for_consumer(
+        make_consumer(actor_id="u1", role="Member", scope_level="org", scope_id="o1", kind="human")
+    )
+    assert client.call_function("empty", {}) == "ok"
+    assert client.call_function("legacy", {"value": 3}) == 3
+    with raises_code(ValidationFailed, "INVALID_PARAMS") as exc_info:
+        client.call_function("empty", {"value": 3})
+    assert "empty" in str(exc_info.value)
+    assert "no params" in str(exc_info.value)
+    with raises_code(ValidationFailed, "INVALID_PARAMS") as instance_error:
+        ontology.definition.functions.call(
+            "empty",
+            BoundQuery(client._query, client._consumer, ontology.registry),
+            FunctionParams(),
+        )
+    assert "empty" in str(instance_error.value)
+
+
+def test_single_argument_with_default_or_varargs_is_legacy() -> None:
+    ontology = _ontology()
+
+    with pytest.warns(DeprecationWarning, match="defaulted.*0.20.0"):
+        @ontology.function(api_name="defaulted")
+        def defaulted(_query: BoundQuery | None = None) -> None:
+            pass
+
+    with pytest.warns(DeprecationWarning, match="variadic.*0.20.0"):
+        @ontology.function(api_name="variadic")
+        def variadic(_query: BoundQuery, *args: Any) -> None:
+            pass
+
+    assert ontology.registry.get_function("defaulted").parameters is None
+    assert ontology.registry.get_function("variadic").parameters is None
