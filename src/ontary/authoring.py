@@ -609,12 +609,15 @@ def _derive_action_params(
             else:
                 choices = _choice_members(annotation, field_name, cls.__name__)
             if fields is None and choices is not None:
+                _refuse_double_choices(meta, field_name, cls.__name__)
                 property_type = "str"
             elif fields is None:
                 property_type = (
                     "json" if struct_fields is not None
                     else _property_type_for(annotation, field_name, cls.__name__)
                 )
+                declared = meta.get("choices")
+                choices = tuple(declared) if declared is not None else None
 
         required = meta.get("required")
         if required is None:

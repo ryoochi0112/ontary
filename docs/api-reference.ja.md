@@ -316,6 +316,8 @@ class Ticket(OntologyObject):
   `aggregate_by` のキーは素の文字列を返します。
 - **Action パラメータ。** `ActionParams` のフィールドに同じ注釈を付けると、その
   `ActionParameterDef` に `choices` が付きます。型付きハンドラはメンバーを受け取ります。
+  `str` のパラメータに `prop(choices=[...])` を付けても、プロパティと同じく
+  `choices` が付きます。ハンドラは文字列を受け取ります。
 - **MCP。** `list_object_types` と `list_action_types` は、許される値を `choices` に
   列挙します（無い場合は `null`）。
 - **宣言時に拒否されるもの**（`ONTOLOGY_INVALID`）: `IntEnum` や `Literal[1, 2]` の

@@ -323,6 +323,8 @@ class Ticket(OntologyObject):
   return the plain string.
 - **Action parameters.** The same annotations on an `ActionParams` field set
   `choices` on its `ActionParameterDef`, and the typed handler receives the member.
+  `prop(choices=[...])` on a `str` parameter sets `choices` too, as on a property,
+  and the handler receives the string.
 - **MCP.** `list_object_types` and `list_action_types` list the allowed values
   under `choices` (`null` when a property or parameter has none).
 - **Refused at declaration** (`ONTOLOGY_INVALID`): a member that is not a string,

@@ -11,6 +11,14 @@ you**.
 
 ## [Unreleased]
 
+### Fixed
+
+- `prop(choices=[...])` on an `ActionParams` field now sets `choices` on its
+  `ActionParameterDef`, as it does on a property (#90). Before, it was silently
+  ignored, so the parameter accepted any string. Combining it with an `Enum` or
+  `Literal` annotation, or declaring invalid choices, is refused as
+  `ONTOLOGY_INVALID`, as on a property.
+
 ## [0.18.0] — 2026-09-28
 
 ```bash
