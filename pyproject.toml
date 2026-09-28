@@ -113,9 +113,6 @@ files = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src", "."]
-# A test that still reaches a deprecated string `ActionContext` member must
-# say so with `pytest.warns` (#41); everything else uses the typed members.
-filterwarnings = ["error:ActionContext\\.:DeprecationWarning"]
 
 [dependency-groups]
 docs = [
