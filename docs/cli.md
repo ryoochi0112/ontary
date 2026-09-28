@@ -33,7 +33,7 @@ When called with the `--json` flag, the command prints a JSON array of findings.
 
 ### Advisory Warning Codes
 
-The `diagnose` process may emit several advisory warning codes. These codes are `CRUD_ACTION_NAME`, `FORBIDDEN_TYPE_NAME`, `MICRO_ACTION`, `MIN_N_UNSET`, `STORED_DERIVABLE`, and `UNSCOPED_SENSITIVE`. Errors use the code `ONTOLOGY_INVALID`.
+The `diagnose` process may emit several advisory warning codes. These codes are `CRUD_ACTION_NAME`, `FORBIDDEN_TYPE_NAME`, `MICRO_ACTION`, `MIN_N_UNSET`, `STORED_DERIVABLE`, and `UNSCOPED_SENSITIVE`. Errors use `ONTOLOGY_INVALID` for declarations, `INVALID_RECORD` for stored rows that fail hydration, and `RULE_VIOLATED` for stored rows that break a declared rule.
 
 ### Options
 

@@ -379,15 +379,17 @@ class PostgresStore:
         payload_changes: dict[str, Any],
         source: Source,
     ) -> None:
+        capturing = self._write_capture.active
         obj_def = check_update_authority(
-            self._registry, obj_type, payload_changes, capturing=self._write_capture.active
+            self._registry, obj_type, payload_changes, capturing=capturing
         )
-        current = self.read_current(obj_type, obj_id)
-        merged = merge_update(obj_def, obj_type, obj_id, current, payload_changes)
-        encoded = json.dumps(merged)
-        now = _utcnow_iso()
-
         with self.transaction() as conn:
+            current = self.read_current(obj_type, obj_id)
+            merged = merge_update(
+                obj_def, obj_type, obj_id, current, payload_changes, capturing=capturing
+            )
+            encoded = json.dumps(merged)
+            now = _utcnow_iso()
             with conn.cursor() as cur:
                 cur.execute(
                     """

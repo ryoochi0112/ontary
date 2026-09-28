@@ -101,7 +101,7 @@ Python 3.12+。コアパッケージの依存は `pydantic` のみ。エクス�
 ### `ontary.meta`
 
 `ActionParameterDef`、`ActionTypeDef`、`FunctionDef`、`LinkTypeDef`、
-`ObjectTypeDef`、`OntologyRegistry`、`PropertyDef`、`StructFieldDef`、`PropertyType`、`ScopeLevel`。
+`ObjectTypeDef`、`OntologyRegistry`、`PropertyDef`、`StructFieldDef`、`TransitionDef`、`RuleDef`、`PropertyType`、`ScopeLevel`。
 
 ### `ontary.ontology`
 
@@ -245,7 +245,7 @@ ontology.validate(store=store)  # 編集したオントロジーを提供する�
 ためのものです。可視だが値が無い optional フィールドも `None` になりますが、
 こちらには決して現れません。
 
-#### `prop(*, primary_key=False, sensitivity=None, scope_level=None, required=None, property_type=None, choices=None, **field_kwargs)`
+#### `prop(*, primary_key=False, sensitivity=None, scope_level=None, required=None, property_type=None, choices=None, transitions=None, **field_kwargs)`
 
 `pydantic.Field(...)` にオントロジーのメタデータを足したもの。認識されない kwargs は
 そのまま `Field` に渡るので、`prop(default=None, description="...")` は期待どおりに
@@ -258,6 +258,29 @@ ontology.validate(store=store)  # 編集したオントロジーを提供する�
 
 `choices=["open", "closed"]` は `str` プロパティの値をその集合に限定します。
 それ以外の値は、どの書き込み経路でも拒否されます。
+
+`transitions=TransitionDef(initial=(...), moves={...})` は choice プロパティで
+許可する状態遷移を宣言します。文字列、または値が文字列の `Enum` メンバー
+（通常の `Enum` または `StrEnum`）を状態として指定できます。
+主キーには transitions を宣言できません。
+
+グラフは `prop(transitions=...)` で指定し、`TransitionDef` は
+`ontary.meta` から import します。`ontary.__all__` からは公開されません。
+
+#### `Ontology.rule(cls, name, *, message)`
+
+`@ontology.object` で `cls` を登録した後、型付きの述語をデコレートします。
+
+```python
+@ontology.rule(Order, "shipped_needs_payment", message="payment required")
+def shipped_needs_payment(order: Order) -> bool:
+    return order.status != OrderStatus.SHIPPED or order.paid_at is not None
+```
+
+述語は保存済みの行全体から復元されたオブジェクトを受け取り、そのオブジェクトだけを
+読み取る必要があります。名前とメッセージは型宣言に表示され、関数本体はエクスポート
+されるスキーマデータには含まれません。`ontology.definition` でオントロジーが固定
+されるまでルールを登録できます。
 
 #### 選択肢プロパティ: `Enum` と `Literal`
 
@@ -1200,6 +1223,10 @@ server = build_mcp_server(ontology, store, consumer, *, name=None,
 | `execute_action` | Action の実行 | `destructiveHint=True` |
 | `call_function` | Function の呼び出し | `readOnlyHint=True` |
 
+`list_object_types` はすべてのプロパティに `transitions` キーを含めます。グラフがない場合は
+`null`、ある場合は完全な `initial` 状態リストと `moves` の対応を返します。各オブジェクト型には
+`rules` リストもあり、各ルールの `name` と `message` を含みます。ルールのコードは含まれません。
+
 `query_objects(obj_type, where=None, order_by=None, limit=None, after=None)` は MCP surface では常に
 上限付きです。`limit` を省略するとサーバーのデフォルト上限 100 行を使い、明示する
 場合の最大値は 1000 です。内部のページ付き読み取りが不透明な `next_cursor` を返し、
@@ -1304,12 +1331,14 @@ stateful セッションでも、各 request はその request 自身のトー�
 
 | 型 | 主なフィールド |
 | --- | --- |
-| `ObjectTypeDef` | `api_name`, `display_name`, `description`, `layer`, `properties`, `primary_key`, `owned` |
-| `PropertyDef` | `name`, `type`, `choices`, `fields`, `required`, `sensitivity`, `scope_level` |
+| `ObjectTypeDef` | `api_name`, `display_name`, `description`, `layer`, `properties`, `primary_key`, `rules`, `owned` |
+| `PropertyDef` | `name`, `type`, `choices`, `fields`, `transitions`, `required`, `sensitivity`, `scope_level` |
 | `LinkTypeDef` | `api_name`, `from_type`, `to_type`, `cardinality`, `description`, `identity_revealing`, `owned` |
 | `ActionTypeDef` | `api_name`, `display_name`, `target_type`, `executable_by_roles`, `description`, `parameters`, `capabilities` |
 | `ActionParameterDef` | `name`, `type`, `choices`, `fields`, `required`, `refers_to`, `scope_semantics` |
 | `StructFieldDef` | `name`, `type`, `choices`, `required` |
+| `TransitionDef` | `initial`, `moves` |
+| `RuleDef` | `name`, `message`, `check` |
 | `FunctionDef` | `api_name`, `description`, `input_description`, `output_description`, `capabilities` |
 | `Sensitivity` | `ai_usable`, `human_visible` |
 
@@ -1320,6 +1349,18 @@ stateful セッションでも、各 request はその request 自身のトー�
 既定値は `True` です。`PropertyDef.fields` と `ActionParameterDef.fields` は
 `type="struct"` では空でない tuple、それ以外の型では `None` です。MCP の schema は
 tuple を list として出力し、常に `fields` キーを含めます。
+
+`TransitionDef` は choice プロパティで許可する状態を記述します。`initial` は空でない
+開始状態の tuple で、`moves` はすべての choice から許可する遷移先への対応です。
+終端状態には空の tuple を使います。すべての状態は宣言済みの choice に含めます。
+`PropertyDef.transitions` に設定します。
+
+`RuleDef` は新しい行全体を受け取る名前付き述語を
+`check: Callable[[dict[str, Any]], bool]` として記述します。`name` と `message` は
+空にできず、同じ `ObjectTypeDef.rules` tuple 内の名前は一意である必要があります。
+rule の check は渡されたオブジェクトだけを読み取るようにしてください。
+`model_dump()` は `check` を除外するため、公開する宣言には rule の名前とメッセージ
+だけが含まれます。
 
 **`OntologyRegistry`** が記述子を保持し、相互参照を検証します。`validate()` は、
 リンク端点の参照切れ、Action 対象の参照切れ、api_name の重複、properties に無い主キーに
@@ -1413,6 +1454,7 @@ MCP サーバーでは、この実行時ではなくトランスポートによ�
 | `CAPABILITY_NOT_PROVIDED` | A declared capability had no provider bound for this call. |
 | `FUNCTION_ERROR` | Registering/calling a Function failed: undeclared api_name, duplicate registration, or no handler bound. |
 | `PRECONDITION_FAILED` | An action's precondition failed; the message names it. The conventional code for `ActionError` (kind precondition); an author may attach their own stable code instead (AC7), e.g. `raise ActionError("...", code="GAP_NOT_ACKNOWLEDGED")`. It is also used with overridden codes for unregistered/unhandled actions (`UNKNOWN_ACTION`) and parameter-validation failures (`INVALID_PARAMS`) -- see the `code=` overrides at those raise sites. |
+| `TRANSITION_NOT_ALLOWED` | A governed property changed to a state not allowed by its declared transition graph; action starts must be initial states. |
 
 ### `validation`
 
@@ -1436,6 +1478,7 @@ MCP サーバーでは、この実行時ではなくトランスポートによ�
 | `OBJECT_NOT_LOADED` | ActionContext.save got an object this action context did not hand out; load it with ctx.get(...) or ctx.create(...) first, so only the fields the handler changed are written. |
 | `OBJECT_RETIRE_NOT_FOUND` | A retirement targeted an object with no stored row. |
 | `PRIMARY_KEY_IMMUTABLE` | An update tried to change an object's primary key; a primary key is immutable, so retire the object and insert a new one instead. |
+| `RULE_VIOLATED` | A declared object rule returned false or raised while checking the full new row. |
 | `ONTOLOGY_INVALID` | A declaration was rejected: `validate()` found invalid cross-references, or an authoring call (`@ontology.object(...)`, `ontology.link(...)`, `.definition`) refused a kwarg of the wrong shape: a misspelled `scope`/`cardinality` literal, a rule not wrapped in a list, a non-callable `row_visibility`, empty `scope_levels`, or `min_n` below 1. |
 | `SCOPE_POLICY_ERROR` | A ScopePolicy declaration is unusable: a rule references an undeclared object type, link type, or scope level; a type declares an empty contributor rule list; a type is listed in unscoped_types while also declaring scope rules; or an action's scope parameter refers to an unscoped type. |
 | `UNDECLARED_CAPABILITY` | A handler requested a capability its action or function did not declare. |
@@ -1455,7 +1498,7 @@ MCP サーバーでは、この実行時ではなくトランスポートによ�
 | `MIN_N_VIOLATION` | An aggregate would be computed over fewer than min_n distinct contributors. |
 | `VISIBILITY_DENIED` | A single-object read/write targeted an object outside the consumer's scope. |
 
-*全 50 コード / 7 種別。*
+*全 52 コード / 7 種別。*
 
 ---
 

@@ -104,6 +104,10 @@ files = [
     "tests/test_struct_properties_core.py", "tests/test_struct_properties_writes.py",
     "tests/test_struct_properties_authoring.py", "tests/test_struct_properties_reads.py",
     "tests/test_struct_properties_actions.py", "tests/test_struct_properties_mcp.py",
+    "tests/test_rules_transitions_authoring.py", "tests/test_rules_transitions_actions.py",
+    "tests/test_rules_transitions_core.py", "tests/test_rules_transitions_writes.py",
+    "tests/test_rules_transitions_ingest.py", "tests/test_rules_transitions_mcp.py",
+    "tests/test_rules_transitions_diagnose.py",
 ]
 
 [tool.pytest.ini_options]

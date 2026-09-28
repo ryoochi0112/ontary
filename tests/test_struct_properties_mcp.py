@@ -78,11 +78,13 @@ def test_object_type_struct_property_has_golden_fields(server: MCPServer) -> Non
     order = next(item for item in payload["object_types"] if item["api_name"] == "Order")
     props = {item["name"]: item for item in order["properties"]}
     assert props["amount"] == {
-        "name": "amount", "type": "struct", "choices": None, "fields": FIELDS,
+        "name": "amount", "type": "struct", "choices": None, "transitions": None,
+        "fields": FIELDS,
         "required": True, "ai_usable": True, "human_visible": True, "scope_level": None,
     }
     assert props["status"] == {
-        "name": "status", "type": "str", "choices": None, "fields": None,
+        "name": "status", "type": "str", "choices": None, "transitions": None,
+        "fields": None,
         "required": True, "ai_usable": True, "human_visible": True, "scope_level": None,
     }
 

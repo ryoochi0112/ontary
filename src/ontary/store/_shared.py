@@ -26,11 +26,12 @@ from ontary.audit import (
     WriteRecord,
     _safe_json_dumps,
 )
-from ontary.errors import AuthorityError, ConflictError, ValidationFailed
+from ontary.errors import AuthorityError, ConflictError, PreconditionFailed, ValidationFailed
 from ontary.meta import (
     LinkTypeDef,
     ObjectTypeDef,
     OntologyRegistry,
+    PropertyDef,
     declared_shape_violation,
     normalize_declared_payload,
 )
@@ -272,6 +273,42 @@ def _normalize_payload_scalars(
     }
 
 
+def _transition_refusal(
+    obj_type: str,
+    obj_id: str,
+    prop: PropertyDef,
+    old: Any,
+    new: Any,
+    allowed: tuple[str, ...],
+) -> PreconditionFailed:
+    """Describe a refused move without disclosing a restricted current state."""
+    prefix = f"{obj_type} {obj_id!r}: {prop.name} cannot move from "
+    if not prop.sensitivity.ai_usable or not prop.sensitivity.human_visible:
+        message = f"{prefix}its current value to {new!r}"
+    else:
+        message = f"{prefix}{old!r} to {new!r}; allowed from {old!r}: {list(allowed)!r}"
+    return PreconditionFailed(message, code="TRANSITION_NOT_ALLOWED")
+
+
+def _check_rules(
+    obj_def: ObjectTypeDef, obj_type: str, obj_id: str, row: dict[str, Any]
+) -> None:
+    """Evaluate every declared rule against the complete storage-form row."""
+    failures: list[str] = []
+    for rule in obj_def.rules:
+        try:
+            passed = rule.check(row)
+        except Exception as exc:
+            failures.append(f"rule {rule.name!r} raised {type(exc).__name__}")
+        else:
+            if not passed:
+                failures.append(f"rule {rule.name!r}: {rule.message}")
+    if failures:
+        raise ValidationFailed(
+            f"{obj_type} {obj_id!r}: {'; '.join(failures)}", code="RULE_VIOLATED"
+        )
+
+
 def prepare_insert(
     registry: OntologyRegistry,
     obj_type: str,
@@ -315,6 +352,17 @@ def prepare_insert(
         )
 
     payload = _normalize_payload_scalars(obj_def, payload)
+
+    if capturing:
+        for prop in obj_def.properties:
+            graph = prop.transitions
+            if graph is not None:
+                value = payload.get(prop.name)
+                if value is not None and value not in graph.initial:
+                    raise _transition_refusal(
+                        obj_type, str(obj_id), prop, None, value, graph.initial
+                    )
+    _check_rules(obj_def, obj_type, str(obj_id), payload)
 
     return PreparedInsert(payload=payload, obj_id_raw=obj_id, obj_id=str(obj_id))
 
@@ -370,6 +418,8 @@ def merge_update(
     obj_id: str,
     current: StoredObject | None,
     payload_changes: dict[str, Any],
+    *,
+    capturing: bool = False,
 ) -> dict[str, Any]:
     """`update`'s post-read half: refuse a missing row, merge the changes
     over the current payload, and check the MERGED row -- an update that
@@ -403,6 +453,24 @@ def merge_update(
             "one instead",
             code="PRIMARY_KEY_IMMUTABLE",
         )
+    for prop in obj_def.properties:
+        graph = prop.transitions
+        if graph is None:
+            continue
+        old = current.payload.get(prop.name)
+        new = normalized.get(prop.name)
+        if old == new:
+            continue
+        if old is None:
+            if capturing and new not in graph.initial:
+                raise _transition_refusal(
+                    obj_type, obj_id, prop, old, new, graph.initial
+                )
+        elif new is None or new not in graph.moves.get(old, ()):
+            raise _transition_refusal(
+                obj_type, obj_id, prop, old, new, graph.moves.get(old, ())
+            )
+    _check_rules(obj_def, obj_type, obj_id, normalized)
     return normalized
 
 

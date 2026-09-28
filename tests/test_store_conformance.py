@@ -44,7 +44,7 @@ from pydantic import BaseModel
 from ontary import Ontology, OntologyClient, OntologyObject, prop
 from ontary.actions import ActionContext, ActionExecutor
 from ontary.audit import CapabilityAccessRecord
-from ontary.errors import AuthorityError, ConflictError, ValidationFailed
+from ontary.errors import AuthorityError, ConflictError, PreconditionFailed, ValidationFailed
 from ontary.meta import (
     ActionTypeDef,
     Cardinality,
@@ -52,6 +52,8 @@ from ontary.meta import (
     ObjectTypeDef,
     OntologyRegistry,
     PropertyDef,
+    RuleDef,
+    TransitionDef,
 )
 from ontary.scope import ScopePolicy
 from ontary.security import Consumer
@@ -155,6 +157,42 @@ def _choices_consumer() -> Consumer:
         scope_id="unused-for-unscoped-type",
         kind="human",
     )
+
+
+_ORDER_MOVES: dict[str, tuple[str, ...]] = {
+    "pending": ("paid", "cancelled"),
+    "paid": ("shipped",),
+    "shipped": (),
+    "cancelled": (),
+}
+
+
+def _order_registry(*, rules: tuple[RuleDef, ...] = ()) -> OntologyRegistry:
+    registry = OntologyRegistry()
+    registry.register_object_type(
+        ObjectTypeDef(
+            api_name="Order",
+            display_name="Order",
+            description="An order with declared moves and rules",
+            layer="L0",
+            properties=[
+                PropertyDef(name="id", type="str"),
+                PropertyDef(
+                    name="status",
+                    type="str",
+                    choices=tuple(_ORDER_MOVES),
+                    transitions=TransitionDef(initial=("pending",), moves=_ORDER_MOVES),
+                    required=False,
+                ),
+                PropertyDef(name="paid_on", type="date", required=False),
+            ],
+            rules=rules,
+            primary_key="id",
+            owned=True,
+        )
+    )
+    registry.validate()
+    return registry
 
 
 def build_authority_registry() -> OntologyRegistry:
@@ -458,6 +496,33 @@ def concurrent_stores(
     assert request.param == "postgres"
     assert POSTGRES_DSN is not None
     schema = f"ontary_test_concurrent_{next(_postgres_schema_counter)}"
+    import psycopg
+
+    with psycopg.connect(POSTGRES_DSN, autocommit=True) as setup:
+        setup.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        setup.execute(f'CREATE SCHEMA "{schema}"')
+    separator = "&" if "?" in POSTGRES_DSN else "?"
+    dsn = f"{POSTGRES_DSN}{separator}options=-csearch_path%3D{schema}"
+    from ontary.store.postgres import PostgresStore
+
+    PostgresStore(registry, dsn)
+    return lambda: PostgresStore(registry, dsn)
+
+
+@pytest.fixture(params=["sqlite"] + (["postgres"] if POSTGRES_DSN else []))
+def concurrent_order_stores(
+    request: pytest.FixtureRequest, tmp_path: Path
+) -> Callable[[], Store]:
+    """Independent connections to one store, with declared Order transitions."""
+    registry = _order_registry()
+    if request.param == "sqlite":
+        path = str(tmp_path / "concurrent_orders.db")
+        ObjectStore(registry, path)
+        return lambda: ObjectStore(registry, path)
+
+    assert request.param == "postgres"
+    assert POSTGRES_DSN is not None
+    schema = f"ontary_test_order_race_{next(_postgres_schema_counter)}"
     import psycopg
 
     with psycopg.connect(POSTGRES_DSN, autocommit=True) as setup:
@@ -1768,6 +1833,169 @@ def test_update_closes_old_row_and_preserves_history_row(store: Store) -> None:
     assert current.payload["name"] == "Rockets FC"
 
 
+def test_declared_transitions_apply_to_store_updates(store_factory: StoreFactory) -> None:
+    store = store_factory(_order_registry())
+    source = Source(source_system="test")
+    store.insert("Order", {"id": "o-1", "status": "pending"}, source)
+
+    with raises_code(PreconditionFailed, "TRANSITION_NOT_ALLOWED") as exc:
+        store.update("Order", "o-1", {"status": "shipped"}, source)
+    assert str(exc.value) == (
+        "Order 'o-1': status cannot move from 'pending' to 'shipped'; "
+        "allowed from 'pending': ['paid', 'cancelled']"
+    )
+    store.update("Order", "o-1", {"status": "pending"}, source)
+    store.update("Order", "o-1", {"status": "paid"}, source)
+    assert [row[0]["status"] for row in _history_rows(store, "Order", "o-1")] == [
+        "pending", "pending", "paid"
+    ]
+
+
+def test_declared_update_to_none_is_refused(store_factory: StoreFactory) -> None:
+    store = store_factory(_order_registry())
+    source = Source(source_system="test")
+    store.insert("Order", {"id": "o-1", "status": "paid"}, source)
+    with raises_code(PreconditionFailed, "TRANSITION_NOT_ALLOWED") as exc:
+        store.update("Order", "o-1", {"status": None}, source)
+    assert str(exc.value) == (
+        "Order 'o-1': status cannot move from 'paid' to None; "
+        "allowed from 'paid': ['shipped']"
+    )
+    current = store.read_current("Order", "o-1")
+    assert current is not None and current.payload["status"] == "paid"
+
+
+def test_declared_initial_applies_only_to_captured_inserts(
+    store_factory: StoreFactory,
+) -> None:
+    store = store_factory(_order_registry())
+    source = Source(source_system="test")
+    store.insert("Order", {"id": "free", "status": "shipped"}, source)
+    with store.capture_action_writes() as writes:
+        with raises_code(PreconditionFailed, "TRANSITION_NOT_ALLOWED") as exc:
+            store.insert("Order", {"id": "captured", "status": "shipped"}, source)
+    assert str(exc.value) == (
+        "Order 'captured': status cannot move from None to 'shipped'; "
+        "allowed from None: ['pending']"
+    )
+    assert writes == []
+    assert store.read_current("Order", "free") is not None
+    assert store.read_current("Order", "captured") is None
+
+
+def test_captured_update_from_none_checks_initial(store_factory: StoreFactory) -> None:
+    store = store_factory(_order_registry())
+    source = Source(source_system="test")
+    store.insert("Order", {"id": "free"}, source)
+    store.insert("Order", {"id": "captured"}, source)
+
+    store.update("Order", "free", {"status": "shipped"}, source)
+    with store.capture_action_writes() as writes:
+        with raises_code(PreconditionFailed, "TRANSITION_NOT_ALLOWED") as exc:
+            store.update("Order", "captured", {"status": "shipped"}, source)
+        store.update("Order", "captured", {"status": "pending"}, source)
+    assert str(exc.value) == (
+        "Order 'captured': status cannot move from None to 'shipped'; "
+        "allowed from None: ['pending']"
+    )
+    assert [(write.op, write.object_id) for write in writes] == [
+        ("update", "captured")
+    ]
+    free = store.read_current("Order", "free")
+    captured = store.read_current("Order", "captured")
+    assert free is not None and free.payload["status"] == "shipped"
+    assert captured is not None and captured.payload["status"] == "pending"
+    assert len(_history_rows(store, "Order", "captured")) == 2
+
+
+def test_declared_rules_refuse_insert(store_factory: StoreFactory) -> None:
+    store = store_factory(_order_registry(rules=(
+        RuleDef(name="shipped_needs_payment", message="payment date required",
+                check=lambda row: row.get("status") != "shipped"),
+    )))
+    with raises_code(ValidationFailed, "RULE_VIOLATED") as exc:
+        store.insert(
+            "Order", {"id": "bad", "status": "shipped"}, Source(source_system="test")
+        )
+    assert str(exc.value) == (
+        "Order 'bad': rule 'shipped_needs_payment': payment date required"
+    )
+    assert store.read_current("Order", "bad") is None
+
+
+def test_declared_rules_run_on_full_storage_form_update(
+    store_factory: StoreFactory,
+) -> None:
+    seen: list[dict[str, Any]] = []
+
+    def paid_when_shipped(row: dict[str, Any]) -> bool:
+        seen.append(row.copy())
+        return row.get("status") != "shipped" or row.get("paid_on") == "2026-09-28"
+
+    rule = RuleDef(
+        name="shipped_needs_payment",
+        message="payment date required",
+        check=paid_when_shipped,
+    )
+    store = store_factory(_order_registry(rules=(rule,)))
+    source = Source(source_system="test")
+
+    store.insert("Order", {"id": "o-1", "status": "paid",
+                           "paid_on": date(2026, 9, 28)}, source)
+    store.update("Order", "o-1", {"status": "shipped"}, source)
+    assert seen[-1] == {
+        "id": "o-1", "status": "shipped", "paid_on": "2026-09-28"
+    }
+    with raises_code(ValidationFailed, "RULE_VIOLATED") as updated:
+        store.update("Order", "o-1", {"paid_on": date(2026, 9, 29)}, source)
+    assert str(updated.value) == (
+        "Order 'o-1': rule 'shipped_needs_payment': payment date required"
+    )
+    assert seen[-1]["paid_on"] == "2026-09-29"
+    current = store.read_current("Order", "o-1")
+    assert current is not None and current.payload["paid_on"] == "2026-09-28"
+
+
+def test_declared_rules_report_every_failure_and_raise_closed(
+    store_factory: StoreFactory,
+) -> None:
+    def raises(row: dict[str, Any]) -> bool:
+        raise RuntimeError("sensitive detail")
+
+    store = store_factory(_order_registry(rules=(
+        RuleDef(name="first", message="first failed", check=lambda row: False),
+        RuleDef(name="broken", message="unavailable", check=raises),
+        RuleDef(name="third", message="third failed", check=lambda row: False),
+    )))
+    with raises_code(ValidationFailed, "RULE_VIOLATED") as exc:
+        store.insert("Order", {"id": "o-1", "status": "pending"}, Source(source_system="test"))
+    assert str(exc.value) == (
+        "Order 'o-1': rule 'first': first failed; "
+        "rule 'broken' raised RuntimeError; rule 'third': third failed"
+    )
+    assert store.read_current("Order", "o-1") is None
+
+
+def test_retire_skips_declared_rules(store_factory: StoreFactory) -> None:
+    allow = True
+    calls = 0
+
+    def rule(row: dict[str, Any]) -> bool:
+        nonlocal calls
+        calls += 1
+        return allow
+
+    store = store_factory(_order_registry(rules=(
+        RuleDef(name="still_allowed", message="must remain allowed", check=rule),
+    )))
+    store.insert("Order", {"id": "o-1", "status": "pending"}, Source(source_system="test"))
+    assert calls == 1
+    allow = False
+    store.retire_object("Order", "o-1")
+    assert calls == 1
+    assert store.read_current("Order", "o-1") is None
+
+
 def test_update_does_not_leak_underscore_metadata_into_merge(store: Store) -> None:
     obj_id = store.insert(
         "Team", {"name": "Rockets"}, Source(source_system="synthetic", source_id="s1")
@@ -2829,6 +3057,75 @@ def test_audit_entries_append_order(store: Store) -> None:
 
 
 # -- transactions -------------------------------------------------------
+
+
+def test_concurrent_transitions_use_the_row_they_replace(
+    concurrent_order_stores: Callable[[], Store],
+) -> None:
+    """Both updates may leave pending, but neither resulting state may follow the other.
+
+    The barrier after each read forces a stale-read implementation to let both
+    workers check pending before either writes. With the read inside the
+    transaction, the first worker holds the lock; its bounded wait expires,
+    then the second worker reads the new terminal state and is refused.
+    """
+    source = Source(source_system="race")
+    concurrent_order_stores().insert(
+        "Order", {"id": "race", "status": "pending"}, source
+    )
+    started = threading.Barrier(2)
+    both_read = threading.Barrier(2)
+    outcomes: list[str] = []
+    errors: list[BaseException] = []
+
+    def move(target: str) -> None:
+        try:
+            store = concurrent_order_stores()
+            original_read = store.read_current
+
+            def pause_after_read(obj_type: str, obj_id: str) -> StoredObject | None:
+                current = original_read(obj_type, obj_id)
+                if obj_type == "Order" and obj_id == "race":
+                    try:
+                        both_read.wait(timeout=1)
+                    except threading.BrokenBarrierError:
+                        pass
+                return current
+
+            store.read_current = pause_after_read
+            started.wait(timeout=5)
+            try:
+                store.update("Order", "race", {"status": target}, source)
+            except PreconditionFailed as exc:
+                assert exc.code == "TRANSITION_NOT_ALLOWED"
+                outcomes.append("refused")
+            else:
+                outcomes.append("updated")
+        except BaseException as exc:
+            errors.append(exc)
+
+    workers = [
+        threading.Thread(target=move, args=(target,), daemon=True)
+        for target in ("paid", "cancelled")
+    ]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join(timeout=10)
+
+    assert not any(worker.is_alive() for worker in workers), "worker deadlocked"
+    assert errors == []
+    assert sorted(outcomes) == ["refused", "updated"]
+    statuses = [
+        row[0]["status"] for row in _history_rows(concurrent_order_stores(), "Order", "race")
+    ]
+    assert statuses[0] == "pending"
+    assert len(statuses) == 2
+    assert statuses[1] in _ORDER_MOVES["pending"]
+    assert all(
+        new in _ORDER_MOVES.get(old, ())
+        for old, new in zip(statuses, statuses[1:], strict=False)
+    )
 
 
 def test_in_transaction_true_inside_false_outside(store: Store) -> None:

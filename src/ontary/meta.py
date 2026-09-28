@@ -10,11 +10,11 @@ any one domain.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ontary.errors import ValidationFailed
 from ontary.typesys import PropertyType, choice_value, struct_value, validate_scalar
@@ -25,6 +25,8 @@ __all__ = [
     "Sensitivity",
     "PropertyDef",
     "StructFieldDef",
+    "TransitionDef",
+    "RuleDef",
     "ObjectTypeDef",
     "LinkTypeDef",
     "ActionParameterDef",
@@ -96,6 +98,114 @@ class StructFieldDef(BaseModel):
         return data
 
 
+def _str_enum_value(state: Any) -> Any:
+    """An ``Enum`` member as its value (the str check then refuses a non-str
+    value); anything else unchanged."""
+    if isinstance(state, Enum):
+        return state.value
+    return state
+
+
+def _unwrap_str_enum_states(data: dict[str, Any]) -> dict[str, Any]:
+    """Accept string-valued ``Enum`` members (plain ``Enum`` or ``StrEnum``) as
+    states, as a choice property accepts them as values (#42)."""
+    data = dict(data)
+    initial = data.get("initial")
+    if isinstance(initial, (list, tuple)):
+        data["initial"] = tuple(_str_enum_value(state) for state in initial)
+    moves = data.get("moves")
+    if isinstance(moves, dict):
+        data["moves"] = {
+            _str_enum_value(source): (
+                tuple(_str_enum_value(target) for target in targets)
+                if isinstance(targets, (list, tuple))
+                else targets
+            )
+            for source, targets in moves.items()
+        }
+    return data
+
+
+class TransitionDef(BaseModel):
+    """Allowed start states and moves for a choice property."""
+
+    initial: tuple[str, ...]
+    moves: dict[str, tuple[str, ...]]
+
+    def __init__(
+        self,
+        *,
+        initial: Sequence[str | Enum],
+        moves: Mapping[Any, Sequence[str | Enum]],
+    ) -> None:
+        # Typed for authors: states may be string-valued Enum members, which
+        # `_valid_states` stores as their plain values.
+        super().__init__(initial=initial, moves=moves)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _valid_states(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        data = _unwrap_str_enum_states(data)
+        initial = data.get("initial")
+        if isinstance(initial, (list, tuple)):
+            if not initial:
+                raise ValidationFailed(
+                    "TransitionDef: initial must be non-empty; declare a start state",
+                    code="ONTOLOGY_INVALID",
+                )
+            if any(not isinstance(state, str) for state in initial):
+                raise ValidationFailed(
+                    "TransitionDef: every initial state must be a str",
+                    code="ONTOLOGY_INVALID",
+                )
+        moves = data.get("moves")
+        if isinstance(moves, dict):
+            for source, targets in moves.items():
+                if not isinstance(source, str):
+                    raise ValidationFailed(
+                        "TransitionDef: every moves source state must be a str",
+                        code="ONTOLOGY_INVALID",
+                    )
+                if isinstance(targets, (list, tuple)) and any(
+                    not isinstance(target, str) for target in targets
+                ):
+                    raise ValidationFailed(
+                        "TransitionDef: every moves target state must be a str",
+                        code="ONTOLOGY_INVALID",
+                    )
+        return data
+
+
+class RuleDef(BaseModel):
+    """Named predicate over the full new row; only metadata is exported."""
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    name: str
+    message: str
+    check: Callable[[dict[str, Any]], bool] = Field(exclude=True, repr=False)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _valid_declaration(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        for field in ("name", "message"):
+            if data.get(field) == "":
+                raise ValidationFailed(
+                    f"RuleDef: {field} must be non-empty; provide a {field}",
+                    code="ONTOLOGY_INVALID",
+                )
+        if "check" in data and not callable(data["check"]):
+            raise ValidationFailed(
+                "RuleDef: check must be callable; provide a predicate",
+                code="ONTOLOGY_INVALID",
+            )
+        return data
+
+
 def _fields_declaration_violation(
     prop_type: PropertyType, fields: tuple[StructFieldDef, ...] | None
 ) -> str | None:
@@ -115,6 +225,7 @@ class PropertyDef(BaseModel):
     type: PropertyType
     choices: tuple[str, ...] | None = None
     fields: tuple[StructFieldDef, ...] | None = None
+    transitions: TransitionDef | None = None
     required: bool = True
     sensitivity: Sensitivity = Field(default_factory=Sensitivity)
     scope_level: ScopeLevel = None
@@ -141,6 +252,36 @@ class PropertyDef(BaseModel):
             raise ValidationFailed(f"PropertyDef {self.name!r}: {violation}", code="ONTOLOGY_INVALID")
         return self
 
+    @model_validator(mode="after")
+    def _valid_transitions(self) -> PropertyDef:
+        graph = self.transitions
+        if graph is None:
+            return self
+        if self.choices is None:
+            raise ValidationFailed(
+                f"PropertyDef {self.name!r}: transitions require choices; "
+                "declare choices (an Enum or Literal) on the property",
+                code="ONTOLOGY_INVALID",
+            )
+        choices = set(self.choices)
+        states = set(graph.initial) | set(graph.moves)
+        states.update(target for targets in graph.moves.values() for target in targets)
+        unknown = sorted(states - choices)
+        if unknown:
+            raise ValidationFailed(
+                f"PropertyDef {self.name!r}: transition states {unknown} are not in choices; "
+                "use only declared choices",
+                code="ONTOLOGY_INVALID",
+            )
+        missing = sorted(choices - graph.moves.keys())
+        if missing:
+            raise ValidationFailed(
+                f"PropertyDef {self.name!r}: moves omit {missing}; "
+                "list every state; use [] for a terminal state",
+                code="ONTOLOGY_INVALID",
+            )
+        return self
+
 
 class ObjectTypeDef(BaseModel):
     api_name: str
@@ -148,6 +289,7 @@ class ObjectTypeDef(BaseModel):
     description: str
     layer: str
     properties: list[PropertyDef]
+    rules: tuple[RuleDef, ...] = ()
     primary_key: str
     # Authority declaration (spec `declared-contracts` §3 AC1): `True` means
     # the whole type is ontology-owned (no connector supplies it); a dict
@@ -164,6 +306,18 @@ class ObjectTypeDef(BaseModel):
             raise ValueError(
                 f"ObjectTypeDef {self.api_name!r}: primary_key "
                 f"{self.primary_key!r} not found in properties {sorted(names)}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _unique_rule_names(self) -> ObjectTypeDef:
+        names = [rule.name for rule in self.rules]
+        if len(names) != len(set(names)):
+            duplicate = next(name for name in names if names.count(name) > 1)
+            raise ValidationFailed(
+                f"ObjectTypeDef {self.api_name!r}: duplicate rule {duplicate!r}; "
+                "give each rule a unique name",
+                code="ONTOLOGY_INVALID",
             )
         return self
 

@@ -39,7 +39,7 @@ class IngestError(OntaryError):
     per-record catalogued codes: `OWNED_TYPE_REFUSED`/
     `OWNED_PROPERTY_REFUSED` (kind `authority`), `INVALID_RECORD` (kind
     `validation`), `UNKNOWN_OBJECT_TYPE`/`UNKNOWN_LINK_TYPE`, or
-    `CARDINALITY_VIOLATION`."""
+    `CARDINALITY_VIOLATION`, `TRANSITION_NOT_ALLOWED`, or `RULE_VIOLATED`."""
 
     index: int | None
     reason: str | None
@@ -281,23 +281,28 @@ def bulk_upsert(
 
         record = normalize_declared_payload(obj_def, record)
         rejection = _validate_record(obj_def, record)
+        if rejection is None:
+            pk_value = record.get(obj_def.primary_key)
+            current = (
+                store.read_current(obj_type, str(pk_value))
+                if pk_value is not None else None
+            )
+            try:
+                if current is not None:
+                    store.update(obj_type, str(pk_value), record, source)
+                    report.inserted_ids.append(str(pk_value))
+                else:
+                    payload = dict(obj_def.owned_property_defaults())
+                    payload.update(record)
+                    obj_id = store.insert(obj_type, payload, source)
+                    report.inserted_ids.append(obj_id)
+            except OntaryError as exc:
+                if exc.code not in ("TRANSITION_NOT_ALLOWED", "RULE_VIOLATED"):
+                    raise
+                rejection = exc.code, str(exc)
         if rejection is not None:
             code, reason = rejection
             report.errors.append(IngestError(index=i, reason=reason, code=code))
-            continue
-
-        pk_value = record.get(obj_def.primary_key)
-        current = (
-            store.read_current(obj_type, str(pk_value)) if pk_value is not None else None
-        )
-        if current is not None:
-            store.update(obj_type, str(pk_value), record, source)
-            report.inserted_ids.append(str(pk_value))
-        else:
-            payload = dict(obj_def.owned_property_defaults())
-            payload.update(record)
-            obj_id = store.insert(obj_type, payload, source)
-            report.inserted_ids.append(obj_id)
 
     return report
 

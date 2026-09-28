@@ -38,9 +38,18 @@ you**.
   hydrates like the equivalent model instance. Struct inner fields may only
   default to `None`. This additively widens
   `PropertyType`; `SCHEMA_VERSION` is unchanged.
+- Declared status transitions and named object rules (#44). Choice properties
+  can carry a `TransitionDef` graph, and `Ontology.rule` registers a typed
+  predicate over the full object. The write paths enforce allowed state moves
+  and rule outcomes with `TRANSITION_NOT_ALLOWED` and `RULE_VIOLATED`. These
+  declarations do not change `SCHEMA_VERSION`.
 
 ### Changed
 
+- Every store update now reads the current row inside its transaction before
+  applying an update. MCP `list_object_types` adds a `transitions` graph for
+  each governed property and a `rules` list for each type. `RuleDef` carries a
+  Python callable, excluded from `model_dump()`.
 - `list[<BaseModel>]` and `dict[..., <BaseModel>]` annotations now raise
   `ONTOLOGY_INVALID` with the fix "use a linked object type". Previously they
   derived `type="json"`; `prop(property_type="json")` does not bypass the refusal.

@@ -121,6 +121,8 @@ ADDED_SINCE_080_ERROR_CODES = frozenset(
         "PRIMARY_KEY_IMMUTABLE",
         "LINK_ENDPOINT_NOT_FOUND",
         "OBJECT_NOT_LOADED",
+        "TRANSITION_NOT_ALLOWED",
+        "RULE_VIOLATED",
     }
 )
 NEW_ENGLISH_DOCS = tuple(
@@ -263,7 +265,9 @@ DEMOTED_NAMES_BY_MODULE = {
         "ObjectTypeDef",
         "OntologyRegistry",
         "PropertyDef",
+        "RuleDef",
         "StructFieldDef",
+        "TransitionDef",
         "PropertyType",
         "ScopeLevel",
     },

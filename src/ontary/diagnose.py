@@ -782,9 +782,9 @@ def _collect_findings(
 ) -> list[Finding]:
     """Run every rule, turning an unexpected rule failure into a finding.
 
-    With a ``store``, also sweep its current rows (``_store_row_findings``),
-    one object type at a time, so a failed read of one type is reported
-    as a finding and the other types are still swept.
+    With a ``store``, sweep hydration and declared rules over current rows,
+    one object type at a time. A failed read becomes a finding, while other
+    types are still swept.
     """
     findings: list[Finding] = []
     for rule in RULES:
@@ -815,7 +815,49 @@ def _collect_findings(
                     "Fix the reported store error and run diagnose() again.",
                 )
             )
+        try:
+            findings.extend(_stored_rule_findings(definition, store, api_name))
+        except Exception as exc:
+            findings.append(
+                _error(
+                    "DIAGNOSE_RULE_FAILED",
+                    f"_stored_rule_findings[{api_name!r}]",
+                    f"rule sweep of {api_name!r} failed: {exc}",
+                    "Fix the reported store error and run diagnose() again.",
+                )
+            )
     return findings
+
+
+def _stored_rule_findings(
+    definition: "OntologyDef", store: Store, api_name: str
+) -> tuple[Finding, ...]:
+    """Report one finding per declared rule broken by current stored rows."""
+    obj_def = definition.registry.object_types[api_name]
+    if not obj_def.rules:
+        return ()
+    rows = store.read_all(api_name)
+    findings: list[Finding] = []
+    for rule in obj_def.rules:
+        failed_ids: list[str] = []
+        for row in rows:
+            try:
+                passed = rule.check(row.payload)
+            except Exception:
+                passed = False
+            if not passed:
+                failed_ids.append(row.lineage.object_id)
+        if failed_ids:
+            findings.append(
+                _error(
+                    "RULE_VIOLATED",
+                    f"ObjectTypeDef[{api_name!r}].rules[{rule.name!r}]",
+                    f"{len(failed_ids)} of {len(rows)} current rows break rule "
+                    f"{rule.name!r} ({rule.message}) (e.g. id {failed_ids[0]!r})",
+                    "fix those rows with an action, or re-ingest them",
+                )
+            )
+    return tuple(findings)
 
 
 def _store_row_findings(

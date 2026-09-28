@@ -104,7 +104,7 @@ integration.
 ### `ontary.meta`
 
 `ActionParameterDef`, `ActionTypeDef`, `FunctionDef`, `LinkTypeDef`,
-`ObjectTypeDef`, `OntologyRegistry`, `PropertyDef`, `StructFieldDef`, `PropertyType`, `ScopeLevel`.
+`ObjectTypeDef`, `OntologyRegistry`, `PropertyDef`, `StructFieldDef`, `TransitionDef`, `RuleDef`, `PropertyType`, `ScopeLevel`.
 
 ### `ontary.ontology`
 
@@ -251,7 +251,7 @@ Two attributes are attached by the engine on a read, and are **not** model field
 `redacted_fields` is what distinguishes "hidden from you" from "genuinely stored as
 `None`" — a visible-but-absent optional field is `None` too, but never appears here.
 
-#### `prop(*, primary_key=False, sensitivity=None, scope_level=None, required=None, property_type=None, choices=None, **field_kwargs)`
+#### `prop(*, primary_key=False, sensitivity=None, scope_level=None, required=None, property_type=None, choices=None, transitions=None, **field_kwargs)`
 
 `pydantic.Field(...)` plus ontology metadata. Unrecognized kwargs pass straight
 through to `Field`, so `prop(default=None, description="...")` behaves as expected.
@@ -264,6 +264,28 @@ keep working on the same class.
 
 `choices=["open", "closed"]` limits a `str` property to those values. Every write
 path refuses any other value.
+
+`transitions=TransitionDef(initial=(...), moves={...})` declares allowed moves on
+a choice property. String values and string-valued `Enum` members (plain `Enum`
+or `StrEnum`) are accepted as states. A primary key cannot have transitions.
+
+Use `prop(transitions=...)` to attach the graph, and import `TransitionDef` from
+`ontary.meta`; it is not exported from `ontary.__all__`.
+
+#### `Ontology.rule(cls, name, *, message)`
+
+Decorate a typed predicate after registering `cls` with `@ontology.object`:
+
+```python
+@ontology.rule(Order, "shipped_needs_payment", message="payment required")
+def shipped_needs_payment(order: Order) -> bool:
+    return order.status != OrderStatus.SHIPPED or order.paid_at is not None
+```
+
+The predicate receives a hydrated object built from the full stored row and
+must read only that object. Its name and message appear in the type declaration;
+the callable is omitted from exported schema data. Rules can be registered
+until `ontology.definition` freezes the ontology.
 
 #### Choice properties: `Enum` and `Literal`
 
@@ -1232,6 +1254,11 @@ tools carry `ToolAnnotations(readOnlyHint=True)`; `execute_action` carries
 | `execute_action` | Run an action | `destructiveHint=True` |
 | `call_function` | Call a function | `readOnlyHint=True` |
 
+`list_object_types` includes a `transitions` key on every property. Its value is
+`null` when the property has no graph, or an object with the complete `initial`
+state list and `moves` mapping when it does. Each object type also has a `rules`
+list containing each rule's `name` and `message`; rule code is never included.
+
 `query_objects(obj_type, where=None, order_by=None, limit=None, after=None)` is always bounded
 on the MCP surface: an omitted `limit` uses the server default cap of 100 rows,
 and an explicit limit may be at most 1000. The underlying paged read supplies an
@@ -1333,12 +1360,14 @@ data-driven ontologies; most authors should use `Ontology`.
 
 | Type | Key fields |
 | --- | --- |
-| `ObjectTypeDef` | `api_name`, `display_name`, `description`, `layer`, `properties`, `primary_key`, `owned` |
-| `PropertyDef` | `name`, `type`, `choices`, `fields`, `required`, `sensitivity`, `scope_level` |
+| `ObjectTypeDef` | `api_name`, `display_name`, `description`, `layer`, `properties`, `primary_key`, `rules`, `owned` |
+| `PropertyDef` | `name`, `type`, `choices`, `fields`, `transitions`, `required`, `sensitivity`, `scope_level` |
 | `LinkTypeDef` | `api_name`, `from_type`, `to_type`, `cardinality`, `description`, `identity_revealing`, `owned` |
 | `ActionTypeDef` | `api_name`, `display_name`, `target_type`, `executable_by_roles`, `description`, `parameters`, `capabilities` |
 | `ActionParameterDef` | `name`, `type`, `choices`, `fields`, `required`, `refers_to`, `scope_semantics` |
 | `StructFieldDef` | `name`, `type`, `choices`, `required` |
+| `TransitionDef` | `initial`, `moves` |
+| `RuleDef` | `name`, `message`, `check` |
 | `FunctionDef` | `api_name`, `description`, `input_description`, `output_description`, `capabilities` |
 | `Sensitivity` | `ai_usable`, `human_visible` |
 
@@ -1350,6 +1379,17 @@ type, `choices` is an optional tuple of string values for a `str` field, and
 `ActionParameterDef.fields` are non-empty tuples for `type="struct"` and are
 `None` for every other type. The MCP schema renders each tuple as a list and
 always includes the `fields` key.
+
+`TransitionDef` describes a choice property's allowed states: `initial` is a
+non-empty tuple of start states, and `moves` maps every choice to its allowed
+targets. Use an empty target tuple for a terminal state. Every state must be a
+declared choice. Set it on `PropertyDef.transitions`.
+
+`RuleDef` describes a named predicate over the full new row as
+`check: Callable[[dict[str, Any]], bool]`. Its `name` and `message` must be
+non-empty, and names in one `ObjectTypeDef.rules` tuple must be unique. Rule
+checks should read only the supplied object. `model_dump()` excludes `check`,
+so the exported declaration contains only the rule's name and message.
 
 **`OntologyRegistry`** holds the descriptors and validates cross-references;
 `validate()` raises `ValidationFailed` (`ONTOLOGY_INVALID`) on dangling link
@@ -1437,6 +1477,7 @@ table below is generated from it.
 | `CAPABILITY_NOT_PROVIDED` | A declared capability had no provider bound for this call. |
 | `FUNCTION_ERROR` | Registering/calling a Function failed: undeclared api_name, duplicate registration, or no handler bound. |
 | `PRECONDITION_FAILED` | An action's precondition failed; the message names it. The conventional code for `ActionError` (kind precondition); an author may attach their own stable code instead (AC7), e.g. `raise ActionError("...", code="GAP_NOT_ACKNOWLEDGED")`. It is also used with overridden codes for unregistered/unhandled actions (`UNKNOWN_ACTION`) and parameter-validation failures (`INVALID_PARAMS`) -- see the `code=` overrides at those raise sites. |
+| `TRANSITION_NOT_ALLOWED` | A governed property changed to a state not allowed by its declared transition graph; action starts must be initial states. |
 
 ### `validation`
 
@@ -1460,6 +1501,7 @@ table below is generated from it.
 | `OBJECT_NOT_LOADED` | ActionContext.save got an object this action context did not hand out; load it with ctx.get(...) or ctx.create(...) first, so only the fields the handler changed are written. |
 | `OBJECT_RETIRE_NOT_FOUND` | A retirement targeted an object with no stored row. |
 | `PRIMARY_KEY_IMMUTABLE` | An update tried to change an object's primary key; a primary key is immutable, so retire the object and insert a new one instead. |
+| `RULE_VIOLATED` | A declared object rule returned false or raised while checking the full new row. |
 | `ONTOLOGY_INVALID` | A declaration was rejected: `validate()` found invalid cross-references, or an authoring call (`@ontology.object(...)`, `ontology.link(...)`, `.definition`) refused a kwarg of the wrong shape: a misspelled `scope`/`cardinality` literal, a rule not wrapped in a list, a non-callable `row_visibility`, empty `scope_levels`, or `min_n` below 1. |
 | `SCOPE_POLICY_ERROR` | A ScopePolicy declaration is unusable: a rule references an undeclared object type, link type, or scope level; a type declares an empty contributor rule list; a type is listed in unscoped_types while also declaring scope rules; or an action's scope parameter refers to an unscoped type. |
 | `UNDECLARED_CAPABILITY` | A handler requested a capability its action or function did not declare. |
@@ -1479,7 +1521,7 @@ table below is generated from it.
 | `MIN_N_VIOLATION` | An aggregate would be computed over fewer than min_n distinct contributors. |
 | `VISIBILITY_DENIED` | A single-object read/write targeted an object outside the consumer's scope. |
 
-*50 codes across 7 kinds.*
+*52 codes across 7 kinds.*
 
 ---
 

@@ -33,7 +33,7 @@
 
 ### アドバイザリ警告コード
 
-`diagnose` プロセスは、いくつかのアドバイザリ警告コードを出力することがあります。これらのコードは、`CRUD_ACTION_NAME`、`FORBIDDEN_TYPE_NAME`、`MICRO_ACTION`、`MIN_N_UNSET`、`STORED_DERIVABLE`、および `UNSCOPED_SENSITIVE` です。エラーには `ONTOLOGY_INVALID` というコードが使われます。
+`diagnose` プロセスは、いくつかのアドバイザリ警告コードを出力することがあります。これらのコードは、`CRUD_ACTION_NAME`、`FORBIDDEN_TYPE_NAME`、`MICRO_ACTION`、`MIN_N_UNSET`、`STORED_DERIVABLE`、および `UNSCOPED_SENSITIVE` です。エラーには、宣言の不備に `ONTOLOGY_INVALID`、保存済み行のハイドレーション失敗に `INVALID_RECORD`、宣言済みルールへの違反に `RULE_VIOLATED` を使います。
 
 ### オプション
 

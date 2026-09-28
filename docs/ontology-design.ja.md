@@ -147,6 +147,52 @@ struct はフラットです。struct プロパティでの絞り込み、並べ
 スキーマ変更です。値を削除すると、保存済みの行が読み取り時に拒否されます。
 そのため、他のマイグレーションと同じように計画してください。
 
+### Rules and status transitions
+
+一つの choice プロパティで許可する状態遷移には、遷移グラフを使います。一つのオブジェクトだけで
+判定できる不変条件にはルールを使い、権限、リクエストの文脈、別のオブジェクトなど、操作ごとの条件には
+アクションの事前条件を使います。別オブジェクトを調べる条件はアクションに残し、ルールから他の
+オブジェクトを検索しないでください。
+
+```python
+from enum import StrEnum
+
+from ontary import Ontology, OntologyObject, prop
+from ontary.meta import TransitionDef
+
+_ontology = Ontology("orders", scope_levels=["team"])
+
+
+class OrderStatus(StrEnum):
+    PENDING = "pending"
+    PAID = "paid"
+    SHIPPED = "shipped"
+
+
+@_ontology.object(layer="L0", scope="unscoped")
+class Order(OntologyObject):
+    id: str = prop(primary_key=True)
+    status: OrderStatus = prop(transitions=TransitionDef(
+        initial=("pending",),
+        moves={"pending": ("paid",), "paid": ("shipped",), "shipped": ()},
+    ))
+    paid: bool = False
+
+
+@_ontology.rule(Order, "shipped_needs_payment", message="payment is required")
+def shipped_needs_payment(order: Order) -> bool:
+    return order.status != OrderStatus.SHIPPED or order.paid
+```
+
+各ルールは純粋に保ち、受け取った型付きオブジェクトだけから判定してください。データを書き込んだり、
+外部状態を参照したりしないでください。ルールには、コンシューマーから制限されているプロパティも含め、
+宣言済みのすべてのプロパティを持つ新しいオブジェクト全体が渡されます。エンジンは純粋性を強制しません。
+ルールが失敗すると書き込みは拒否され、拒否メッセージにはルール名とメッセージが含まれます。
+
+`initial` の状態は、アクションで作成するオブジェクトに適用されます。ingest と直接の store insert は、
+宣言済みの任意の状態から開始できます。既存行への ingest update には引き続き遷移グラフが適用され、
+グラフで許可されない状態へ移すことはできません。
+
 ### Interfaces
 
 Foundry の interface はオブジェクト型間の共通契約を定義します。**同等物はまだありません。
