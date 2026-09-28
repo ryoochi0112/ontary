@@ -25,6 +25,7 @@ from ontary import (
     Cardinality,
     Consumer,
     DirectProperty,
+    FunctionParams,
     ObjectStore,
     Ontology,
     OntologyObject,
@@ -56,29 +57,32 @@ def _build() -> tuple[Ontology, Any]:
 
     CLOCK = ontology.capability(Clock)
 
-    @ontology.function(api_name="withCapability", capabilities=[CLOCK])
-    def _with_capability(query: BoundQuery, _params: dict[str, Any]) -> str:
+    class WithCapabilityParams(FunctionParams):
+        tz: str
+
+    @ontology.function(WithCapabilityParams, api_name="withCapability", capabilities=[CLOCK])
+    def _with_capability(query: BoundQuery, _params: WithCapabilityParams) -> str:
         return query.capability(CLOCK).now()
 
     @ontology.function(api_name="twice", capabilities=[CLOCK])
-    def _twice(query: BoundQuery, _params: dict[str, Any]) -> str:
+    def _twice(query: BoundQuery) -> str:
         query.capability(CLOCK)
         return query.capability(CLOCK).now()
 
     @ontology.function(api_name="pure")
-    def _pure(_query: BoundQuery, _params: dict[str, Any]) -> int:
+    def _pure(_query: BoundQuery) -> int:
         return 42
 
     @ontology.function(api_name="pureButAudited", audit=True)
-    def _pure_but_audited(_query: BoundQuery, _params: dict[str, Any]) -> int:
+    def _pure_but_audited(_query: BoundQuery) -> int:
         return 7
 
     @ontology.function(api_name="quietDespiteCapability", capabilities=[CLOCK], audit=False)
-    def _quiet(query: BoundQuery, _params: dict[str, Any]) -> str:
+    def _quiet(query: BoundQuery) -> str:
         return query.capability(CLOCK).now()
 
     @ontology.function(api_name="explodes", capabilities=[CLOCK])
-    def _explodes(query: BoundQuery, _params: dict[str, Any]) -> str:
+    def _explodes(query: BoundQuery) -> str:
         query.capability(CLOCK)
         raise RuntimeError("boom")
 
@@ -171,8 +175,8 @@ def test_failing_function_is_still_audited_with_its_accesses(
 
 
 def test_each_call_gets_its_own_invocation_id(client: OntologyClient) -> None:
-    client.call_function("withCapability", {})
-    client.call_function("withCapability", {})
+    client.call_function("withCapability", {"tz": "UTC"})
+    client.call_function("withCapability", {"tz": "UTC"})
 
     ids = [e.invocation_id for e in _entries(client)]
     assert len(set(ids)) == 2
@@ -182,7 +186,7 @@ def test_kind_separates_a_function_from_a_same_named_action(client: OntologyClie
     """`kind` exists because nothing stops an ontology from declaring an action
     and a function with the same api_name; a consumer filtering by name must
     not conflate them."""
-    client.call_function("withCapability", {})
+    client.call_function("withCapability", {"tz": "UTC"})
 
     entry = _entries(client)[0]
     assert entry.kind == "function"
@@ -237,67 +241,78 @@ def _build_contributor() -> tuple[Ontology, Any]:
 
     ontology.link("byReader", Reading, Reader, Cardinality.MANY_TO_ONE)
 
-    @ontology.function(api_name="releasingMean")
-    def _releasing_mean(query: BoundQuery, _params: dict[str, Any]) -> float:
+    class ReleasingMeanParams(FunctionParams):
+        shelf_id: str
+
+    @ontology.function(ReleasingMeanParams, api_name="releasingMean")
+    def _releasing_mean(query: BoundQuery, _params: ReleasingMeanParams) -> float:
         return query.aggregate(Reading, "raw_score")
 
-    @ontology.function(api_name="releasingMeanByShelf")
+    class ReleasingMeanByShelfParams(FunctionParams):
+        shelf_id: str
+
+    @ontology.function(ReleasingMeanByShelfParams, api_name="releasingMeanByShelf")
     def _releasing_mean_by_shelf(
-        query: BoundQuery, params: dict[str, Any]
+        query: BoundQuery, params: ReleasingMeanByShelfParams
     ) -> dict[str, float]:
         return query.aggregate_by(
-            Reading, "raw_score", "shelf_id", where={"shelf_id": params["shelf_id"]}
+            Reading, "raw_score", "shelf_id", where={"shelf_id": params.shelf_id}
         )
 
     @ontology.function(api_name="releasingMeanByApiName")
-    def _releasing_mean_by_api_name(
-        query: BoundQuery, _params: dict[str, Any]
-    ) -> float:
+    def _releasing_mean_by_api_name(query: BoundQuery) -> float:
         return query.aggregate("Reading", "raw_score")
 
-    @ontology.function(api_name="releasingMeanByShelfByApiName")
+    class ReleasingMeanByShelfByApiNameParams(FunctionParams):
+        shelf_id: str
+
+    @ontology.function(
+        ReleasingMeanByShelfByApiNameParams, api_name="releasingMeanByShelfByApiName"
+    )
     def _releasing_mean_by_shelf_by_api_name(
-        query: BoundQuery, params: dict[str, Any]
+        query: BoundQuery, params: ReleasingMeanByShelfByApiNameParams
     ) -> dict[str, float]:
         return query.aggregate_by(
-            "Reading", "raw_score", "shelf_id", where={"shelf_id": params["shelf_id"]}
+            "Reading", "raw_score", "shelf_id", where={"shelf_id": params.shelf_id}
         )
 
     @ontology.function(api_name="countsOnly")
-    def _counts_only(query: BoundQuery, _params: dict[str, Any]) -> int:
+    def _counts_only(query: BoundQuery) -> int:
         return query.count(Reading)
 
     @ontology.function(api_name="releasingButQuiet", audit=False)
-    def _releasing_but_quiet(query: BoundQuery, _params: dict[str, Any]) -> float:
+    def _releasing_but_quiet(query: BoundQuery) -> float:
         return query.aggregate(Reading, "raw_score")
 
     @ontology.function(api_name="releasesThenExplodes")
-    def _releases_then_explodes(
-        query: BoundQuery, _params: dict[str, Any]
-    ) -> float:
+    def _releases_then_explodes(query: BoundQuery) -> float:
         query.aggregate(Reading, "raw_score")
         raise RuntimeError("boom")
 
-    @ontology.function(api_name="visibleMean")
-    def _visible_mean(query: BoundQuery, params: dict[str, Any]) -> float:
+    class VisibleMeanParams(FunctionParams):
+        shelf_id: str
+
+    @ontology.function(VisibleMeanParams, api_name="visibleMean")
+    def _visible_mean(query: BoundQuery, params: VisibleMeanParams) -> float:
         return query.aggregate(
-            Reading, "page_count", where={"shelf_id": params["shelf_id"]}
+            Reading, "page_count", where={"shelf_id": params.shelf_id}
         )
 
-    @ontology.function(api_name="narrowedHiddenMean")
+    class NarrowedHiddenMeanParams(FunctionParams):
+        id: str
+
+    @ontology.function(NarrowedHiddenMeanParams, api_name="narrowedHiddenMean")
     def _narrowed_hidden_mean(
-        query: BoundQuery, params: dict[str, Any]
+        query: BoundQuery, params: NarrowedHiddenMeanParams
     ) -> float:
-        return query.aggregate(Reading, "raw_score", where={"id": params["id"]})
+        return query.aggregate(Reading, "raw_score", where={"id": params.id})
 
     @ontology.function(api_name="releasingScarceMean")
-    def _releasing_scarce_mean(query: BoundQuery, _params: dict[str, Any]) -> float:
+    def _releasing_scarce_mean(query: BoundQuery) -> float:
         return query.aggregate(Reading, "scarce_score")
 
     @ontology.function(api_name="releasingWithCapability", capabilities=[CLOCK])
-    def _releasing_with_capability(
-        query: BoundQuery, _params: dict[str, Any]
-    ) -> float:
+    def _releasing_with_capability(query: BoundQuery) -> float:
         query.capability(CLOCK).now()
         return query.aggregate(Reading, "raw_score")
 
@@ -395,7 +410,7 @@ def test_audit_false_cannot_suppress_a_hidden_aggregate_release(
     """`audit=False` overrides the DEFAULT, not the disclosure trace. An
     ontology cannot opt out of recording that it handed out a hidden value."""
     assert contributor_client.call_function(
-        "releasingButQuiet", {"shelf_id": "shelf-1"}
+        "releasingButQuiet", {}
     ) == pytest.approx(6.25)
 
     assert [(e.kind, e.action) for e in _entries(contributor_client)] == [
@@ -411,7 +426,7 @@ def test_a_release_followed_by_a_raise_is_still_audited(
     the release never happened."""
     with pytest.raises(RuntimeError):
         contributor_client.call_function(
-            "releasesThenExplodes", {"shelf_id": "shelf-1"}
+            "releasesThenExplodes", {}
         )
 
     entries = _entries(contributor_client)
@@ -425,7 +440,7 @@ def test_a_release_by_an_already_audited_function_writes_exactly_one_entry(
 ) -> None:
     """The two reasons to audit must not each append a row."""
     assert contributor_client.call_function(
-        "releasingWithCapability", {"shelf_id": "shelf-1"}
+        "releasingWithCapability", {}
     ) == pytest.approx(6.25)
 
     entries = _entries(contributor_client)
@@ -506,7 +521,7 @@ def test_releasing_through_the_string_form_aggregate_is_audited(
     one leaves this green while the string spelling releases silently. Found
     by mutation -- the same shape that left `TypedPage` unpinned in G2."""
     assert contributor_client.call_function(
-        "releasingMeanByApiName", {"shelf_id": "shelf-1"}
+        "releasingMeanByApiName", {}
     ) == pytest.approx(6.25)
 
     assert [(e.kind, e.action) for e in _entries(contributor_client)] == [

@@ -59,7 +59,15 @@ from mcp.types import LATEST_PROTOCOL_VERSION
 from pydantic import AnyHttpUrl
 
 from ontary.actions import ActionContext, ActionError
-from ontary.authoring import ActionParams, Ontology, OntologyObject, prop, scope_ref, target
+from ontary.authoring import (
+    ActionParams,
+    FunctionParams,
+    Ontology,
+    OntologyObject,
+    prop,
+    scope_ref,
+    target,
+)
 from ontary.client import OntologyClient, OntologyRuntime
 from ontary.functions import BoundQuery
 from ontary.mcp_server import MCP_INCOMPATIBLE_HINT, build_multi_consumer_mcp_server
@@ -136,16 +144,22 @@ def _library_ontology() -> tuple[Ontology, type[OntologyObject]]:
         ctx.link(onShelf, book, params.shelf_id)
         return {"book_id": params.book_id}
 
+    class CountBooksOnShelfParams(FunctionParams):
+        shelf_id: str
+
     @ontology.function(
+        CountBooksOnShelfParams,
         description="Count the (visible) books on a shelf",
         input_description="shelf_id",
         output_description="int count",
         api_name="countBooksOnShelf",
     )
-    def _count_books_on_shelf(query: BoundQuery, params: dict[str, Any]) -> int:
+    def _count_books_on_shelf(
+        query: BoundQuery, params: CountBooksOnShelfParams
+    ) -> int:
         return len(
             query.list(
-                "Book", where={"shelf_id": params["shelf_id"]}, limit=None
+                "Book", where={"shelf_id": params.shelf_id}, limit=None
             )
         )
 

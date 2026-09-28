@@ -18,7 +18,7 @@ from typing import Any
 import pytest
 from conftest import raises_code
 
-from ontary.authoring import LinkHandle, Ontology, OntologyObject, prop
+from ontary.authoring import FunctionParams, LinkHandle, Ontology, OntologyObject, prop
 from ontary.client import OntologyClient
 from ontary.errors import ValidationFailed, VisibilityError
 from ontary.functions import BoundQuery
@@ -58,33 +58,47 @@ def _build_ontology() -> tuple[
         input_description="none",
         output_description="int",
     )
-    def ticketCount(query: BoundQuery, params: dict[str, Any]) -> int:
+    def ticketCount(query: BoundQuery) -> int:
         return len(query.list(Ticket, limit=None))
 
     @ontology.function(api_name="firstTicketSubject")
-    def _first_subject(query: BoundQuery, params: dict[str, Any]) -> str | None:
+    def _first_subject(query: BoundQuery) -> str | None:
         tickets = query.list(Ticket, limit=None)
         return tickets[0].subject if tickets else None
 
-    @ontology.function(api_name="internalNoteRedacted")
-    def _internal_note_redacted(query: BoundQuery, params: dict[str, Any]) -> bool:
-        ticket = query.get(Ticket, params["ticket_id"])
+    class InternalNoteRedactedParams(FunctionParams):
+        ticket_id: str
+
+    @ontology.function(InternalNoteRedactedParams, api_name="internalNoteRedacted")
+    def _internal_note_redacted(
+        query: BoundQuery, params: InternalNoteRedactedParams
+    ) -> bool:
+        ticket = query.get(Ticket, params.ticket_id)
         assert ticket is not None
         return "internal_note" in ticket.redacted_fields
 
-    @ontology.function(api_name="teamTickets")
-    def _team_tickets(query: BoundQuery, params: dict[str, Any]) -> list[str]:
-        tickets = query.traverse(owns, params["team_id"])
+    class TeamTicketsParams(FunctionParams):
+        team_id: str
+
+    @ontology.function(TeamTicketsParams, api_name="teamTickets")
+    def _team_tickets(query: BoundQuery, params: TeamTicketsParams) -> list[str]:
+        tickets = query.traverse(owns, params.team_id)
         return [t.id for t in tickets]
 
-    @ontology.function(api_name="ticketTeams")
-    def _ticket_teams(query: BoundQuery, params: dict[str, Any]) -> list[str]:
-        teams = query.traverse(owns, params["ticket_id"], reverse=True)
+    class TicketTeamsParams(FunctionParams):
+        ticket_id: str
+
+    @ontology.function(TicketTeamsParams, api_name="ticketTeams")
+    def _ticket_teams(query: BoundQuery, params: TicketTeamsParams) -> list[str]:
+        teams = query.traverse(owns, params.ticket_id, reverse=True)
         return [team.id for team in teams]
 
-    @ontology.function(api_name="ticketsWhere")
-    def _tickets_where(query: BoundQuery, params: dict[str, Any]) -> list[str]:
-        tickets = query.list(Ticket, where=params.get("where"), limit=None)
+    class TicketsWhereParams(FunctionParams):
+        where: dict[str, Any] | None = None
+
+    @ontology.function(TicketsWhereParams, api_name="ticketsWhere")
+    def _tickets_where(query: BoundQuery, params: TicketsWhereParams) -> list[str]:
+        tickets = query.list(Ticket, where=params.where, limit=None)
         return [t.id for t in tickets]
 
     return ontology, Ticket, Team, owns
@@ -129,18 +143,21 @@ def _build_contributor_ontology() -> tuple[
     ontology.link("byReader", Reading, Reader, Cardinality.MANY_TO_ONE)
 
     @ontology.function(api_name="authorMean")
-    def _author_mean(query: BoundQuery, _params: dict[str, Any]) -> float:
+    def _author_mean(query: BoundQuery) -> float:
         return query.aggregate(Reading, "raw_score")
 
-    @ontology.function(api_name="authorMeanByShelf")
+    class AuthorMeanByShelfParams(FunctionParams):
+        shelf_id: str
+
+    @ontology.function(AuthorMeanByShelfParams, api_name="authorMeanByShelf")
     def _author_mean_by_shelf(
-        query: BoundQuery, params: dict[str, Any]
+        query: BoundQuery, params: AuthorMeanByShelfParams
     ) -> dict[str, float]:
         return query.aggregate_by(
             Reading,
             "raw_score",
             "shelf_id",
-            where={"shelf_id": params["shelf_id"]},
+            where={"shelf_id": params.shelf_id},
         )
 
     return ontology, Reader, Reading
@@ -189,9 +206,7 @@ def test_author_function_releases_hidden_mean_end_to_end() -> None:
     """AC10 remains available for an unnarrowed author Function read."""
     _ontology, client, _Reading, _store = _contributor_client()
 
-    assert client.call_function("authorMean", {"shelf_id": "shelf-1"}) == pytest.approx(
-        6.25
-    )
+    assert client.call_function("authorMean", {}) == pytest.approx(6.25)
     with raises_code(VisibilityError, "VISIBILITY_DENIED"):
         client.call_function("authorMeanByShelf", {"shelf_id": "shelf-1"})
 
@@ -325,7 +340,7 @@ class TestFailClosedResolution:
             pass
 
         @ontology.function(api_name="badGet")
-        def _bad(query: BoundQuery, params: dict[str, Any]) -> Any:
+        def _bad(query: BoundQuery) -> Any:
             return query.get(SubTicket, "t1")
 
         store = InMemoryStore(ontology.definition.registry)
@@ -339,7 +354,7 @@ class TestFailClosedResolution:
         _other_ontology, OtherTicket, _OtherTeam, _other_owns = _build_ontology()
 
         @ontology.function(api_name="crossGet")
-        def _cross(query: BoundQuery, params: dict[str, Any]) -> Any:
+        def _cross(query: BoundQuery) -> Any:
             return query.get(OtherTicket, "t1")
 
         store = InMemoryStore(ontology.definition.registry)
@@ -352,7 +367,7 @@ class TestFailClosedResolution:
         _other_ontology, _OtherTicket, _OtherTeam, other_owns = _build_ontology()
 
         @ontology.function(api_name="crossTraverse")
-        def _cross(query: BoundQuery, params: dict[str, Any]) -> Any:
+        def _cross(query: BoundQuery) -> Any:
             return query.traverse(other_owns, "team-1")
 
         store = InMemoryStore(ontology.definition.registry)
@@ -396,13 +411,13 @@ class TestFunctionDeclaration:
         ontology = Ontology(name="dup", scope_levels=LEVELS)
 
         @ontology.function(api_name="dupFn")
-        def _first(query: BoundQuery, params: dict[str, Any]) -> int:
+        def _first(query: BoundQuery) -> int:
             return 1
 
         with raises_code(ValidationFailed, "ONTOLOGY_INVALID") as exc_info:
 
             @ontology.function(api_name="dupFn")
-            def _second(query: BoundQuery, params: dict[str, Any]) -> int:
+            def _second(query: BoundQuery) -> int:
                 return 2
         assert "duplicate" in str(exc_info.value)
 
@@ -413,7 +428,7 @@ class TestFunctionDeclaration:
         with raises_code(ValidationFailed, "ONTOLOGY_INVALID") as exc_info:
 
             @ontology.function(api_name="tooLate")
-            def _late(query: BoundQuery, params: dict[str, Any]) -> int:
+            def _late(query: BoundQuery) -> int:
                 return 1
         assert "frozen" in str(exc_info.value)
 
@@ -421,7 +436,7 @@ class TestFunctionDeclaration:
         ontology = Ontology(name="default-name", scope_levels=LEVELS)
 
         @ontology.function()
-        def myFunction(query: BoundQuery, params: dict[str, Any]) -> int:
+        def myFunction(query: BoundQuery) -> int:
             return 7
 
         definition = ontology.definition

@@ -169,16 +169,22 @@ def _base_library_ontology(
         ctx.link(onShelf, book, params.shelf_id)
         return {"book_id": params.book_id}
 
+    class CountBooksOnShelfParams(FunctionParams):
+        shelf_id: str
+
     @ontology.function(
+        CountBooksOnShelfParams,
         description="Count the (visible) books on a shelf",
         input_description="shelf_id",
         output_description="int count",
         api_name="countBooksOnShelf",
     )
-    def _count_books_on_shelf(query: BoundQuery, params: dict[str, Any]) -> int:
+    def _count_books_on_shelf(
+        query: BoundQuery, params: CountBooksOnShelfParams
+    ) -> int:
         return len(
             query.list(
-                "Book", where={"shelf_id": params["shelf_id"]}, limit=None
+                "Book", where={"shelf_id": params.shelf_id}, limit=None
             )
         )
 
@@ -304,9 +310,7 @@ def test_build_mcp_server_accepts_and_threads_provider_maps() -> None:
         return {"book_id": params.book_id}
 
     @ontology.function(api_name="providerBindings", capabilities=[capability])
-    def provider_bindings(
-        query: BoundQuery, _params: dict[str, Any]
-    ) -> dict[str, bool]:
+    def provider_bindings(query: BoundQuery) -> dict[str, bool]:
         return {"capability": query._capability_providers[capability] is provider}
 
     ontology.validate()
@@ -400,10 +404,18 @@ def test_typed_function_parameters_are_published_and_validated() -> None:
         ],
     }
     assert next(fn for fn in functions if fn["api_name"] == "noInputs")["parameters"] == []
-    assert (
-        next(fn for fn in functions if fn["api_name"] == "countBooksOnShelf")["parameters"]
-        is None
-    )
+    assert next(
+        fn for fn in functions if fn["api_name"] == "countBooksOnShelf"
+    )["parameters"] == [
+        {
+            "name": "shelf_id",
+            "type": "str",
+            "choices": None,
+            "fields": None,
+            "required": True,
+            "refers_to": None,
+        }
+    ]
 
     valid = _call(
         server,
@@ -1029,17 +1041,15 @@ def test_call_function_reads_through_guarded_query() -> None:
     assert payload["result"] == 1
 
 
-def _avg_rating(query: BoundQuery, params: dict[str, Any]) -> float:
+def _avg_rating(query: BoundQuery) -> float:
     return query.aggregate("Book", "rating")
 
 
-def _avg_rating_by_shelf(
-    query: BoundQuery, params: dict[str, Any]
-) -> dict[str, float]:
+def _avg_rating_by_shelf(query: BoundQuery) -> dict[str, float]:
     return query.aggregate_by("Book", "rating", "shelf_id")
 
 
-def _blow_up(query: BoundQuery, params: dict[str, Any]) -> Any:
+def _blow_up(query: BoundQuery) -> Any:
     raise RuntimeError("secret internals")
 
 
@@ -1057,8 +1067,8 @@ def _build_min_n_server(consumer: Consumer) -> MCPServer:
         output_description="float average",
         api_name="avgRating",
     )
-    def _avg(query: BoundQuery, params: dict[str, Any]) -> float:
-        return _avg_rating(query, params)
+    def _avg(query: BoundQuery) -> float:
+        return _avg_rating(query)
 
     @ontology.function(
         description="Average book rating by shelf (min-N gated)",
@@ -1066,10 +1076,8 @@ def _build_min_n_server(consumer: Consumer) -> MCPServer:
         output_description="mapping of shelf to average",
         api_name="avgRatingByShelf",
     )
-    def _avg_by_shelf(
-        query: BoundQuery, params: dict[str, Any]
-    ) -> dict[str, float]:
-        return _avg_rating_by_shelf(query, params)
+    def _avg_by_shelf(query: BoundQuery) -> dict[str, float]:
+        return _avg_rating_by_shelf(query)
 
     @ontology.function(
         description="Always raises, to exercise the InternalError path",
@@ -1077,8 +1085,8 @@ def _build_min_n_server(consumer: Consumer) -> MCPServer:
         output_description="never returns",
         api_name="blowUp",
     )
-    def _blow(query: BoundQuery, params: dict[str, Any]) -> Any:
-        return _blow_up(query, params)
+    def _blow(query: BoundQuery) -> Any:
+        return _blow_up(query)
 
     ontology.validate()
     store = ObjectStore(ontology.registry)
@@ -1096,7 +1104,7 @@ def test_call_function_min_n_violation_is_structured() -> None:
     error, never a raised exception or partial aggregate value."""
     server = _build_min_n_server(_librarian())
     payload = _call(
-        server, "call_function", {"api_name": "avgRating", "params": {"shelf_id": "shelf-1"}}
+        server, "call_function", {"api_name": "avgRating", "params": {}}
     )
     assert payload["error"]["type"] == "VisibilityError"
     assert payload["error"]["code"] == "MIN_N_VIOLATION"
@@ -1150,11 +1158,11 @@ def _build_governed_error_server() -> MCPServer:
     reader = ontology.capability(Reader)
 
     @ontology.function(api_name="undeclaredCapability")
-    def undeclared_capability(query: BoundQuery, _params: dict[str, Any]) -> str:
+    def undeclared_capability(query: BoundQuery) -> str:
         return query.capability(reader).read()
 
     @ontology.function(api_name="missingCapability", capabilities=[reader])
-    def missing_capability(query: BoundQuery, _params: dict[str, Any]) -> str:
+    def missing_capability(query: BoundQuery) -> str:
         return query.capability(reader).read()
 
     ontology.validate()

@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime
 from typing import Any, Literal
 
@@ -17,6 +18,7 @@ from ontary import (
 )
 from ontary.errors import ValidationFailed
 from ontary.functions import BoundQuery
+from ontary.mcp_server import build_mcp_server
 from ontary.meta import ActionParameterDef, FunctionDef
 from ontary.model import _class_stamp
 from ontary.store import ObjectStore
@@ -270,13 +272,24 @@ def test_no_input_and_legacy_modes(make_consumer: Any) -> None:
 
     assert ontology.registry.get_function("empty").parameters == []
     assert ontology.registry.get_function("legacy").parameters is None
+    ontology.validate()
     store = ObjectStore(ontology.registry)
-    client = ontology.bind(store).for_consumer(
-        make_consumer(actor_id="u1", role="Member", scope_level="org", scope_id="o1", kind="human")
+    consumer = make_consumer(
+        actor_id="u1", role="Member", scope_level="org", scope_id="o1", kind="human"
     )
+    client = ontology.bind(store).for_consumer(consumer)
+    server = build_mcp_server(ontology, store, consumer)
     assert client.call_function("empty") == "ok"
     assert client.call_function("empty", {}) == "ok"
     assert client.call_function("legacy", {"value": 3}) == 3
+    functions_result = asyncio.run(server.call_tool("list_functions", {}))
+    assert functions_result.structured_content is not None
+    legacy_payload = next(
+        fn
+        for fn in functions_result.structured_content["functions"]
+        if fn["api_name"] == "legacy"
+    )
+    assert legacy_payload["parameters"] is None
     with raises_code(ValidationFailed, "INVALID_PARAMS") as exc_info:
         client.call_function("empty", {"value": 3})
     assert "empty" in str(exc_info.value)
