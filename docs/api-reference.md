@@ -2,7 +2,7 @@
 
 **English** · [日本語](api-reference.ja.md) · [← README](../README.md)
 
-The curated front door of `ontary`: **42 names** in `__all__`. The rest of the
+The curated front door of `ontary`: **43 names** in `__all__`. The rest of the
 engine remains available from its canonical submodule (`ontary.meta`,
 `ontary.store`, and so on).
 
@@ -32,14 +32,14 @@ read, serve — start with the [README](../README.md).
 
 ## Front door
 
-`__all__` is sorted, duplicate-free, importable, and exactly 42 names. These
+`__all__` is sorted, duplicate-free, importable, and exactly 43 names. These
 are the names an ontology author should reach for without choosing an engine
 namespace.
 
 ### Authoring vocabulary
 
 `ActionContext`, `ActionParams`, `BoundQuery`, `CapabilityHandle`, `Cardinality`,
-`Consumer`, `DirectProperty`, `CustomResolver`, `LinkHandle`, `Ontology`,
+`Consumer`, `DirectProperty`, `CustomResolver`, `FunctionParams`, `LinkHandle`, `Ontology`,
 `OntologyObject`, `RowVisibilityStore`, `SelfScope`, `Sensitivity`,
 `Source`, `Store`, `ViaLink`, `prop`, `ref`, `scope_ref`, `target`.
 
@@ -1368,7 +1368,7 @@ data-driven ontologies; most authors should use `Ontology`.
 | `StructFieldDef` | `name`, `type`, `choices`, `required` |
 | `TransitionDef` | `initial`, `moves` |
 | `RuleDef` | `name`, `message`, `check` |
-| `FunctionDef` | `api_name`, `description`, `input_description`, `output_description`, `capabilities` |
+| `FunctionDef` | `api_name`, `description`, `input_description`, `output_description`, `parameters`, `capabilities` |
 | `Sensitivity` | `ai_usable`, `human_visible` |
 
 `PropertyType` is `Literal["str", "int", "float", "bool", "date", "datetime", "json", "struct"]`.

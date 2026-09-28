@@ -2,7 +2,7 @@
 
 [English](api-reference.md) · **日本語** · [← README](../README.md)
 
-`ontary` のキュレーションされたフロントドア: `__all__` の **42 個の名前**。
+`ontary` のキュレーションされたフロントドア: `__all__` の **43 個の名前**。
 残りのエンジン API は、`ontary.meta`、`ontary.store` などの
 定義元サブモジュールから利用します。
 
@@ -32,13 +32,13 @@
 
 ## フロントドア
 
-`__all__` はソート済み・重複なし・import 可能で、ちょうど 42 個です。オントロジーの
+`__all__` はソート済み・重複なし・import 可能で、ちょうど 43 個です。オントロジーの
 作者がエンジンの名前空間を選ばずに使う名前だけをここに置きます。
 
 ### Authoring vocabulary / 宣言用語彙
 
 `ActionContext`、`ActionParams`、`BoundQuery`、`CapabilityHandle`、`Cardinality`、
-`Consumer`、`CustomResolver`、`DirectProperty`、`LinkHandle`、`Ontology`、
+`Consumer`、`CustomResolver`、`DirectProperty`、`FunctionParams`、`LinkHandle`、`Ontology`、
 `OntologyObject`、`RowVisibilityStore`、`SelfScope`、`Sensitivity`、`Source`、
 `Store`、`ViaLink`、`prop`、`ref`、`scope_ref`、`target`。
 
@@ -53,7 +53,7 @@
 `ActionError`、`AuthorityError`、`ConflictError`、`InternalError`、`OntaryError`、
 `PermissionDenied`、`PreconditionFailed`、`ValidationFailed`、`VisibilityError`。
 
-この 42 個という個数は `tests/test_docs.py` が厳密に検証するため、root export の増加を
+この 43 個という個数は `tests/test_docs.py` が厳密に検証するため、root export の増加を
 見落としません。
 
 ```python
@@ -1340,7 +1340,7 @@ stateful セッションでも、各 request はその request 自身のトー�
 | `StructFieldDef` | `name`, `type`, `choices`, `required` |
 | `TransitionDef` | `initial`, `moves` |
 | `RuleDef` | `name`, `message`, `check` |
-| `FunctionDef` | `api_name`, `description`, `input_description`, `output_description`, `capabilities` |
+| `FunctionDef` | `api_name`, `description`, `input_description`, `output_description`, `parameters`, `capabilities` |
 | `Sensitivity` | `ai_usable`, `human_visible` |
 
 `PropertyType` は `Literal["str", "int", "float", "bool", "date", "datetime", "json", "struct"]`。

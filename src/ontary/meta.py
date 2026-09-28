@@ -537,11 +537,23 @@ class FunctionDef(BaseModel):
     description: str
     input_description: str
     output_description: str
+    parameters: list[ActionParameterDef] | None = None
     capabilities: list[str] = []
     #: Whether a call to this function appends an audit entry. `None` means
     #: "use the default", which is `True` exactly when the function declares
     #: capabilities -- see `audited`.
     audit: bool | None = None
+
+    @model_validator(mode="after")
+    def _valid_parameters(self) -> FunctionDef:
+        for parameter in self.parameters or []:
+            if parameter.scope_semantics is not None:
+                raise ValidationFailed(
+                    f"FunctionDef {self.api_name!r}: parameter {parameter.name!r} "
+                    "cannot use target() or scope_ref(); use ref() instead",
+                    code="ONTOLOGY_INVALID",
+                )
+        return self
 
     @property
     def audited(self) -> bool:

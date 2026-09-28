@@ -1,7 +1,7 @@
 """Shared low-level typed-model layer (C1 of the staged refactor).
 
 The pieces of the authoring DSL that the RUNTIME also needs -- the
-`OntologyObject`/`ActionParams` base classes and their class stamps,
+`OntologyObject`/`ActionParams`/`FunctionParams` base classes and their class stamps,
 `hydrate`, and the three typed handles -- moved here, below `functions`/
 `actions`/`client`, so those modules import them at module level instead of
 through the deferred-import cycle they previously used. `ontary.authoring`
@@ -24,6 +24,7 @@ from ontary.typesys import _storage_scalar_violation
 __all__ = [
     "ActionParams",
     "CapabilityHandle",
+    "FunctionParams",
     "LinkHandle",
     "OntologyObject",
     "hydrate",
@@ -154,6 +155,19 @@ class ActionParams(BaseModel):
     _ontary_registry: ClassVar[OntologyRegistry | None] = None
 
 
+class FunctionParams(BaseModel):
+    """Base class for typed function-params models.
+
+    Stamped by `Ontology.function()` with the registered name and registry so
+    typed calls can resolve the function through `_class_stamp`.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    _ontary_api_name: ClassVar[str | None] = None
+    _ontary_registry: ClassVar[OntologyRegistry | None] = None
+
+
 def _class_stamp(cls: type[Any]) -> tuple[str | None, OntologyRegistry | None]:
     """THE shared class/handle-resolution helper (spec `typed-actions.md`
     §6): reads an author-decorated class's `_ontary_api_name`/
@@ -162,8 +176,9 @@ def _class_stamp(cls: type[Any]) -> tuple[str | None, OntologyRegistry | None]:
     on an undecorated SUBCLASS (`class Sub(Ticket): ...` inherits the
     stamps without being decorated itself) and silently resolve `Sub` as if
     it were registered (see `OntologyObject`'s docstring). Works for both
-    `OntologyObject` subclasses (`@ontology.object(...)`) and `ActionParams`
-    subclasses (`@ontology.action(...)`) -- both stamp the same two names.
+    `OntologyObject` subclasses (`@ontology.object(...)`), `ActionParams`
+    subclasses (`@ontology.action(...)`), and `FunctionParams` subclasses
+    (`@ontology.function(...)`) -- all stamp the same two names.
     Returns `(None, None)` for a class that was never decorated.
 
     Deliberately a PURE read, not a check: `client.OntologyClient.
