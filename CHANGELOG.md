@@ -11,6 +11,19 @@ you**.
 
 ## [Unreleased]
 
+## [0.18.0] — 2026-09-28
+
+```bash
+uv add "ontary @ git+https://github.com/ryoochi0112/ontary@v0.18.0"
+```
+
+This release lets a model say what its values may be and how they may change.
+Choice properties (`Enum` and `Literal`) and struct properties are typed on read
+and checked on write. Declared status transitions and named object rules are
+enforced on every write path. The string `ActionContext` members deprecated in
+0.17.0 are removed; use the typed members. The store schema stays at v13, so a
+0.17.0 store needs no re-ingest.
+
 ### Added
 
 - Choice properties (#42). A property or action parameter annotated with a
