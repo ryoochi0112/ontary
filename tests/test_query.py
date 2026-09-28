@@ -21,7 +21,7 @@ import pytest
 from conftest import raises_code
 
 import ontary.query as query_module
-from ontary import _typed_api
+from ontary import OntologyObject, _typed_api
 from ontary.actions import ActionContext, ActionExecutor
 from ontary.authoring import ActionParams
 from ontary.client import OntologyClient
@@ -3732,24 +3732,29 @@ def test_retire_action_does_not_release_an_individuals_hidden_values(
     class RetireReaderParams(ActionParams):
         reader_id: str
 
+    class Reader(OntologyObject):
+        id: str
+
+    Reader._ontary_api_name = "Reader"
+    Reader._ontary_registry = registry
+
     def retire_reader(ctx: ActionContext, params: RetireReaderParams) -> dict[str, str]:
-        ctx.retire("Reader", params.reader_id)
+        ctx.retire(Reader, params.reader_id)
         return {"reader_id": params.reader_id}
 
     executor = ActionExecutor(store, registry, policy)
     executor._register("RetireReader", retire_reader, RetireReaderParams)
-    with pytest.warns(DeprecationWarning, match="ActionContext"):
-        executor.execute(
-            Consumer(
-                actor_id="op-1",
-                role="Operator",
-                scope_level="shelf",
-                scope_id="shelf-1",
-                kind="human",
-            ),
-            "RetireReader",
-            {"reader_id": "reader-1"},
-        )
+    executor.execute(
+        Consumer(
+            actor_id="op-1",
+            role="Operator",
+            scope_level="shelf",
+            scope_id="shelf-1",
+            kind="human",
+        ),
+        "RetireReader",
+        {"reader_id": "reader-1"},
+    )
     assert store.links_from("byReader", "r0") == []
 
     with raises_code(VisibilityError, "MIN_N_VIOLATION"):

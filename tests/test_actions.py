@@ -43,6 +43,7 @@ from ontary.meta import (
     OntologyRegistry,
     PropertyDef,
 )
+from ontary.model import LinkHandle
 from ontary.scope import (
     CustomResolver,
     DirectProperty,
@@ -456,14 +457,42 @@ class RegisterParams(BaseModel):
 received_checkout_params: list[CheckoutParams] = []
 
 
+class Book(OntologyObject):
+    id: str
+    status: str | None = None
+
+
+class Loan(OntologyObject):
+    id: str
+    borrower: str | None = None
+
+
+class Library(OntologyObject):
+    id: str
+
+
+class Shelf(OntologyObject):
+    id: str
+
+
+loanedBook = LinkHandle(api_name="loanedBook", from_cls=Loan, to_cls=Book)
+onShelf = LinkHandle(api_name="onShelf", from_cls=Book, to_cls=Shelf)
+
+
+def _bind_action_classes(registry: OntologyRegistry) -> None:
+    for cls in (Book, Loan, Library, Shelf):
+        cls._ontary_api_name = cls.__name__
+        cls._ontary_registry = registry
+
+
 def _checkout_ctx_handler(ctx: ActionContext, params: CheckoutParams) -> dict[str, str]:
     received_checkout_params.append(params)
-    book = ctx.read_current("Book", params.book_id)
+    book = ctx.get(Book, params.book_id)
     if book is None:
         raise ActionError(f"book {params.book_id!r} does not exist", code="PRECONDITION_FAILED")
-    loan_id = ctx.insert("Loan", {"borrower": params.borrower})
-    ctx.create_link("loanedBook", loan_id, params.book_id)
-    return {"loan_id": loan_id}
+    loan = ctx.create(Loan, borrower=params.borrower)
+    ctx.link(loanedBook, loan, params.book_id)
+    return {"loan_id": loan.id}
 
 
 def _checkout_ctx_handler_then_refused(
@@ -472,17 +501,17 @@ def _checkout_ctx_handler_then_refused(
     """Writes via `ctx` (Loan create + link), THEN attempts a source-backed
     create the engine must refuse (`Library` is not declared `owned=True`)
     -- proves the earlier ctx writes roll back with the refusal."""
-    loan_id = ctx.insert("Loan", {"borrower": params.borrower})
-    ctx.create_link("loanedBook", loan_id, params.book_id)
-    ctx.insert("Library", {"id": "should-not-persist"})
-    return {"loan_id": loan_id}  # pragma: no cover -- never reached
+    loan = ctx.create(Loan, borrower=params.borrower)
+    ctx.link(loanedBook, loan, params.book_id)
+    ctx.create(Library, id="should-not-persist")
+    return {"loan_id": loan.id}  # pragma: no cover -- never reached
 
 
 def _register_ctx_handler(ctx: ActionContext, params: RegisterParams) -> dict[str, str]:
-    book_id = ctx.insert("Book", {"status": "new"})
+    book = ctx.create(Book, status="new")
     if params.fail:
         raise ActionError("forced failure after side effect", code="PRECONDITION_FAILED")
-    return {"book_id": book_id}
+    return {"book_id": book.id}
 
 
 def _setup_typed(
@@ -490,6 +519,7 @@ def _setup_typed(
     store: ObjectStore,
     make_policy: PolicyFactory,
 ) -> ActionExecutor:
+    _bind_action_classes(registry)
     executor = _setup(registry, store, make_policy)
     executor._register("CheckoutBookTyped", _checkout_ctx_handler, CheckoutParams)
     executor._register(
@@ -4555,7 +4585,7 @@ def test_action_context_writes_are_source_stamped(
     make_store: StoreFactory,
     make_policy: PolicyFactory,
 ) -> None:
-    """ctx.insert/create_link auto-stamp the action's own `Source`
+    """ctx.create/link auto-stamp the action's own `Source`
     (`action:<api_name>`) -- the handler never supplies one."""
     registry = make_registry(
         object_types=ACTION_OBJECT_TYPES,
@@ -4568,12 +4598,11 @@ def test_action_context_writes_are_source_stamped(
     store.create_link("onShelf", "book-1", "shelf-1")
     executor = _setup_typed(registry, store, make_policy)
 
-    with pytest.warns(DeprecationWarning, match="ActionContext"):
-        result = executor.execute(
-            _librarian(scope_id="shelf-1"),
-            "CheckoutBookTyped",
-            {"book_id": "book-1", "borrower": "alice"},
-        )
+    result = executor.execute(
+        _librarian(scope_id="shelf-1"),
+        "CheckoutBookTyped",
+        {"book_id": "book-1", "borrower": "alice"},
+    )
 
     loan = store.read_current("Loan", result["loan_id"])
     assert loan is not None
@@ -4600,7 +4629,7 @@ def test_action_context_refusal_mid_handler_rolls_back_and_audits_error(
     store.create_link("onShelf", "book-1", "shelf-1")
     executor = _setup_typed(registry, store, make_policy)
 
-    with pytest.warns(DeprecationWarning, match="ActionContext"), pytest.raises(Exception):
+    with pytest.raises(Exception):
         executor.execute(
             _librarian(scope_id="shelf-1"),
             "CheckoutBookTypedRefused",
@@ -4633,12 +4662,11 @@ def test_typed_handler_receives_params_instance_via_dict_execute(
     executor = _setup_typed(registry, store, make_policy)
     received_checkout_params.clear()
 
-    with pytest.warns(DeprecationWarning, match="ActionContext"):
-        executor.execute(
-            _librarian(scope_id="shelf-1"),
-            "CheckoutBookTyped",
-            {"book_id": "book-1", "borrower": "alice"},
-        )
+    executor.execute(
+        _librarian(scope_id="shelf-1"),
+        "CheckoutBookTyped",
+        {"book_id": "book-1", "borrower": "alice"},
+    )
 
     assert len(received_checkout_params) == 1
     assert isinstance(received_checkout_params[0], CheckoutParams)
@@ -4666,8 +4694,7 @@ def test_typed_handler_receives_same_instance_via_typed_execute(
     received_checkout_params.clear()
 
     params = CheckoutParams(book_id="book-1", borrower="alice")
-    with pytest.warns(DeprecationWarning, match="ActionContext"):
-        executor.execute(_librarian(scope_id="shelf-1"), "CheckoutBookTyped", params)
+    executor.execute(_librarian(scope_id="shelf-1"), "CheckoutBookTyped", params)
 
     assert len(received_checkout_params) == 1
     assert received_checkout_params[0] is params
@@ -4852,8 +4879,9 @@ def test_action_context_retire_requires_action_transaction(
         registry=registry,
     )
 
+    _bind_action_classes(registry)
     with raises_code(ConflictError, "CALLER_TRANSACTION_REFUSED"):
-        ctx.retire("Book", "book-1")
+        ctx.retire(Book, "book-1")
 
     assert store.read_current("Book", "book-1") is not None
 
@@ -4878,19 +4906,20 @@ def test_action_context_unlink_requires_action_transaction(
         registry=registry,
     )
 
+    _bind_action_classes(registry)
     with raises_code(ConflictError, "CALLER_TRANSACTION_REFUSED"):
-        ctx.unlink("onShelf", "book-1", "shelf-1")
+        ctx.unlink(onShelf, "book-1", "shelf-1")
 
     assert store.links_from("onShelf", "book-1") == ["shelf-1"]
 
 
-def test_action_context_read_all_delegates_to_the_trusted_raw_store_read(
+def test_action_context_all_delegates_to_the_trusted_raw_store_read(
     make_registry: RegistryFactory,
     make_store: StoreFactory,
 ) -> None:
     """Handlers can enumerate raw current rows without reaching ``ctx._store``.
 
-    This is deliberately the same trusted tier as ``read_current``: action
+    This is deliberately the same trusted tier as ``get``: action
     handlers are ontology author code, and an id allocator must see every row
     rather than a scope- or sensitivity-filtered subset that could reuse an id.
     """
@@ -4900,12 +4929,14 @@ def test_action_context_read_all_delegates_to_the_trusted_raw_store_read(
         action_types=ACTION_TYPES,
     )
     store = make_store(registry)
-    store.insert("Book", {"id": "book-1", "title": "First"}, SRC)
-    store.insert("Book", {"id": "book-2", "title": "Second"}, SRC)
-    ctx = ActionContext(store, Source(source_system="action:Test"), _librarian())
+    store.insert("Book", {"id": "book-1", "status": "First"}, SRC)
+    store.insert("Book", {"id": "book-2", "status": "Second"}, SRC)
+    _bind_action_classes(registry)
+    ctx = ActionContext(store, Source(source_system="action:Test"), _librarian(), registry=registry)
 
-    with pytest.warns(DeprecationWarning, match="ActionContext"):
-        assert ctx.read_all("Book") == store.read_all("Book")
+    assert [(book.id, book.status) for book in ctx.all(Book)] == [
+        (row.lineage.object_id, row.payload["status"]) for row in store.read_all("Book")
+    ]
 
 
 def test_register_private_duplicate_and_unregistered_checks_unchanged(
