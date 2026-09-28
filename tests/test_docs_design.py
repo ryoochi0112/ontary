@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 import ontary
-from ontary import OntologyObject, Sensitivity
+from ontary import OntologyObject, Sensitivity, Source
 from ontary.actions import ActionContext
 from ontary.meta import (
     ActionTypeDef,
@@ -28,6 +28,7 @@ DESIGN_GUIDES = (
     _DOCS / "ontology-design.ja.md",
 )
 README = _ROOT / "README.md"
+_SOURCE = Source(source_system="guide-example")
 
 _IDENTIFIER = re.compile(
     r"`([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)`"
@@ -245,11 +246,39 @@ def test_api_reference_documents_transitions_rules_and_mcp_schema(path: Path) ->
     assert not missing, f"{path.name}: API reference omits {missing}"
 
 
-def test_unreleased_changelog_covers_declared_rules_and_transitions() -> None:
+@pytest.mark.parametrize("path", DESIGN_GUIDES, ids=lambda path: path.name)
+def test_design_guide_rules_and_transitions_example_runs(path: Path) -> None:
+    """The guide's example builds, and its transition and rule both refuse."""
+    from ontary.errors import OntaryError
+    from ontary.store import InMemoryStore
+
+    blocks = re.findall(r"(?ms)^```python\n(.*?)^```", _rules_transitions_section(path))
+    assert len(blocks) == 1, f"{path.name}: expected one python example"
+    namespace: dict[str, object] = {"__name__": f"guide_example_{path.stem.replace('.', '_')}"}
+    exec(compile(blocks[0], str(path), "exec", dont_inherit=True), namespace)
+
+    ontology = namespace["_ontology"]
+    assert isinstance(ontology, ontary.Ontology)
+    store = InMemoryStore(ontology.registry)
+    store.insert("Order", {"id": "o-1", "status": "pending", "paid": False}, source=_SOURCE)
+    with pytest.raises(OntaryError) as moved:
+        store.update("Order", "o-1", {"status": "shipped"}, source=_SOURCE)
+    assert moved.value.code == "TRANSITION_NOT_ALLOWED"
+    store.update("Order", "o-1", {"status": "paid"}, source=_SOURCE)
+    with pytest.raises(OntaryError) as unpaid:
+        store.update("Order", "o-1", {"status": "shipped"}, source=_SOURCE)
+    assert unpaid.value.code == "RULE_VIOLATED"
+    assert "shipped_needs_payment" in str(unpaid.value)
+
+
+def test_changelog_covers_declared_rules_and_transitions() -> None:
+    """Version-agnostic: pins the release section that carries #44, so the
+    test survives the Unreleased section being cut into a version."""
     changelog = (_ROOT / "CHANGELOG.md").read_text()
-    unreleased_match = re.search(r"(?ms)^## \[Unreleased\]\n(.*?)(?=^## \[|\Z)", changelog)
-    assert unreleased_match is not None
-    unreleased = unreleased_match.group(1)
+    sections = re.findall(r"(?ms)^## \[[^\]]+\][^\n]*\n(.*?)(?=^## \[|\Z)", changelog)
+    matching = [section for section in sections if "(#44)" in section]
+    assert len(matching) == 1, "CHANGELOG must carry exactly one #44 release section"
+    unreleased = matching[0]
     added_match = re.search(r"(?ms)^### Added\n(.*?)(?=^### |\Z)", unreleased)
     changed_match = re.search(r"(?ms)^### Changed\n(.*?)(?=^### |\Z)", unreleased)
     assert added_match is not None, "Unreleased changelog is missing ### Added"

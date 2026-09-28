@@ -168,7 +168,7 @@ from enum import StrEnum
 from ontary import Ontology, OntologyObject, prop
 from ontary.meta import TransitionDef
 
-_ontology = Ontology("orders")
+_ontology = Ontology("orders", scope_levels=["team"])
 
 
 class OrderStatus(StrEnum):
