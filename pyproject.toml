@@ -113,6 +113,7 @@ files = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src", "."]
+filterwarnings = ["error:function .* takes a params dict:DeprecationWarning"]
 
 [dependency-groups]
 docs = [

@@ -877,9 +877,24 @@ the code the MCP server reports for it. `None` on an `ok` entry.
 
 ## Functions
 
-A function is `(query: BoundQuery, params: dict) -> Any`, decorated with
-`@ontology.function(...)`. No store handle ever reaches it — only already-guarded
-reads. Functions return derived values and never write.
+A function takes a `BoundQuery` and a `FunctionParams` subclass, and is declared
+with `@ontology.function(params_cls, ...)`. `FunctionParams` rejects unknown
+fields; its annotations define the validated inputs and MCP parameter schema.
+No store handle ever reaches the handler — only already-guarded reads. Functions
+return derived values and never write.
+
+```python
+class TicketStatsParams(FunctionParams):
+    queue_id: str
+
+@ontology.function(TicketStatsParams, api_name="ticketStats")
+def ticket_stats(query: BoundQuery, params: TicketStatsParams) -> float:
+    mean = query.aggregate("Ticket", "age_hours", where={"queue_id": params.queue_id})
+    assert isinstance(mean, float)
+    return mean
+
+client.call_function(TicketStatsParams(queue_id="q1"))
+```
 
 ### `BoundQuery`
 
@@ -888,8 +903,8 @@ A `GuardedQuery` with the consumer fixed: `.get`, `.list`, `.count`, `.exists`, 
 `.capability(handle)`. Typed overloads
 work the same as on `OntologyClient` (`query.get(Ticket, id) -> Ticket | None`).
 
-Function *params* stay `dict[str, Any]` on both surfaces — typed function params are
-not part of this API.
+For a function with no inputs, declare a one-argument handler `(query)` and call
+it with no params or `{}`.
 
 `PreconditionFailed` (`FUNCTION_ERROR`) covers an undeclared api_name, a duplicate
 registration, or no bound handler.

@@ -1201,11 +1201,6 @@ class Ontology:
                 capabilities=capability_names,
                 audit=audit,
             )
-            self.registry.register_function(fn_def)  # dup api_name raises
-            if params_cls is not None:
-                params_cls._ontary_api_name = resolved_name
-                params_cls._ontary_registry = self.registry
-            self._function_handlers[resolved_name] = (fn, params_cls, mode)
             if mode == "legacy":
                 warnings.warn(
                     f"function {resolved_name!r} takes a params dict; this form is deprecated "
@@ -1214,6 +1209,11 @@ class Ontology:
                     DeprecationWarning,
                     stacklevel=2,
                 )
+            self.registry.register_function(fn_def)  # dup api_name raises
+            if params_cls is not None:
+                params_cls._ontary_api_name = resolved_name
+                params_cls._ontary_registry = self.registry
+            self._function_handlers[resolved_name] = (fn, params_cls, mode)
             return fn
 
         return decorator

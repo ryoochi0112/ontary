@@ -860,9 +860,23 @@ Action の `roles=` だけがゲートでした。スコープを持つパラメ
 
 ## Function
 
-Function は `(query: BoundQuery, params: dict) -> Any` を `@ontology.function(...)` で
-デコレートしたものです。ストアハンドルはハンドラに一切届かず、すでにガードされた
-読み取りだけが渡ります。Function は導出値を返し、書き込みは行いません。
+Function は `BoundQuery` と `FunctionParams` サブクラスを受け取り、
+`@ontology.function(params_cls, ...)` で宣言します。`FunctionParams` は未知のフィールドを拒否し、
+その型注釈が入力検証と MCP のパラメータスキーマを定義します。ストアハンドルはハンドラに一切届かず、
+すでにガードされた読み取りだけが渡ります。Function は導出値を返し、書き込みは行いません。
+
+```python
+class TicketStatsParams(FunctionParams):
+    queue_id: str
+
+@ontology.function(TicketStatsParams, api_name="ticketStats")
+def ticket_stats(query: BoundQuery, params: TicketStatsParams) -> float:
+    mean = query.aggregate("Ticket", "age_hours", where={"queue_id": params.queue_id})
+    assert isinstance(mean, float)
+    return mean
+
+client.call_function(TicketStatsParams(queue_id="q1"))
+```
 
 ### `BoundQuery`
 
@@ -870,8 +884,7 @@ Function は `(query: BoundQuery, params: dict) -> Any` を `@ontology.function(
 `.aggregate`、`.aggregate_by`、`.count_contributors`、`.capability(handle)`。型付きオーバーロードは
 `OntologyClient` と同様に機能します（`query.get(Ticket, id) -> Ticket | None`）。
 
-Function の*パラメータ自体*はどちらの surface でも `dict[str, Any]` のままです —
-型付き Function パラメータはこの API には含まれません。
+入力がない Function は、引数が 1 つのハンドラ `(query)` として宣言し、params なしまたは `{}` で呼び出します。
 
 `PreconditionFailed`（`FUNCTION_ERROR`）は、未宣言の api_name、重複登録、ハンドラ未バインドを
 カバーします。

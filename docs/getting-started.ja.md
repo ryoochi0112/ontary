@@ -72,17 +72,20 @@ def escalate(ctx: ActionContext, params: EscalateTicket) -> dict[str, str]:
 関数は状態を変更せずに値を計算します。データベースへの直接の書き込みアクセス権はありません。
 
 ```python
-from typing import Any
-from ontary import BoundQuery
+from ontary import BoundQuery, FunctionParams
+
+class TicketCountParams(FunctionParams):
+    queue_id: str
 
 @ontology.function(
+    TicketCountParams,
     description="Total tickets in a queue.",
     input_description="A queue_id.",
     output_description="Count of tickets.",
     api_name="ticketCount",
 )
-def ticket_count(query: BoundQuery, params: dict[str, Any]) -> int:
-    return query.count("Ticket", where={"queue_id": params["queue_id"]})
+def ticket_count(query: BoundQuery, params: TicketCountParams) -> int:
+    return query.count("Ticket", where={"queue_id": params.queue_id})
 ```
 
 `validate` を呼び出す前に、すべての関数を宣言する必要があります。この関数はキュー内のチケット数をカウントします。
@@ -165,9 +168,8 @@ ontary validate app:ontology
 `app.py` の実行可能な完全なコードは以下の通りです。
 
 ```python
-from typing import Any
 from ontary import (
-    ActionContext, ActionError, ActionParams, BoundQuery, Consumer,
+    ActionContext, ActionError, ActionParams, BoundQuery, Consumer, FunctionParams,
     DirectProperty, ObjectStore, Ontology, OntologyObject, SelfScope,
     Source, build_mcp_server, prop, target,
 )
@@ -205,14 +207,18 @@ def escalate(ctx: ActionContext, params: EscalateTicket) -> dict[str, str]:
     ctx.save(ticket)
     return {"ticket_id": params.ticket_id}
 
+class TicketCountParams(FunctionParams):
+    queue_id: str
+
 @ontology.function(
+    TicketCountParams,
     description="Total tickets in a queue.",
     input_description="A queue_id.",
     output_description="Count of tickets.",
     api_name="ticketCount",
 )
-def ticket_count(query: BoundQuery, params: dict[str, Any]) -> int:
-    return query.count("Ticket", where={"queue_id": params["queue_id"]})
+def ticket_count(query: BoundQuery, params: TicketCountParams) -> int:
+    return query.count("Ticket", where={"queue_id": params.queue_id})
 
 ontology.validate()
 
@@ -236,7 +242,7 @@ client = ontology.bind(store).for_consumer(agent)
 client.execute(EscalateTicket(ticket_id=ticket_id))
 
 assert client.get(Ticket, ticket_id).escalated is True
-assert client.call_function("ticketCount", {"queue_id": "queue-a"}) == 1
+assert client.call_function(TicketCountParams(queue_id="queue-a")) == 1
 
 server = build_mcp_server(ontology, store, agent)
 ```

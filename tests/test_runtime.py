@@ -155,7 +155,7 @@ class TestRuntimeSeams:
         ontology = Ontology(name="runtime-functions", scope_levels=LEVELS)
 
         @ontology.function(api_name="Audited", audit=True)
-        def audited(_query: BoundQuery, _params: dict[str, Any]) -> str:
+        def audited(_query: BoundQuery) -> str:
             return "ok"
 
         fixed = datetime(2099, 1, 1, 12, 0, tzinfo=timezone.utc)

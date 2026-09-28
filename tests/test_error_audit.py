@@ -11,7 +11,6 @@ the same code the MCP server reports for it.
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any
 
 import pytest
 from conftest import raises_code
@@ -85,11 +84,11 @@ def _ontology() -> Ontology:
         return {"at": ctx.capability(clock).now()}
 
     @ontology.function(api_name="explodes", audit=True)
-    def _explodes(_query: BoundQuery, _params: dict[str, Any]) -> int:
+    def _explodes(_query: BoundQuery) -> int:
         raise RuntimeError("boom")
 
     @ontology.function(api_name="refuses", audit=True)
-    def _refuses(_query: BoundQuery, _params: dict[str, Any]) -> int:
+    def _refuses(_query: BoundQuery) -> int:
         raise PreconditionFailed("not now", code="FUNCTION_ERROR")
 
     ontology.validate()

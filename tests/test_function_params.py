@@ -1,4 +1,5 @@
 import asyncio
+import warnings
 from datetime import datetime
 from typing import Any, Literal
 
@@ -265,11 +266,14 @@ def test_no_input_and_legacy_modes(make_consumer: Any) -> None:
     def empty(_query: BoundQuery) -> str:
         return "ok"
 
-    with pytest.warns(DeprecationWarning, match="legacy.*0.20.0"):
+    with pytest.warns(DeprecationWarning, match="legacy.*0.20.0") as caught:
         @ontology.function(api_name="legacy")
         def legacy(_query: BoundQuery, params: dict[str, Any]) -> Any:
             return params["value"]
 
+    assert len(caught) == 1
+    assert caught[0].filename == __file__
+    assert "takes a params dict" in str(caught[0].message)
     assert ontology.registry.get_function("empty").parameters == []
     assert ontology.registry.get_function("legacy").parameters is None
     ontology.validate()
@@ -301,6 +305,23 @@ def test_no_input_and_legacy_modes(make_consumer: Any) -> None:
             FunctionParams(),
         )
     assert "empty" in str(instance_error.value)
+
+    refused_ontology = _ontology()
+    with pytest.raises(
+        DeprecationWarning, match="refused.*takes a params dict.*0.20.0"
+    ):
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", DeprecationWarning)
+
+            @refused_ontology.function(api_name="refused")
+            def refused(_query: BoundQuery, _params: dict[str, Any]) -> None:
+                pass
+
+    with raises_code(ValidationFailed, "UNKNOWN_NAME") as exc_info:
+        refused_ontology.registry.get_function("refused")
+    assert "refused" in str(exc_info.value)
+    assert "unregistered function" in str(exc_info.value)
+    assert refused_ontology._function_handlers == {}
 
 
 def test_single_argument_with_default_or_varargs_is_legacy() -> None:
