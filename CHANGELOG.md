@@ -60,6 +60,26 @@ you**.
   explicit `property_type="json"`. An unadorned `RootModel` was already refused
   before #43; a property with an explicit JSON override previously accepted it.
 
+### Removed
+
+- Removed `ActionContext.insert(obj_type, payload)`; use `create(cls, **values)`.
+- Removed `ActionContext.update(obj_type, obj_id, changes)`; use
+  `get(cls, obj_id)`, assign the changed properties, and call `save(obj)`.
+- Removed `ActionContext.create_link(link_api_name, from_id, to_id)`; use
+  `link(handle, from_, to)`.
+- Removed `ActionContext.read_current(obj_type, obj_id)`; use `get(cls, obj_id)`.
+- Removed `ActionContext.read_all(obj_type)`; use `all(cls)`.
+- Removed `ActionContext.links_from(link_api_name, from_id)`; use
+  `traverse(handle, anchor)`.
+- Removed `ActionContext.links_to(link_api_name, to_id)`; use
+  `traverse(handle, anchor, reverse=True)`.
+- Passing a `str` as the first argument to `retire` or `unlink` raises
+  `ValidationFailed` with code `INVALID_PARAMS`. Use `retire(obj)` or
+  `retire(cls, obj_id)`, and `unlink(handle, from_, to)`.
+- `ActionContext.unlink` is positional-only, so a keyword call raises
+  `TypeError`; the typed overload was already positional-only.
+  See [ontary#41](https://github.com/ryoochi0112/ontary/issues/41).
+
 ## [0.17.0] — 2026-09-27
 
 ```bash

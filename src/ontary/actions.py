@@ -218,16 +218,18 @@ class ActionContext:
         return endpoint
 
     def get(self, cls: type[_O], obj_id: str) -> _O | None:
-        """The current `cls` object `obj_id`, or `None` when there is none.
+        """Return the current `cls` object `obj_id`, or `None` when absent.
 
-        Same trust tier as `read_current`: unredacted and unscoped, since a
-        handler is trusted ontology-author code. The object is remembered, so
-        `save(obj)` can write back only what the handler changed."""
+        This is a trusted handler read. It returns raw, unredacted, unscoped
+        data. The object is remembered, so `save(obj)` writes back only what
+        the handler changed."""
         stored = self._store.read_current(self._api_name(cls, "get"), obj_id)
         return None if stored is None else self._hand_out(cls, stored)
 
     def all(self, cls: type[_O]) -> list[_O]:
-        """Every current `cls` object (the trusted tier of `read_all`)."""
+        """Return every current `cls` object as a trusted handler read.
+
+        Results are raw, unredacted, and unscoped."""
         return [
             self._hand_out(cls, stored)
             for stored in self._store.read_all(self._api_name(cls, "all"))
@@ -295,8 +297,7 @@ class ActionContext:
     def link(self, link: LinkHandle[_F, _T], from_: _F | str, to: _T | str, /) -> None:
         """Create a `link` from `from_` to `to` (an object or its id).
 
-        Same rules as `create_link`: both ends must be live, and re-creating
-        an identical live link is a no-op."""
+        Both ends must be live. Creating an identical live link is a no-op."""
         operation = "link"
         self._store.create_link(
             self._link_type(link, operation),
@@ -318,9 +319,10 @@ class ActionContext:
         *,
         reverse: bool = False,
     ) -> list[_T] | list[_F]:
-        """The objects `link` reaches from `anchor` (an object or its id):
-        its `To` objects, or with `reverse=True` its `From` objects. Trusted
-        tier, like `links_from`/`links_to`."""
+        """Return live objects reached from `anchor` through `link`.
+
+        By default, return `To` objects. With `reverse=True`, return `From`
+        objects. This trusted read returns raw, unredacted, unscoped data."""
         operation = "traverse"
         link_api_name = self._link_type(link, operation)
         anchor_id = self._endpoint_id(anchor, operation)

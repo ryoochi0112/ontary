@@ -745,12 +745,12 @@ Action は、型付きパラメータクラスと、
 | --- | --- |
 | `.get(cls, obj_id) -> T \| None` | 現在のオブジェクトを 1 件読む |
 | `.all(cls) -> list[T]` | `cls` の現在のオブジェクトすべて |
-| `.create(cls, **values) -> T` | 作成し、そのオブジェクトを返す。primary key を省略するとランタイムの `id_factory` から採番する。宣言されていないプロパティ名は `INVALID_RECORD` で拒否される |
+| `.create(cls, **values) -> T` | 作成し、そのオブジェクトを返す。primary key を省略するとランタイムの `id_factory` から採番する。すでに有効な primary key は `OBJECT_ALREADY_EXISTS` で拒否される。宣言されていないプロパティ名は `INVALID_RECORD` で拒否される |
 | `.save(obj)` | このコンテキストが `obj` を渡した時点から変わった宣言済みプロパティだけを書く。変更がなければ何も書かない。`get`・`all`・`create`・`traverse` で得たオブジェクトだけを保存できる（それ以外は `OBJECT_NOT_LOADED`）。primary key の変更は `PRIMARY_KEY_IMMUTABLE` で拒否される |
-| `.link(handle, from_, to)` | リンク作成。各端はオブジェクトかその id で、型は handle が決める。規則は `create_link` と同じ |
+| `.link(handle, from_, to)` | リンク作成。各端はオブジェクトかその id で、型は handle が決める。両端はリンク型が宣言する端点型の有効なオブジェクトである必要があり、そうでなければ `LINK_ENDPOINT_NOT_FOUND` で拒否。有効なリンクと同一なら no-op |
 | `.unlink(handle, from_, to)` | 1 本の live link を閉じる。端の渡し方は `link` と同じ |
 | `.traverse(handle, anchor) -> list[To]` | `anchor` からリンクされた `To` オブジェクト。`reverse=True` ならそこへリンクしている `From` オブジェクト |
-| `.retire(obj)` / `.retire(cls, obj_id)` | リタイア。リンクの cascade は文字列版と同じ |
+| `.retire(obj)` / `.retire(cls, obj_id)` | オブジェクトをリタイアし、接続するすべての有効なリンクを閉じる |
 
 型付きハンドラは、オブジェクトを読み、変更し、保存します。
 
@@ -760,34 +760,33 @@ order.status = "shipped"          # mypy がフィールド名と型を検査す
 ctx.save(order)                   # `status` だけを書く
 ```
 
-**文字列メンバー（非推奨）。** 型名とリンク名を文字列で、payload を dict で受け取る従来の API です。
-0.17.0 から、呼び出すたびに移行先の型付きメンバーを示す `DeprecationWarning` を出します。
-文字列メンバーは 0.18.0 で削除します（[ontary#41](https://github.com/ryoochi0112/ontary/issues/41)）。
-`retire` と `unlink` は名前を変えず、文字列形式だけを非推奨にします。
+**0.18.0 で削除されました。** 以下の型付きメンバーへ移行してください。
+文字列形式の `retire` と `unlink` は `ValidationFailed` を送出します。
+`code` は `INVALID_PARAMS` です。
+`unlink` は位置引数専用です。キーワード引数で呼ぶと `TypeError` が発生します。
 
-| メンバー | 用途 | 移行先 |
-| --- | --- | --- |
-| `.insert(obj_type, payload) -> str` | 作成。primary key を省略した payload には、ランタイムの `id_factory` から自動で採番される。すでに有効な primary key は `OBJECT_ALREADY_EXISTS` で拒否される | `.create(cls, **values)` |
-| `.update(obj_type, obj_id, changes)` | 更新。primary key を別の値に変える変更は `PRIMARY_KEY_IMMUTABLE` で拒否される | `.get` + 代入 + `.save(obj)` |
-| `.create_link(link_api_name, from_id, to_id)` | リンク作成。両端の id はリンク型が宣言する端点型の有効なオブジェクトである必要があり、そうでなければ `LINK_ENDPOINT_NOT_FOUND` で拒否。有効なリンクと同一なら no-op | `.link(handle, from_, to)` |
-| `.retire(obj_type, obj_id)` | オブジェクトをリタイアし、そのオブジェクト型についてリンク型が宣言している側でそのオブジェクトを参照するすべての live link を cascade-close | `.retire(obj)` / `.retire(cls, obj_id)` |
-| `.unlink(link_api_name, from_id, to_id)` | 1 本の live link を閉じる | `.unlink(handle, from_, to)` |
-| `.read_current(obj_type, obj_id) -> StoredObject \| None` | 読み取り | `.get(cls, obj_id)` |
-| `.read_all(obj_type) -> list[StoredObject]` | 現在行の列挙 | `.all(cls)` |
-| `.links_from(link_api_name, from_id) -> list[str]` | リンク走査 | `.traverse(handle, anchor)` |
-| `.links_to(link_api_name, to_id) -> list[str]` | リンク走査 | `.traverse(handle, anchor, reverse=True)` |
+| 削除された呼び出し | 型付きの移行先 |
+| --- | --- |
+| `.insert(obj_type, payload)` | `.create(cls, **values)` |
+| `.update(obj_type, obj_id, changes)` | `.get(cls, obj_id)` + 代入 + `.save(obj)` |
+| `.create_link(link_api_name, from_id, to_id)` | `.link(handle, from_, to)` |
+| `.retire(obj_type, obj_id)` | `.retire(obj)` / `.retire(cls, obj_id)` |
+| `.unlink(link_api_name, from_id, to_id)` | `.unlink(handle, from_, to)` |
+| `.read_current(obj_type, obj_id)` | `.get(cls, obj_id)` |
+| `.read_all(obj_type)` | `.all(cls)` |
+| `.links_from(link_api_name, from_id)` | `.traverse(handle, anchor)` |
+| `.links_to(link_api_name, to_id)` | `.traverse(handle, anchor, reverse=True)` |
 
-**その他のメンバー。** 非推奨ではありません。
+**その他のメンバー。**
 
 | メンバー | 用途 |
 | --- | --- |
 | `.capability(handle) -> P` | 宣言済み Capability の取得 |
 | `.consumer` | 呼び出し元の `Consumer` |
 
-`get` と `all` は、非推奨の `read_current` と `read_all` と同じく、信頼されたハンドラ向けの生の読み取りであり、
-非 redaction・非 scope 制限です。意図的に consumer 向けの guarded query にはしていません。
-とくに列挙を scope や sensitivity で絞ると、id allocator から既存行が隠れ、id の再利用を
-引き起こし得ます。
+`get` と `all` は信頼されたハンドラ向けの読み取りです。生データを返し、redaction と scope の制限を適用しません。
+consumer 向けの guarded query ではありません。scope や sensitivity で列挙を絞ると、id allocator から既存行が隠れます。
+その結果、id が再利用される可能性があります。
 
 `retire` と `unlink` がハンドラーから使う SDK の唯一の除去操作です。これらはエンジンが所有する
 Action transaction の内側でだけ呼び出せます。`retire` はオブジェクトの current row を
