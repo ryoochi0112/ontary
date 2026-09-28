@@ -476,7 +476,7 @@ and builds a single-use runtime internally.
 | `.exists(obj_type, where=None)` | `bool` |
 | `.count_contributors(obj_type, where=None)` | `int` |
 | `.execute(params)` or `.execute(action, params)` | `dict[str, Any]` |
-| `.call_function(api_name, params)` | `Any` |
+| `.call_function(params: FunctionParams)` or `.call_function(api_name: str, params: dict[str, Any] \| None = None)` | `Any` |
 | `.ingest(obj_type, records, source, *, on_error="raise")` | `IngestReport` (raises `IngestError` when failures exist) |
 | `.ingest_links(link_api_name, pairs, source, *, on_error="raise")` | `IngestReport` (raises `IngestError` when failures exist) |
 
@@ -877,11 +877,11 @@ the code the MCP server reports for it. `None` on an `ok` entry.
 
 ## Functions
 
-A function takes a `BoundQuery` and a `FunctionParams` subclass, and is declared
-with `@ontology.function(params_cls, ...)`. `FunctionParams` rejects unknown
-fields; its annotations define the validated inputs and MCP parameter schema.
-No store handle ever reaches the handler — only already-guarded reads. Functions
-return derived values and never write.
+A function handler takes a `BoundQuery`. A typed function also declares a
+`FunctionParams` subclass with `@ontology.function(params_cls, ...)`.
+`FunctionParams` rejects unknown fields; its annotations define the validated
+inputs and MCP parameter schema. No store handle ever reaches the handler — only
+already-guarded reads. Functions return derived values and never write.
 
 ```python
 class TicketStatsParams(FunctionParams):
@@ -895,6 +895,43 @@ def ticket_stats(query: BoundQuery, params: TicketStatsParams) -> float:
 
 client.call_function(TicketStatsParams(queue_id="q1"))
 ```
+
+There are three declaration forms. A typed function declares a `FunctionParams`
+subclass; callers may pass an instance as above or pass its values in a dict with
+the function name, such as `client.call_function("ticketStats", {"queue_id": "q1"})`.
+The dict is validated and the handler receives a `TicketStatsParams` instance.
+A no-input function omits the params class and takes only `query`:
+
+```python
+@ontology.function(api_name="health")
+def health(query: BoundQuery) -> bool:
+    return query.exists("Ticket")
+
+client.call_function("health")
+client.call_function("health", {})
+```
+
+Without a params class, a handler is the no-input form only when it takes
+exactly one parameter, `query`, with no default and nothing else. Any other handler, such as
+`(query, params: dict)`, is the legacy dict form. It remains
+available in 0.19.0 and emits a `DeprecationWarning` at declaration; it is
+removed in 0.20.0. Declare a `FunctionParams` subclass instead.
+
+```python
+@ontology.function(api_name="legacyTicketStats")
+def legacy_ticket_stats(query: BoundQuery, params: dict) -> float:
+    return query.aggregate("Ticket", "age_hours", where={"queue_id": params["queue_id"]})
+```
+
+Unknown fields, missing required fields, invalid types, and values outside
+declared choices raise `ValidationFailed` with `code="INVALID_PARAMS"` before the
+handler runs. A no-input function also rejects non-empty params with that code.
+
+`FunctionDef.parameters` and MCP `list_functions` expose typed inputs as
+parameters with `name`, `type`, `choices`, `fields`, `required`, and `refers_to`,
+matching the action parameter shape without `scope_semantics`. The value is
+`[]` for a no-input function and `null` for a legacy dict-form function, whose
+parameter shape is unknown.
 
 ### `BoundQuery`
 

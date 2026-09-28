@@ -468,7 +468,7 @@ Action 実行器、バインド済みハンドラ — をちょうど 1 回だ�
 | `.exists(obj_type, where=None)` | `bool` |
 | `.count_contributors(obj_type, where=None)` | `int` |
 | `.execute(params)` または `.execute(action, params)` | `dict[str, Any]` |
-| `.call_function(api_name, params)` | `Any` |
+| `.call_function(params: FunctionParams)` または `.call_function(api_name: str, params: dict[str, Any] \| None = None)` | `Any` |
 | `.ingest(obj_type, records, source, *, on_error="raise")` | `IngestReport`（失敗があれば `IngestError`） |
 | `.ingest_links(link_api_name, pairs, source, *, on_error="raise")` | `IngestReport`（失敗があれば `IngestError`） |
 
@@ -860,9 +860,9 @@ Action の `roles=` だけがゲートでした。スコープを持つパラメ
 
 ## Function
 
-Function は `BoundQuery` と `FunctionParams` サブクラスを受け取り、
-`@ontology.function(params_cls, ...)` で宣言します。`FunctionParams` は未知のフィールドを拒否し、
-その型注釈が入力検証と MCP のパラメータスキーマを定義します。ストアハンドルはハンドラに一切届かず、
+Function ハンドラは `BoundQuery` を受け取ります。型付き Function は `FunctionParams` の
+サブクラスも `@ontology.function(params_cls, ...)` で宣言します。`FunctionParams` は未知のフィールドを
+拒否します。その型注釈が入力検証と MCP のパラメータスキーマを定義します。ストアハンドルはハンドラに一切届かず、
 すでにガードされた読み取りだけが渡ります。Function は導出値を返し、書き込みは行いません。
 
 ```python
@@ -877,6 +877,41 @@ def ticket_stats(query: BoundQuery, params: TicketStatsParams) -> float:
 
 client.call_function(TicketStatsParams(queue_id="q1"))
 ```
+
+Function の宣言には 3 つの形式があります。型付き Function では `FunctionParams` の
+サブクラスを宣言します。上の例のようにインスタンスを渡すか、関数名と dict を渡せます
+（例: `client.call_function("ticketStats", {"queue_id": "q1"})`）。dict は検証されます。
+ハンドラには `TicketStatsParams` のインスタンスが渡されます。
+入力がない Function は params クラスを省略し、`query` だけを受け取ります。
+
+```python
+@ontology.function(api_name="health")
+def health(query: BoundQuery) -> bool:
+    return query.exists("Ticket")
+
+client.call_function("health")
+client.call_function("health", {})
+```
+
+params クラスを指定しない場合、引数が既定値なしの `query` 1 つだけのハンドラが入力なしの形式です。
+`(query, params: dict)` など、それ以外のハンドラはすべて旧 dict 形式です。
+0.19.0 では引き続き使用でき、宣言時に `DeprecationWarning` が出ます。0.20.0 で削除します。
+代わりに `FunctionParams` サブクラスを宣言してください。
+
+```python
+@ontology.function(api_name="legacyTicketStats")
+def legacy_ticket_stats(query: BoundQuery, params: dict) -> float:
+    return query.aggregate("Ticket", "age_hours", where={"queue_id": params["queue_id"]})
+```
+
+未知のフィールド、必須フィールドの不足、不正な型、宣言した選択肢にない値は、ハンドラの実行前に
+`ValidationFailed` と `code="INVALID_PARAMS"` を送出します。入力がない Function に空でない params を
+渡した場合も、同じコードで拒否します。
+
+`FunctionDef.parameters` と MCP の `list_functions` は、型付き入力を `name`、`type`、`choices`、
+`fields`、`required`、`refers_to` を持つパラメータとして公開します。これは `scope_semantics` を
+除いた Action パラメータと同じ形式です。入力がない Function では `[]`、旧形式の dict ハンドラでは
+パラメータの形状が不明なため `null` になります。
 
 ### `BoundQuery`
 

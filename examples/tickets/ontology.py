@@ -252,9 +252,8 @@ class TicketStatsParams(FunctionParams):
     output_description="A mean age_hours value.",
     api_name="ticketStats",
 )
-def _ticket_stats(query: BoundQuery, params: TicketStatsParams) -> float:
+def _ticket_stats(query: BoundQuery, params: TicketStatsParams) -> float | int:
     mean = query.aggregate("Ticket", "age_hours", where={"queue_id": params.queue_id})
-    assert isinstance(mean, float)
     return mean
 
 
