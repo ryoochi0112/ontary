@@ -71,6 +71,7 @@ from ontary.query import (
 )
 from ontary.security import Consumer
 from ontary.store import StoredObject
+from ontary.typesys import choice_value, validate_scalar
 
 T = TypeVar("T", bound="OntologyObject")
 F = TypeVar("F", bound="OntologyObject")
@@ -443,6 +444,21 @@ class FunctionRegistry:
                         f"function {api_name!r}: invalid params: {exc}",
                         code="INVALID_PARAMS",
                     ) from exc
+            assert function_def.parameters is not None
+            for param in function_def.parameters:
+                if param.choices is None:
+                    continue
+                value = getattr(coerced, param.name)
+                if value is None:
+                    continue
+                mismatch = validate_scalar(
+                    choice_value(value, param.choices), param.type, param.choices
+                )
+                if mismatch is not None:
+                    raise ValidationFailed(
+                        f"function {api_name!r}: parameter {param.name!r} {mismatch}",
+                        code="INVALID_PARAMS",
+                    )
         elif mode == "none":
             if not isinstance(params, dict) or params:
                 raise ValidationFailed(

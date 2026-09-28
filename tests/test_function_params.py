@@ -259,6 +259,48 @@ def test_typed_function_validates_before_handler_and_audits_error(
     assert len(seen) == 3
 
 
+def test_prop_choices_are_checked_for_dict_and_instance_calls(make_consumer: Any) -> None:
+    ontology = _ontology()
+    seen: list[FunctionParams] = []
+
+    class Params(FunctionParams):
+        status: str = prop(choices=["open", "closed"])
+        note: str | None = prop(choices=["a", "b"], default=None)
+
+    @ontology.function(Params, api_name="statusSummary", audit=True)
+    def status_summary(_query: BoundQuery, params: Params) -> str:
+        seen.append(params)
+        return params.status
+
+    store = ObjectStore(ontology.registry)
+    client = ontology.bind(store).for_consumer(
+        make_consumer(actor_id="u1", role="Member", scope_level="org", scope_id="o1", kind="human")
+    )
+
+    for invalid_call in (
+        lambda: client.call_function("statusSummary", {"status": "bogus"}),
+        lambda: client.call_function(Params(status="bogus")),
+    ):
+        before = len(store.audit_entries())
+        with raises_code(ValidationFailed, "INVALID_PARAMS") as exc_info:
+            invalid_call()
+        message = str(exc_info.value)
+        assert "statusSummary" in message
+        assert "parameter 'status'" in message
+        assert "open" in message and "closed" in message
+        assert "bogus" in message
+        assert seen == []
+        entries = store.audit_entries()[before:]
+        assert len(entries) == 1
+        assert entries[0].outcome == "error"
+        assert entries[0].error_code == "INVALID_PARAMS"
+
+    assert client.call_function("statusSummary", {"status": "open", "note": None}) == "open"
+    assert len(seen) == 1
+    assert isinstance(seen[0], Params)
+    assert seen[0].note is None
+
+
 def test_no_input_and_legacy_modes(make_consumer: Any) -> None:
     ontology = _ontology()
 
