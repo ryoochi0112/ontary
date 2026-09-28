@@ -40,7 +40,15 @@ from conftest import _mcp_uninstalled, raises_code
 from mcp.server.mcpserver import MCPServer
 
 from ontary.actions import ActionContext, ActionError
-from ontary.authoring import ActionParams, Ontology, OntologyObject, prop, scope_ref, target
+from ontary.authoring import (
+    ActionParams,
+    FunctionParams,
+    Ontology,
+    OntologyObject,
+    prop,
+    scope_ref,
+    target,
+)
 from ontary.client import OntologyClient
 from ontary.errors import (
     AuthorityError,
@@ -347,6 +355,69 @@ def test_list_functions_matches_registry() -> None:
     payload = _call(server, "list_functions", {})
     names = {d["api_name"] for d in payload["functions"]}
     assert names == {"countBooksOnShelf"}
+
+
+def test_typed_function_parameters_are_published_and_validated() -> None:
+    ontology, _Book = _base_library_ontology()
+
+    class TicketStatsParams(FunctionParams):
+        queue_id: str
+
+    @ontology.function(
+        TicketStatsParams,
+        description="Mean ticket age (hours) for a queue.",
+        input_description="A queue_id.",
+        output_description="A mean age_hours value.",
+        api_name="ticketStats",
+    )
+    def ticket_stats(_query: BoundQuery, params: TicketStatsParams) -> str:
+        return params.queue_id
+
+    @ontology.function(api_name="noInputs")
+    def no_inputs(_query: BoundQuery) -> str:
+        return "ok"
+
+    ontology.validate()
+    server = build_mcp_server(ontology, ObjectStore(ontology.registry), _librarian())
+
+    functions = _call(server, "list_functions", {})["functions"]
+    ticket_stats_payload = next(fn for fn in functions if fn["api_name"] == "ticketStats")
+    assert ticket_stats_payload == {
+        "api_name": "ticketStats",
+        "description": "Mean ticket age (hours) for a queue.",
+        "input_description": "A queue_id.",
+        "output_description": "A mean age_hours value.",
+        "capabilities": [],
+        "parameters": [
+            {
+                "name": "queue_id",
+                "type": "str",
+                "choices": None,
+                "fields": None,
+                "required": True,
+                "refers_to": None,
+            }
+        ],
+    }
+    assert next(fn for fn in functions if fn["api_name"] == "noInputs")["parameters"] == []
+    assert (
+        next(fn for fn in functions if fn["api_name"] == "countBooksOnShelf")["parameters"]
+        is None
+    )
+
+    valid = _call(
+        server,
+        "call_function",
+        {"api_name": "ticketStats", "params": {"queue_id": "q1"}},
+    )
+    assert valid == {"result": "q1"}
+    invalid = _call(
+        server,
+        "call_function",
+        {"api_name": "ticketStats", "params": {}},
+    )
+    assert invalid["error"]["code"] == "INVALID_PARAMS"
+    assert "queue_id" in invalid["error"]["message"]
 
 
 # -- guarded reads ----------------------------------------------------------

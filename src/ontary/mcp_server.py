@@ -72,7 +72,7 @@ from pydantic import Field, SkipValidation
 from ontary.authoring import CapabilityHandle, Ontology
 from ontary.client import OntologyClient, OntologyRuntime
 from ontary.errors import OntaryError, PermissionDenied, ValidationFailed
-from ontary.meta import ActionTypeDef, FunctionDef, LinkTypeDef, ObjectTypeDef
+from ontary.meta import ActionParameterDef, ActionTypeDef, FunctionDef, LinkTypeDef, ObjectTypeDef
 from ontary.ontology import OntologyDef, resolve_definition
 from ontary.query import AggregateFunc, AggregateValue
 from ontary.security import Consumer
@@ -660,6 +660,27 @@ def _link_type_payload(defn: LinkTypeDef) -> dict[str, Any]:
     }
 
 
+def _parameter_payload(parameter: ActionParameterDef) -> dict[str, Any]:
+    return {
+        "name": parameter.name,
+        "type": parameter.type,
+        "choices": None if parameter.choices is None else list(parameter.choices),
+        "fields": None
+        if parameter.fields is None
+        else [
+            {
+                "name": field.name,
+                "type": field.type,
+                "required": field.required,
+                "choices": None if field.choices is None else list(field.choices),
+            }
+            for field in parameter.fields
+        ],
+        "required": parameter.required,
+        "refers_to": parameter.refers_to,
+    }
+
+
 def _action_type_payload(defn: ActionTypeDef) -> dict[str, Any]:
     return {
         "api_name": defn.api_name,
@@ -669,24 +690,8 @@ def _action_type_payload(defn: ActionTypeDef) -> dict[str, Any]:
         "description": defn.description,
         "capabilities": list(defn.capabilities),
         "parameters": [
-            {
-                "name": p.name,
-                "type": p.type,
-                "choices": None if p.choices is None else list(p.choices),
-                "fields": None if p.fields is None else [
-                    {
-                        "name": field.name,
-                        "type": field.type,
-                        "required": field.required,
-                        "choices": None if field.choices is None else list(field.choices),
-                    }
-                    for field in p.fields
-                ],
-                "required": p.required,
-                "refers_to": p.refers_to,
-                "scope_semantics": p.scope_semantics,
-            }
-            for p in defn.parameters
+            {**_parameter_payload(parameter), "scope_semantics": parameter.scope_semantics}
+            for parameter in defn.parameters
         ],
     }
 
@@ -698,6 +703,9 @@ def _function_payload(defn: FunctionDef) -> dict[str, Any]:
         "input_description": defn.input_description,
         "output_description": defn.output_description,
         "capabilities": list(defn.capabilities),
+        "parameters": None
+        if defn.parameters is None
+        else [_parameter_payload(parameter) for parameter in defn.parameters],
     }
 
 
