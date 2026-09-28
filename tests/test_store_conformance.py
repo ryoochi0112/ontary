@@ -996,6 +996,11 @@ def test_choices_hydration_rejects_persisted_out_of_set_value(
 # -- T1/D-2: auto-minted primary keys route through the runtime `id_factory` -
 
 
+class Widget(OntologyObject):
+    id: str
+    label: str
+
+
 def _widget_registry() -> OntologyRegistry:
     """One ontology-owned type an action can insert into, plus the
     `MakeWidget` action a bare handler registers -- deliberately not built
@@ -1027,6 +1032,8 @@ def _widget_registry() -> OntologyRegistry:
         )
     )
     registry.validate()
+    Widget._ontary_api_name = "Widget"
+    Widget._ontary_registry = registry
     return registry
 
 
@@ -1049,13 +1056,13 @@ class _MakeWidgetParams(BaseModel):
 def _make_widget_handler(
     ctx: ActionContext, params: _MakeWidgetParams
 ) -> dict[str, str]:
-    return {"widget_id": ctx.insert("Widget", {"label": "gizmo"})}
+    return {"widget_id": ctx.create(Widget, label="gizmo").id}
 
 
-def test_action_insert_without_primary_key_fills_id_from_runtime_id_factory(
+def test_action_create_without_primary_key_fills_id_from_runtime_id_factory(
     store_factory: StoreFactory,
 ) -> None:
-    """T1/D-2: a handler's `ctx.insert("Widget", {...})` with no primary key
+    """T1/D-2: a handler's `ctx.create(Widget, ...)` with no primary key
     gets its id from the executor's `id_factory`, not the store's own
     `uuid.uuid4()` fallback -- proved on every backend `store_factory`
     parametrizes over (S2: one generating rule, no hand-written per-backend
@@ -1071,8 +1078,7 @@ def test_action_insert_without_primary_key_fills_id_from_runtime_id_factory(
     )
     executor._register("MakeWidget", _make_widget_handler, _MakeWidgetParams)
 
-    with pytest.warns(DeprecationWarning, match="ActionContext"):
-        result = executor.execute(_maker_consumer(), "MakeWidget", {})
+    result = executor.execute(_maker_consumer(), "MakeWidget", {})
 
     assert result["widget_id"] == "t1-2"
     stored = store.read_current("Widget", "t1-2")
@@ -1277,13 +1283,13 @@ def test_insert_after_retirement_starts_a_new_live_row(store: Store) -> None:
 def _make_keyed_widget_handler(
     ctx: ActionContext, params: _MakeWidgetParams
 ) -> dict[str, str]:
-    return {"widget_id": ctx.insert("Widget", {"id": "w-1", "label": "gizmo"})}
+    return {"widget_id": ctx.create(Widget, id="w-1", label="gizmo").id}
 
 
-def test_action_insert_of_an_existing_primary_key_is_refused_and_rolled_back(
+def test_action_create_of_an_existing_primary_key_is_refused_and_rolled_back(
     store_factory: StoreFactory,
 ) -> None:
-    """`ctx.insert` inside an action gets the same coded refusal, and the
+    """`ctx.create` inside an action gets the same coded refusal, and the
     action's transaction leaves the first object untouched."""
     registry = _widget_registry()
     store = store_factory(registry)
@@ -1291,9 +1297,8 @@ def test_action_insert_of_an_existing_primary_key_is_refused_and_rolled_back(
     executor = ActionExecutor(store, registry, policy)
     executor._register("MakeWidget", _make_keyed_widget_handler, _MakeWidgetParams)
 
-    with pytest.warns(DeprecationWarning, match="ActionContext"):
-        assert executor.execute(_maker_consumer(), "MakeWidget", {}) == {"widget_id": "w-1"}
-    with pytest.warns(DeprecationWarning, match="ActionContext"), raises_code(ConflictError, "OBJECT_ALREADY_EXISTS"):
+    assert executor.execute(_maker_consumer(), "MakeWidget", {}) == {"widget_id": "w-1"}
+    with raises_code(ConflictError, "OBJECT_ALREADY_EXISTS"):
         executor.execute(_maker_consumer(), "MakeWidget", {})
 
     assert len(store.read_all("Widget")) == 1
