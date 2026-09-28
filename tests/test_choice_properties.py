@@ -623,3 +623,136 @@ def test_mypy_rejects_a_wrong_choice_value(tmp_path: Path) -> None:
     assert f"bad_choice.py:{kind_line}: error: Incompatible types in assignment" in out
     assert f"bad_choice.py:{status_line}: error: Incompatible types in assignment" in out
     assert out.count(": error:") == 2, out
+
+
+# -- prop(choices=...) on an ActionParams field (#90) ---------------------------
+
+tagging = Ontology("param-prop-choices", scope_levels=["org"], min_n=1)
+
+
+@tagging.object(layer="L0", scope="unscoped", owned=True)
+class Tag(OntologyObject):
+    id: str = prop(primary_key=True)
+
+
+class TagParams(ActionParams):
+    label: str = prop(choices=["open", "closed"])
+    note: str | None = prop(choices=["a", "b"], default=None)
+
+
+@tagging.action(TagParams, target=Tag, roles=["Clerk"], api_name="TagIt")
+def _tag_it(ctx: ActionContext, params: TagParams) -> dict[str, Any]:
+    SEEN["tag_params"] = params
+    return {}
+
+
+tagging.validate()
+
+
+def _tag_client() -> OntologyClient:
+    runtime = OntologyRuntime(tagging, ObjectStore(tagging.registry))
+    return runtime.for_consumer(_consumer())
+
+
+def _tag_param(name: str) -> ActionParameterDef:
+    action = tagging.registry.get_action_type("TagIt")
+    return next(p for p in action.parameters if p.name == name)
+
+
+def test_prop_choices_on_a_param_declares_choices() -> None:
+    label = _tag_param("label")
+    assert label.type == "str"
+    assert label.choices == ("open", "closed")
+    assert label.required is True
+    note = _tag_param("note")
+    assert note.choices == ("a", "b")
+    assert note.required is False
+
+
+def test_prop_choices_param_accepts_a_choice_and_refuses_any_other_value() -> None:
+    client = _tag_client()
+    client.execute("TagIt", {"label": "open"})
+    assert SEEN["tag_params"].label == "open"
+    assert SEEN["tag_params"].note is None
+    with raises_code(OntaryError, "INVALID_PARAMS") as excinfo:
+        client.execute("TagIt", {"label": "pending"})
+    assert "pending" in str(excinfo.value)
+    with raises_code(OntaryError, "INVALID_PARAMS"):
+        client.execute("TagIt", {"label": "open", "note": "c"})
+
+
+def test_prop_choices_param_unwraps_a_matching_enum_member() -> None:
+    """A plain `Enum` member (not a `str`) is unwrapped by the declaration,
+    as on a `prop(choices=...)` property."""
+
+    class Label(Enum):
+        CLOSED = "closed"
+
+    _tag_client().execute("TagIt", {"label": Label.CLOSED})
+    label = SEEN["tag_params"].label
+    assert label == "closed"
+    assert type(label) is str
+
+
+def test_prop_choices_param_is_enforced_when_pydantic_is_skipped() -> None:
+    params = TagParams.model_construct(label="pending", note=None)
+    with raises_code(OntaryError, "INVALID_PARAMS"):
+        _tag_client().execute(params)
+
+
+def test_mcp_describes_prop_choices_on_a_param() -> None:
+    server = build_mcp_server(tagging, ObjectStore(tagging.registry), _consumer())
+    payload = _call(server, "list_action_types", {})
+    tag_it = next(d for d in payload["action_types"] if d["api_name"] == "TagIt")
+    params = {p["name"]: p for p in tag_it["parameters"]}
+    assert params["label"]["choices"] == ["open", "closed"]
+    assert params["note"]["choices"] == ["a", "b"]
+
+
+def _declare_param(field_annotation: Any, field_default: Any) -> None:
+    local = Ontology("bad-param-choices", scope_levels=["org"], min_n=1)
+
+    @local.object(layer="L0", scope="unscoped", owned=True)
+    class Thing(OntologyObject):
+        id: str = prop(primary_key=True)
+
+    BadParams = type(
+        "BadParams",
+        (ActionParams,),
+        {"__annotations__": {"mode": field_annotation}, "mode": field_default},
+    )
+
+    @local.action(BadParams, target=Thing, roles=["Clerk"], api_name="Bad")
+    def _bad(ctx: ActionContext, params: Any) -> dict[str, Any]:
+        return {}
+
+
+@pytest.mark.parametrize(
+    "annotation",
+    [pytest.param(Status, id="str-enum"), pytest.param(Kind, id="literal")],
+)
+def test_prop_choices_with_a_choice_annotated_param_is_refused(annotation: Any) -> None:
+    with raises_code(ValidationFailed, "ONTOLOGY_INVALID") as excinfo:
+        _declare_param(annotation, prop(choices=["open", "closed"]))
+    message = str(excinfo.value)
+    assert "BadParams.mode" in message
+    assert "drop prop(choices=...)" in message
+
+
+@pytest.mark.parametrize(
+    ("annotation", "choices", "reason"),
+    [
+        pytest.param(int, ["low", "high"], "'str'", id="non-str-param"),
+        pytest.param(str, [], "empty", id="empty"),
+        pytest.param(str, ["open", 1], "non-string", id="non-string-member"),
+        pytest.param(str, ["open", "open"], "duplicate", id="duplicate"),
+    ],
+)
+def test_invalid_prop_choices_on_a_param_is_refused(
+    annotation: Any, choices: list[Any], reason: str
+) -> None:
+    with raises_code(ValidationFailed, "ONTOLOGY_INVALID") as excinfo:
+        _declare_param(annotation, prop(choices=choices))
+    message = str(excinfo.value)
+    assert "mode" in message
+    assert reason in message
