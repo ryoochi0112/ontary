@@ -18,6 +18,13 @@ you**.
   ignored, so the parameter accepted any string. Combining it with an `Enum` or
   `Literal` annotation, or declaring invalid choices, is refused as
   `ONTOLOGY_INVALID`, as on a property.
+- A `(str, Enum)` mixin member used as a primary key or as an id argument now
+  keys the object by its string value (`'a'`) on every store (#91). Before, the
+  in-memory and Postgres stores keyed it by `str()` (`'Mixin.A'`), `insert`
+  returned `'Mixin.A'` on all three, and re-ingesting the row with `bulk_upsert`
+  on SQLite raised a raw `IntegrityError`. Every `Store` method and
+  `bulk_upsert`/`bulk_link` now reduce a `str` subclass to its plain value.
+  Postgres rows already stored under a `'Mixin.A'`-style id are not rewritten.
 
 ## [0.18.0] — 2026-09-28
 
