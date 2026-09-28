@@ -26,6 +26,7 @@ from ontary.meta import (
     normalize_declared_payload,
 )
 from ontary.store import Source, Store
+from ontary.store._shared import canonical_id
 from ontary.typesys import validate_scalar
 
 
@@ -284,13 +285,13 @@ def bulk_upsert(
         if rejection is None:
             pk_value = record.get(obj_def.primary_key)
             current = (
-                store.read_current(obj_type, str(pk_value))
+                store.read_current(obj_type, canonical_id(pk_value))
                 if pk_value is not None else None
             )
             try:
                 if current is not None:
-                    store.update(obj_type, str(pk_value), record, source)
-                    report.inserted_ids.append(str(pk_value))
+                    store.update(obj_type, canonical_id(pk_value), record, source)
+                    report.inserted_ids.append(canonical_id(pk_value))
                 else:
                     payload = dict(obj_def.owned_property_defaults())
                     payload.update(record)
@@ -387,6 +388,6 @@ def bulk_link(
                 IngestError(index=i, reason=str(exc), code="LINK_ENDPOINT_NOT_FOUND")
             )
         else:
-            report.inserted_ids.append(f"{from_id}->{to_id}")
+            report.inserted_ids.append(f"{canonical_id(from_id)}->{canonical_id(to_id)}")
 
     return report

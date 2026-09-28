@@ -53,6 +53,7 @@ from ontary.meta import Cardinality, OntologyRegistry
 from ontary.store import _sql
 from ontary.store._shared import (
     WriteCapture,
+    canonical_id,
     check_link_endpoints,
     check_link_removal_authority,
     check_link_write_authority,
@@ -379,6 +380,7 @@ class PostgresStore:
         payload_changes: dict[str, Any],
         source: Source,
     ) -> None:
+        obj_id = canonical_id(obj_id)
         capturing = self._write_capture.active
         obj_def = check_update_authority(
             self._registry, obj_type, payload_changes, capturing=capturing
@@ -422,6 +424,7 @@ class PostgresStore:
         self._record_write(WriteRecord(op="update", object_type=obj_type, object_id=obj_id))
 
     def retire_object(self, object_type: str, obj_id: str) -> StoredObject:
+        obj_id = canonical_id(obj_id)
         check_object_removal_authority(
             self._registry,
             object_type,
@@ -499,6 +502,7 @@ class PostgresStore:
         )
 
     def read_current(self, obj_type: str, obj_id: str) -> StoredObject | None:
+        obj_id = canonical_id(obj_id)
         rows = _sql.execute(
             self._conn,
             _sql.render(_sql.OBJECT_CURRENT_SELECT_TEMPLATE, "postgres"),
@@ -509,6 +513,7 @@ class PostgresStore:
         return None if row is None else self._row_to_stored(row)
 
     def read_last(self, obj_type: str, obj_id: str) -> StoredObject | None:
+        obj_id = canonical_id(obj_id)
         rows = _sql.execute(
             self._conn,
             _sql.render(_sql.OBJECT_LAST_SELECT_TEMPLATE, "postgres"),
@@ -579,6 +584,7 @@ class PostgresStore:
     # -- links -----------------------------------------------------------
 
     def create_link(self, link_type: str, from_id: str, to_id: str) -> None:
+        from_id, to_id = canonical_id(from_id), canonical_id(to_id)
         link_def = check_link_write_authority(
             self._registry, link_type, capturing=self._write_capture.active
         )
@@ -643,6 +649,7 @@ class PostgresStore:
         )
 
     def close_link(self, link_type: str, from_id: str, to_id: str) -> bool:
+        from_id, to_id = canonical_id(from_id), canonical_id(to_id)
         check_link_removal_authority(
             self._registry,
             link_type,
@@ -668,6 +675,7 @@ class PostgresStore:
         return True
 
     def links_from(self, link_type: str, from_id: str) -> list[str]:
+        from_id = canonical_id(from_id)
         resolve_link_type(self._registry, link_type)
         rows = _sql.execute(
             self._conn,
@@ -678,6 +686,7 @@ class PostgresStore:
         return [str(row[0]) for row in rows]
 
     def links_to(self, link_type: str, to_id: str) -> list[str]:
+        to_id = canonical_id(to_id)
         resolve_link_type(self._registry, link_type)
         rows = _sql.execute(
             self._conn,
@@ -690,6 +699,7 @@ class PostgresStore:
     def links_from_asof(
         self, link_type: str, from_id: str, asof: str
     ) -> list[str]:
+        from_id = canonical_id(from_id)
         resolve_link_type(self._registry, link_type)
         rows = _sql.execute(
             self._conn,
@@ -700,6 +710,7 @@ class PostgresStore:
         return [str(row[0]) for row in rows]
 
     def links_to_asof(self, link_type: str, to_id: str, asof: str) -> list[str]:
+        to_id = canonical_id(to_id)
         resolve_link_type(self._registry, link_type)
         rows = _sql.execute(
             self._conn,

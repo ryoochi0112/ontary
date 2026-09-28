@@ -45,6 +45,7 @@ from ontary import Ontology, OntologyClient, OntologyObject, prop
 from ontary.actions import ActionContext, ActionExecutor
 from ontary.audit import CapabilityAccessRecord
 from ontary.errors import AuthorityError, ConflictError, PreconditionFailed, ValidationFailed
+from ontary.ingest import bulk_link, bulk_upsert
 from ontary.meta import (
     ActionTypeDef,
     Cardinality,
@@ -66,6 +67,7 @@ from ontary.store import (
     StoredObject,
     WriteRecord,
 )
+from ontary.store._shared import canonical_id
 from ontary.store.inmemory import InMemoryStore
 from ontary.testing import SequentialIds
 
@@ -3613,3 +3615,189 @@ def test_struct_money_round_trip_and_instance_dict_parity(
         )
     assert "amount.extra" in str(excinfo.value)
     assert store.read_current("Order", "extra") is None
+
+
+# -- str-subclass ids (#91) ---------------------------------------------------
+#
+# A `(str, Enum)` mixin member's `str()` is `'Mixin.A'`, not its string value
+# `'a'`. Every store must derive, look up, and link by the plain string value,
+# so the three backends agree with each other and with the persisted PK.
+
+
+class _MixinId(str, Enum):
+    A = "a"
+    B = "b"
+
+
+class _StrEnumId(StrEnum):
+    A = "a"
+    B = "b"
+
+
+class _LoudStr(str):
+    def __str__(self) -> str:
+        return f"loud:{str.__str__(self)}"
+
+
+_ID_KINDS: dict[str, tuple[str, str]] = {
+    "mixin": (_MixinId.A, _MixinId.B),
+    "strenum": (_StrEnumId.A, _StrEnumId.B),
+    "custom-str": (_LoudStr("a"), _LoudStr("b")),
+    "plain": ("a", "b"),
+}
+
+
+@pytest.fixture(params=list(_ID_KINDS), ids=list(_ID_KINDS))
+def id_pair(request: pytest.FixtureRequest) -> tuple[str, str]:
+    return _ID_KINDS[request.param]
+
+
+def test_canonical_id_is_the_plain_string_value() -> None:
+    for value in (_MixinId.A, _StrEnumId.A, _LoudStr("a"), "a"):
+        assert canonical_id(value) == "a"
+        assert type(canonical_id(value)) is str
+    token = uuid.UUID(int=1)
+    assert canonical_id(token) == str(token)
+    assert canonical_id(7) == "7"
+
+
+def test_str_subclass_pk_insert_derives_the_plain_id(
+    store_factory: StoreFactory, id_pair: tuple[str, str]
+) -> None:
+    store = store_factory(build_registry())
+    a, _ = id_pair
+
+    obj_id = store.insert("Team", {"id": a, "name": "n"}, Source(source_system="test"))
+
+    assert obj_id == "a" and type(obj_id) is str
+    stored = store.read_current("Team", "a")
+    assert stored is not None
+    assert stored.lineage.object_id == "a" and type(stored.lineage.object_id) is str
+    assert stored.payload["id"] == "a" and type(stored.payload["id"]) is str
+    assert [row.payload["id"] for row in store.read_all("Team")] == ["a"]
+    if str(a) != "a":
+        assert store.read_current("Team", str(a)) is None
+
+
+def test_str_subclass_id_arguments_address_the_plain_id(
+    store_factory: StoreFactory, id_pair: tuple[str, str]
+) -> None:
+    store = store_factory(build_registry())
+    source = Source(source_system="test")
+    a, _ = id_pair
+    store.insert("Team", {"id": "a", "name": "before"}, source)
+
+    current = store.read_current("Team", a)
+    assert current is not None and current.payload["name"] == "before"
+    store.update("Team", a, {"name": "after"}, source)
+    updated = store.read_current("Team", "a")
+    assert updated is not None and updated.payload["name"] == "after"
+    assert [payload["name"] for payload, _ in _history_rows(store, "Team", "a")] == [
+        "before",
+        "after",
+    ]
+
+    retired = store.retire_object("Team", a)
+    assert retired.lineage.object_id == "a"
+    assert store.read_current("Team", "a") is None
+    last = store.read_last("Team", a)
+    assert last is not None and last.payload["name"] == "after"
+
+
+def test_str_subclass_link_endpoints_address_the_plain_ids(
+    store_factory: StoreFactory, id_pair: tuple[str, str]
+) -> None:
+    store = store_factory(build_registry())
+    source = Source(source_system="test")
+    a, b = id_pair
+    store.insert("Team", {"id": "a", "name": "t"}, source)
+    store.insert("Department", {"id": "b", "name": "d"}, source)
+
+    store.create_link("belongsToDepartment", a, b)
+    store.create_link("belongsToDepartment", "a", "b")  # #37 idempotent no-op
+
+    assert store.links_from("belongsToDepartment", a) == ["b"]
+    assert store.links_to("belongsToDepartment", b) == ["a"]
+    later = "9999-01-01T00:00:00+00:00"
+    assert store.links_from_asof("belongsToDepartment", a, later) == ["b"]
+    assert store.links_to_asof("belongsToDepartment", b, later) == ["a"]
+    assert all(type(i) is str for i in store.links_from("belongsToDepartment", "a"))
+
+    assert store.close_link("belongsToDepartment", a, b) is True
+    assert store.links_from("belongsToDepartment", "a") == []
+
+
+def test_str_subclass_pk_reingest_updates_one_row(
+    store_factory: StoreFactory, id_pair: tuple[str, str]
+) -> None:
+    registry = build_registry()
+    store = store_factory(registry)
+    source = Source(source_system="test")
+    a, _ = id_pair
+
+    first = bulk_upsert(store, registry, "Team", [{"id": a, "name": "n1"}], source)
+    second = bulk_upsert(store, registry, "Team", [{"id": a, "name": "n2"}], source)
+
+    assert first.errors == [] and second.errors == []
+    assert first.inserted_ids == ["a"] and second.inserted_ids == ["a"]
+    assert [(row.payload["id"], row.payload["name"]) for row in store.read_all("Team")] == [
+        ("a", "n2")
+    ]
+    assert [payload["name"] for payload, _ in _history_rows(store, "Team", "a")] == [
+        "n1",
+        "n2",
+    ]
+
+
+def test_str_subclass_bulk_link_matches_plain_endpoints(
+    store_factory: StoreFactory, id_pair: tuple[str, str]
+) -> None:
+    registry = build_registry()
+    store = store_factory(registry)
+    source = Source(source_system="test")
+    a, b = id_pair
+    store.insert("Team", {"id": "a", "name": "t"}, source)
+    store.insert("Department", {"id": "b", "name": "d"}, source)
+
+    report = bulk_link(store, registry, "belongsToDepartment", [(a, b)], source)
+
+    assert report.errors == []
+    assert report.inserted_ids == ["a->b"]
+    assert store.links_from("belongsToDepartment", "a") == ["b"]
+
+
+def test_str_subclass_ids_in_captured_write_records(
+    authority_store: Store, id_pair: tuple[str, str]
+) -> None:
+    a, b = id_pair
+    authority_store.insert("Ticket", {"id": "b", "status": "open"}, Source(source_system="t"))
+
+    with authority_store.capture_action_writes() as writes:
+        obj_id = authority_store.insert(
+            "Escalation", {"id": a, "reason": "SLA"}, Source(source_system="action")
+        )
+        authority_store.create_link("ownedLink", a, b)
+
+    assert obj_id == "a"
+    assert writes == [
+        WriteRecord(op="create", object_type="Escalation", object_id="a"),
+        WriteRecord(op="link", link_type="ownedLink", from_id="a", to_id="b"),
+    ]
+    assert all(
+        type(value) is str
+        for record in writes
+        for value in (record.object_id, record.from_id, record.to_id)
+        if value is not None
+    )
+
+
+def test_non_str_pk_values_keep_their_behaviour(store_factory: StoreFactory) -> None:
+    store = store_factory(build_registry())
+    source = Source(source_system="test")
+
+    minted = store.insert("Team", {"name": "no-pk"}, source)
+    assert str(uuid.UUID(minted)) == minted
+
+    with raises_code(ValidationFailed, "INVALID_RECORD"):
+        store.insert("Team", {"id": 1, "name": "int-pk"}, source)
+    assert store.read_current("Team", "1") is None

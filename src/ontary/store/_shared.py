@@ -137,6 +137,20 @@ def decode_audit_entry(row: AuditRowLike) -> AuditEntry:
 # from the copies these helpers replace.
 
 
+def canonical_id(value: object) -> str:
+    """The plain string every store keys an object or link endpoint by (#91).
+
+    A `str` subclass whose `str()` is not its own value -- a `(str, Enum)`
+    mixin member stringifies as `'Mixin.A'` -- is reduced to its underlying
+    string value (`'a'`), the value the payload persists. Every store applies
+    this to each id it derives or receives, so the three backends agree.
+    Anything that is not a `str` keeps its plain `str()` spelling.
+    """
+    if isinstance(value, str):
+        return str.__str__(value)
+    return str(value)
+
+
 def resolve_object_type(registry: OntologyRegistry, obj_type: str) -> ObjectTypeDef:
     """Registry lookup using the public coded unknown-object refusal."""
     return registry.get_object_type(obj_type)
@@ -342,6 +356,11 @@ def prepare_insert(
     obj_id = payload.get(obj_def.primary_key)
     if obj_id is None:
         obj_id = str(uuid.uuid4())
+        payload[obj_def.primary_key] = obj_id
+    elif isinstance(obj_id, str):
+        # #91: key the row by the plain string value, never a subclass's
+        # `str()`; a non-str PK stays as given so the shape check refuses it.
+        obj_id = canonical_id(obj_id)
         payload[obj_def.primary_key] = obj_id
 
     violation = declared_shape_violation(obj_def, payload)

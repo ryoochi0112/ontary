@@ -34,6 +34,7 @@ from ontary.errors import ConflictError
 from ontary.meta import Cardinality, OntologyRegistry
 from ontary.store._shared import (
     WriteCapture,
+    canonical_id,
     check_link_endpoints,
     check_link_removal_authority,
     check_link_write_authority,
@@ -272,6 +273,7 @@ class InMemoryStore:
         payload_changes: dict[str, Any],
         source: Source,
     ) -> None:
+        obj_id = canonical_id(obj_id)
         capturing = self._write_capture.active
         obj_def = check_update_authority(
             self._registry, obj_type, payload_changes, capturing=capturing
@@ -308,6 +310,7 @@ class InMemoryStore:
         self._record_write(WriteRecord(op="update", object_type=obj_type, object_id=obj_id))
 
     def retire_object(self, object_type: str, obj_id: str) -> StoredObject:
+        obj_id = canonical_id(obj_id)
         check_object_removal_authority(
             self._registry,
             object_type,
@@ -361,6 +364,7 @@ class InMemoryStore:
         )
 
     def read_current(self, obj_type: str, obj_id: str) -> StoredObject | None:
+        obj_id = canonical_id(obj_id)
         # Every public read below briefly takes `_transaction_lock` (reentrant,
         # so the writing thread's own reads pass through): rows are mutated in
         # place inside a transaction and only snapshot-restored on rollback, so
@@ -392,6 +396,7 @@ class InMemoryStore:
         from `read_current`: the two disagreeing let the gate authorize
         against a scope no consumer read can see.
         """
+        obj_id = canonical_id(obj_id)
         with self._transaction_lock:
             newest: _ObjectRow | None = None
             for row in self._objects:
@@ -492,6 +497,7 @@ class InMemoryStore:
     # -- links -------------------------------------------------------------
 
     def create_link(self, link_type: str, from_id: str, to_id: str) -> None:
+        from_id, to_id = canonical_id(from_id), canonical_id(to_id)
         link_def = check_link_write_authority(
             self._registry, link_type, capturing=self._write_capture.active
         )
@@ -544,6 +550,7 @@ class InMemoryStore:
         )
 
     def close_link(self, link_type: str, from_id: str, to_id: str) -> bool:
+        from_id, to_id = canonical_id(from_id), canonical_id(to_id)
         check_link_removal_authority(
             self._registry,
             link_type,
@@ -572,6 +579,7 @@ class InMemoryStore:
         return True
 
     def links_from(self, link_type: str, from_id: str) -> list[str]:
+        from_id = canonical_id(from_id)
         resolve_link_type(self._registry, link_type)
         with self._transaction_lock:
             return _ordered_link_ids(
@@ -587,6 +595,7 @@ class InMemoryStore:
             )
 
     def links_to(self, link_type: str, to_id: str) -> list[str]:
+        to_id = canonical_id(to_id)
         resolve_link_type(self._registry, link_type)
         with self._transaction_lock:
             return _ordered_link_ids(
@@ -604,6 +613,7 @@ class InMemoryStore:
     def links_from_asof(
         self, link_type: str, from_id: str, asof: str
     ) -> list[str]:
+        from_id = canonical_id(from_id)
         resolve_link_type(self._registry, link_type)
         with self._transaction_lock:
             return _ordered_link_ids(
@@ -619,6 +629,7 @@ class InMemoryStore:
             )
 
     def links_to_asof(self, link_type: str, to_id: str, asof: str) -> list[str]:
+        to_id = canonical_id(to_id)
         resolve_link_type(self._registry, link_type)
         with self._transaction_lock:
             return _ordered_link_ids(
