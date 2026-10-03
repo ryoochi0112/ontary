@@ -24,7 +24,6 @@ import pytest
 from conftest import raises_code
 from pydantic import BaseModel, Field
 
-import ontary.store.sqlite
 from ontary import ActionParams, Ontology, OntologyClient, OntologyObject, prop, target
 from ontary.actions import ActionContext, ActionError, ActionExecutor
 from ontary.errors import (
@@ -59,6 +58,7 @@ from ontary.store import (
     Store,
     WriteRecord,
 )
+from ontary.store._shared import StoreClock
 from ontary.store.inmemory import InMemoryStore
 
 LEVELS = ["shelf", "library"]
@@ -2437,7 +2437,7 @@ def test_the_declared_link_order_decides_which_operator_the_gate_admits(
     the cascade-tick pin below freezes it.
     """
     frozen = "2026-08-29T09:00:00+00:00"
-    monkeypatch.setattr(ontary.store.sqlite, "_utcnow_iso", lambda: frozen)
+    monkeypatch.setattr(StoreClock, "now_iso", lambda self, capture: frozen)
 
     ontology, store = _two_team_vialink_client()
     store.insert("Team", {"id": "team-a"}, SRC)
@@ -2487,7 +2487,7 @@ def test_the_declared_link_order_decides_which_operator_the_gate_admits(
     early = "2026-08-29T09:00:00+00:00"
     late = "2026-08-29T10:00:00+00:00"
     clock = {"now": early}
-    monkeypatch.setattr(ontary.store.sqlite, "_utcnow_iso", lambda: clock["now"])
+    monkeypatch.setattr(StoreClock, "now_iso", lambda self, capture: clock["now"])
 
     ontology, store = _two_team_vialink_client()
     store.insert("Team", {"id": "team-a"}, SRC)
@@ -4507,7 +4507,7 @@ def test_retired_vialink_target_resolves_when_the_cascade_shares_its_timestamp(
     half had no measurement under it before T4.
     """
     frozen = "2026-08-28T09:00:00+00:00"
-    monkeypatch.setattr(ontary.store.sqlite, "_utcnow_iso", lambda: frozen)
+    monkeypatch.setattr(StoreClock, "now_iso", lambda self, capture: frozen)
 
     client, store = _vialink_lifecycle_client()
     store.insert("Team", {"id": "team-1"}, SRC)
