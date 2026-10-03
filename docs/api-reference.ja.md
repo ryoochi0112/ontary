@@ -445,6 +445,27 @@ client  = runtime.for_consumer(consumer)                            # リクエ�
 UUID 形式の ID です。どちらも共有ランタイムに保存され、すべての
 `for_consumer()` ビューに引き継がれます。
 
+`clock=c` を付けてバインドすると、`c` がストアに設定されます。以降、そのストアへの
+すべての書き込みが `c` を使います。対象は、アクションの書き込み、
+`ontary.ingest.bulk_upsert` / `bulk_link`、ストアの直接呼び出しです。
+`valid_from` / `valid_to` はこのクロックから決まります。
+
+- **1 回の呼び出しにつき 1 つの時刻。** アクションはクロックをちょうど 1 回読みます。
+  その時刻が、`ctx.now()` の戻り値、アクションが書き込むすべての行とリンクの
+  `valid_from` / `valid_to`（`retire` が閉じるリンクを含む）、その呼び出しのすべての
+  監査エントリ（ok、denied、error）の `ts` になります。
+- **`CLOCK_CONFLICT`。** 同じストアを別のクロックオブジェクトでバインドすると、
+  `PreconditionFailed` が発生します。同じクロックオブジェクト、または `clock=` なしなら
+  問題ありません。`clock=` なしでバインドしたランタイムは、ストアに設定済みのクロックを使います。
+- **`CLOCK_REGRESSION`。** 閉じる行やリンクの `valid_from` より前の時刻での書き込みは、
+  `PreconditionFailed` になります。アクション内ではアクション全体がロールバックされ、
+  error 監査エントリがコードを記録します。同じ時刻は許可されます。
+- **`CLOCK_NOT_TIMEZONE_AWARE`。** naive な `datetime` を返すクロックは
+  `ValidationFailed` になり、何も保存されません。
+
+先にバインドしてから、シードしてください。別のクロックでシードしたデータがあると、
+過去に設定したクロックでの最初の更新や retire で `CLOCK_REGRESSION` が発生することがあります。
+
 ### `OntologyRuntime(ontology, store, handlers=None, *, clock=None, id_factory=None, capabilities=None)`
 
 1 つの `(ontology, store)` ペアに対する、コンシューマー非依存の共有機構 — クエリ層、
@@ -785,6 +806,7 @@ ctx.save(order)                   # `status` だけを書く
 | --- | --- |
 | `.capability(handle) -> P` | 宣言済み Capability の取得 |
 | `.consumer` | 呼び出し元の `Consumer` |
+| `.now() -> datetime` | 呼び出しの唯一の時刻（`Ontology.bind` を参照）。`datetime.now()` や時刻用 Capability の代わりに使います |
 
 `get` と `all` は信頼されたハンドラ向けの読み取りです。生データを返し、redaction と scope の制限を適用しません。
 consumer 向けの guarded query ではありません。scope や sensitivity で列挙を絞ると、id allocator から既存行が隠れます。
@@ -976,12 +998,14 @@ store ではなく `execute()` に属するのと同じく、client surface に�
 ものです。
 
 ```python
-Clock = ontology.capability(ClockProto, name="clock")
+Mailer = ontology.capability(MailerProto, name="mailer")
 
-@ontology.action(P, target=T, roles=["Agent"], capabilities=[Clock])
+@ontology.action(P, target=T, roles=["Agent"], capabilities=[Mailer])
 def handler(ctx, params):
-    now = ctx.capability(Clock).now()
+    ctx.capability(Mailer).send(...)
 ```
+
+現在時刻には Capability ではなく `ctx.now()` を使います。
 
 未宣言の Capability を要求すると `UNDECLARED_CAPABILITY`、宣言済みでもプロバイダが
 バインドされていなければ `CAPABILITY_NOT_PROVIDED` になります。

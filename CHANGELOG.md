@@ -17,6 +17,20 @@ you**.
   function's inputs, types the handler, and exposes its parameter definitions
   through MCP `list_functions`. A `(query)` handler declares a function with no
   inputs, and `call_function(api_name)` no longer needs a params argument.
+- `ctx.now()` and a store-level clock (#46). `ontology.bind(store, clock=...)`
+  installs the clock on the store, and it stamps every write: actions,
+  `bulk_upsert` / `bulk_link`, and direct store calls. One action invocation
+  reads the clock once, and that instant is used for `ctx.now()`, every
+  `valid_from` / `valid_to` it writes, and every audit `ts`.
+- Clock error codes (#46). `CLOCK_CONFLICT` (binding a store with a second
+  clock), `CLOCK_REGRESSION` (a write earlier than the `valid_from` it closes),
+  and `CLOCK_NOT_TIMEZONE_AWARE` (a clock returned a naive `datetime`).
+
+### Changed
+
+- Audit `ts` is now the instant the invocation started (#46). It was read after
+  the handler finished. Bind the clock before seeding data, or a clock set in
+  the past can raise `CLOCK_REGRESSION` on the first update.
 
 ### Deprecated
 

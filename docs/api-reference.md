@@ -453,6 +453,27 @@ client  = runtime.for_consumer(consumer)                            # cheap, per
 defaults to UUID-shaped IDs. Both seams are stored on the shared runtime and
 are inherited by every `for_consumer()` view.
 
+Binding with `clock=c` installs `c` on the store. From then on every write to
+that store uses it: action writes, `ontary.ingest.bulk_upsert` / `bulk_link`,
+and direct store calls. `valid_from` / `valid_to` come from it.
+
+- **One instant per invocation.** An action reads the clock exactly once. That
+  instant is what `ctx.now()` returns, the `valid_from` / `valid_to` of every
+  row and link the action writes (including links `retire` closes), and the
+  `ts` of every audit entry of the invocation (ok, denied, error).
+- **`CLOCK_CONFLICT`.** Binding the same store with a different clock object
+  raises `PreconditionFailed`. The same clock object, or no `clock=`, is fine;
+  a runtime bound without `clock=` uses the store's installed clock.
+- **`CLOCK_REGRESSION`.** A write whose instant is earlier than the
+  `valid_from` of the row or link it closes raises `PreconditionFailed`. Inside
+  an action the whole action rolls back and an error audit entry records the
+  code. An equal instant is allowed.
+- **`CLOCK_NOT_TIMEZONE_AWARE`.** A clock that returns a naive `datetime` raises
+  `ValidationFailed`; nothing is stored.
+
+Bind first, then seed: data seeded under another clock can make the first
+update or retire under a clock set in the past raise `CLOCK_REGRESSION`.
+
 ### `OntologyRuntime(ontology, store, handlers=None, *, clock=None, id_factory=None, capabilities=None)`
 
 Shared, consumer-free machinery for one `(ontology, store)` pair — query layer,
@@ -800,6 +821,7 @@ ctx.save(order)                   # writes only `status`
 | --- | --- |
 | `.capability(handle) -> P` | Fetch a declared capability |
 | `.consumer` | The calling `Consumer` |
+| `.now() -> datetime` | The invocation's single instant (see `Ontology.bind`). Use it instead of `datetime.now()` or a clock capability |
 
 `get` and `all` are trusted handler reads. They return raw, unredacted, and
 unscoped objects. They are intentionally not guarded consumer queries. Filtering
@@ -1000,12 +1022,14 @@ at bind time. Undeclared use is refused, and every use is audited. A capability 
 a thing a handler reads or calls.
 
 ```python
-Clock = ontology.capability(ClockProto, name="clock")
+Mailer = ontology.capability(MailerProto, name="mailer")
 
-@ontology.action(P, target=T, roles=["Agent"], capabilities=[Clock])
+@ontology.action(P, target=T, roles=["Agent"], capabilities=[Mailer])
 def handler(ctx, params):
-    now = ctx.capability(Clock).now()
+    ctx.capability(Mailer).send(...)
 ```
+
+For the current time use `ctx.now()`, not a capability.
 
 Requesting an undeclared capability raises `UNDECLARED_CAPABILITY`; a declared one
 with no provider bound raises `CAPABILITY_NOT_PROVIDED`.
