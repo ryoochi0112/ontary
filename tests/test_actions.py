@@ -4753,6 +4753,7 @@ def test_scope_enforcement_refuses_missing_refers_to(
             malformed_action,
             {"shelf_id": "shelf-1"},
             None,
+            datetime(2026, 1, 1, tzinfo=timezone.utc),
         )
 
 
@@ -4836,6 +4837,7 @@ def test_action_context_exposes_no_store_handle(
         "create",
         "get",
         "link",
+        "now",
         "retire",
         "save",
         "traverse",

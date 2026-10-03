@@ -10,6 +10,7 @@ This file is itself checked by `mypy --strict` via `make verify`.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Protocol, assert_type
 
 from conftest import raises_code
@@ -521,6 +522,7 @@ def test_capability_access_narrows_provider_protocol() -> None:
     def run(ctx: ActionContext, _params: RunParams) -> dict[str, str]:
         provider = ctx.capability(llm)
         assert_type(provider, LLMClient)
+        assert_type(ctx.now(), datetime)
         return {"result": provider.complete("action")}
 
     @ontology.function(api_name="Complete", capabilities=[llm])
