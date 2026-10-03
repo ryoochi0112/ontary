@@ -600,6 +600,30 @@ ERROR_CODES: dict[str, ErrorCodeInfo] = {
             "a fresh store the data is migrated into."
         ),
     ),
+    "CLOCK_CONFLICT": ErrorCodeInfo(
+        kind="precondition",
+        description=(
+            "A store already has a different clock installed; a store has one "
+            "clock. Bind with the same clock object, or with no clock to use "
+            "the one already installed."
+        ),
+    ),
+    "CLOCK_REGRESSION": ErrorCodeInfo(
+        kind="precondition",
+        description=(
+            "The store clock reads earlier than the valid_from of the version "
+            "a write would close; the clock went backwards. Fix the clock "
+            "(it must never run behind the data it wrote) and retry."
+        ),
+    ),
+    "CLOCK_NOT_TIMEZONE_AWARE": ErrorCodeInfo(
+        kind="validation",
+        description=(
+            "A clock returned a naive datetime; an instant must be "
+            "timezone-aware. Return datetime values with a tzinfo, such as "
+            "datetime.now(timezone.utc)."
+        ),
+    ),
     "INTERNAL_ERROR": ErrorCodeInfo(
         kind="internal",
         description=(

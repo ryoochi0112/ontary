@@ -17,9 +17,10 @@ import json
 import uuid
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, NamedTuple, Protocol
 
+from ontary import _runtime
 from ontary.audit import (
     AuditEntry,
     CapabilityAccessRecord,
@@ -521,13 +522,19 @@ class WriteCapture:
 
     def __init__(self) -> None:
         self._capture: list[WriteRecord] | None = None
+        self._instant: str | None = None
 
     @property
     def active(self) -> bool:
         return self._capture is not None
 
+    @property
+    def instant(self) -> str | None:
+        """The instant fixed for the current capture, or `None` outside one."""
+        return self._instant
+
     @contextmanager
-    def capture(self) -> Iterator[list[WriteRecord]]:
+    def capture(self, at: str | None = None) -> Iterator[list[WriteRecord]]:
         if self._capture is not None:
             raise RuntimeError(
                 "capture_action_writes does not support nesting: a capture "
@@ -535,11 +542,70 @@ class WriteCapture:
             )
         records: list[WriteRecord] = []
         self._capture = records
+        self._instant = at
         try:
             yield records
         finally:
             self._capture = None
+            self._instant = None
 
     def record(self, record: WriteRecord) -> None:
         if self._capture is not None:
             self._capture.append(record)
+
+
+def iso_instant(dt: datetime) -> str:
+    """Spell an aware datetime as the store's canonical UTC instant string
+    (32 characters, same spelling as `values._utcnow_iso`)."""
+    if dt.tzinfo is None or dt.utcoffset() is None:
+        raise ValidationFailed(
+            f"clock returned a naive datetime ({dt!r}); an instant must be "
+            "timezone-aware -- return e.g. datetime.now(timezone.utc)",
+            code="CLOCK_NOT_TIMEZONE_AWARE",
+        )
+    return dt.astimezone(timezone.utc).isoformat(timespec="microseconds")
+
+
+class StoreClock:
+    """The clock a store stamps `valid_from`/`valid_to` with, shared by
+    composition like `WriteCapture`. No clock is installed at construction."""
+
+    def __init__(self) -> None:
+        self._clock: Callable[[], datetime] | None = None
+
+    def bind(self, clock: Callable[[], datetime] | None) -> Callable[[], datetime]:
+        """Apply the one-clock-per-store rules and return the effective clock."""
+        installed = self._clock
+        if clock is None:
+            return installed if installed is not None else _runtime.default_clock
+        if installed is None:
+            self._clock = clock
+            return clock
+        if installed is clock:
+            return clock
+        raise PreconditionFailed(
+            f"this store already has clock {installed!r} installed; cannot "
+            f"bind {clock!r}. A store has one clock -- bind with the same "
+            "clock, or with none to use the installed one",
+            code="CLOCK_CONFLICT",
+        )
+
+    def now_iso(self, capture: WriteCapture) -> str:
+        """The instant to stamp: the capture's fixed instant if set, else the
+        installed (or default) clock's reading."""
+        if capture.instant is not None:
+            return capture.instant
+        clock = self._clock if self._clock is not None else _runtime.default_clock
+        return iso_instant(clock())
+
+
+def ensure_not_before(closing_valid_from: str, now_iso: str, *, what: str) -> None:
+    """Refuse a write whose instant precedes the `valid_from` it would close.
+    Equal passes."""
+    if datetime.fromisoformat(now_iso) < datetime.fromisoformat(closing_valid_from):
+        raise PreconditionFailed(
+            f"{what}: the store clock reads {now_iso}, earlier than the "
+            f"version's valid_from {closing_valid_from}; the clock went "
+            "backwards -- fix the clock and retry",
+            code="CLOCK_REGRESSION",
+        )
