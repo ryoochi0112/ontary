@@ -60,7 +60,7 @@ def _archive_inline_note(
 
 
 @_INLINE_ONTOLOGY.function(api_name="inlineNoteStats")
-def _inline_note_stats(_query: BoundQuery, _params: dict[str, Any]) -> float:
+def _inline_note_stats(_query: BoundQuery) -> float:
     return 0.0
 
 

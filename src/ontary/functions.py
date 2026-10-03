@@ -50,12 +50,15 @@ import builtins
 from collections.abc import Callable, Mapping
 from typing import Any, Literal, TypeVar, cast, overload
 
+from pydantic import ValidationError
+
 from ontary._typed_api import _TypedReadMixin, list_objects, resolve_capability
 from ontary.audit import CapabilityAccessRecord
 from ontary.errors import PreconditionFailed, ValidationFailed
 from ontary.meta import OntologyRegistry
 from ontary.model import (
     CapabilityHandle,
+    FunctionParams,
     LinkHandle,
     OntologyObject,
 )
@@ -68,6 +71,7 @@ from ontary.query import (
 )
 from ontary.security import Consumer
 from ontary.store import StoredObject
+from ontary.typesys import choice_value, validate_scalar
 
 T = TypeVar("T", bound="OntologyObject")
 F = TypeVar("F", bound="OntologyObject")
@@ -371,9 +375,23 @@ class FunctionRegistry:
 
     def __init__(self, registry: OntologyRegistry) -> None:
         self._registry = registry
-        self._handlers: dict[str, FunctionHandler] = {}
+        self._handlers: dict[
+            str,
+            tuple[
+                Callable[..., Any],
+                type[FunctionParams] | None,
+                Literal["typed", "none", "legacy"],
+            ],
+        ] = {}
 
-    def register(self, api_name: str, fn: FunctionHandler) -> None:
+    def register(
+        self,
+        api_name: str,
+        fn: Callable[..., Any],
+        *,
+        params_cls: type[FunctionParams] | None = None,
+        mode: Literal["typed", "none", "legacy"] = "legacy",
+    ) -> None:
         try:
             self._registry.get_function(api_name)
         except ValidationFailed as exc:
@@ -386,7 +404,7 @@ class FunctionRegistry:
                 f"handler already registered for function: {api_name!r}",
                 code="FUNCTION_ERROR",
             )
-        self._handlers[api_name] = fn
+        self._handlers[api_name] = (fn, params_cls, mode)
 
     def function(self, api_name: str) -> Callable[[FunctionHandler], FunctionHandler]:
         """Decorator form of `register`."""
@@ -397,14 +415,59 @@ class FunctionRegistry:
 
         return _decorate
 
-    def call(self, api_name: str, query: BoundQuery, params: dict[str, Any]) -> Any:
-        handler = self._handlers.get(api_name)
-        if handler is None:
+    def call(
+        self, api_name: str, query: BoundQuery, params: dict[str, Any] | FunctionParams
+    ) -> Any:
+        registered = self._handlers.get(api_name)
+        if registered is None:
             raise PreconditionFailed(
                 f"no handler registered for function: {api_name!r}",
                 code="FUNCTION_ERROR",
             )
+        handler, params_cls, mode = registered
         function_def = self._registry.get_function(api_name)
+        coerced: dict[str, Any] | FunctionParams | None
+        if mode == "typed":
+            assert params_cls is not None
+            if isinstance(params, params_cls):
+                coerced = params
+            elif isinstance(params, FunctionParams):
+                raise ValidationFailed(
+                    f"function {api_name!r}: expected {params_cls.__name__} params",
+                    code="INVALID_PARAMS",
+                )
+            else:
+                try:
+                    coerced = params_cls.model_validate(params)
+                except ValidationError as exc:
+                    raise ValidationFailed(
+                        f"function {api_name!r}: invalid params: {exc}",
+                        code="INVALID_PARAMS",
+                    ) from exc
+            assert function_def.parameters is not None
+            for param in function_def.parameters:
+                if param.choices is None:
+                    continue
+                value = getattr(coerced, param.name)
+                if value is None:
+                    continue
+                mismatch = validate_scalar(
+                    choice_value(value, param.choices), param.type, param.choices
+                )
+                if mismatch is not None:
+                    raise ValidationFailed(
+                        f"function {api_name!r}: parameter {param.name!r} {mismatch}",
+                        code="INVALID_PARAMS",
+                    )
+        elif mode == "none":
+            if not isinstance(params, dict) or params:
+                raise ValidationFailed(
+                    f"function {api_name!r} takes no params",
+                    code="INVALID_PARAMS",
+                )
+            coerced = None
+        else:
+            coerced = params
         # THE author-provenance mint. `register` already refused to bind
         # `handler` to anything but a declared `FunctionDef` on this
         # registry, so reaching this line means the engine is about to run
@@ -419,7 +482,7 @@ class FunctionRegistry:
         # there is no interval during which the object the caller holds
         # carries this function's authority -- which install-and-restore
         # could not promise across a thread or a re-entrant callback.
-        return handler(
-            query._for_author_dispatch(frozenset(function_def.capabilities)),
-            params,
-        )
+        bound = query._for_author_dispatch(frozenset(function_def.capabilities))
+        if mode == "none":
+            return handler(bound)
+        return handler(bound, coerced)

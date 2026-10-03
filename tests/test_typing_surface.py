@@ -34,6 +34,7 @@ from ontary import (
     BoundQuery,
     CapabilityHandle,
     Consumer,
+    FunctionParams,
     ObjectStore,
     Page,
     Source,
@@ -523,10 +524,19 @@ def test_capability_access_narrows_provider_protocol() -> None:
         return {"result": provider.complete("action")}
 
     @ontology.function(api_name="Complete", capabilities=[llm])
-    def complete(query: BoundQuery, _params: dict[str, Any]) -> str:
+    def complete(query: BoundQuery) -> str:
         provider = query.capability(llm)
         assert_type(provider, LLMClient)
         return provider.complete("function")
+
+    class PromptParams(FunctionParams):
+        prompt: str
+
+    @ontology.function(PromptParams, api_name="TypedComplete", capabilities=[llm])
+    def typed_complete(query: BoundQuery, params: PromptParams) -> str:
+        assert_type(params, PromptParams)
+        provider = query.capability(llm)
+        return provider.complete(params.prompt)
 
     consumer = Consumer(
         actor_id="operator-1",
@@ -539,7 +549,8 @@ def test_capability_access_narrows_provider_protocol() -> None:
         ObjectStore(ontology.registry), capabilities={llm: LLMProvider()}
     ).for_consumer(consumer)
     assert client.execute("Run", {}) == {"result": "completed: action"}
-    assert client.call_function("Complete", {}) == "completed: function"
+    assert client.call_function("Complete") == "completed: function"
+    assert client.call_function(PromptParams(prompt="typed function")) == "completed: typed function"
 
 
 def test_capability_handle_preserves_its_provider_protocol() -> None:

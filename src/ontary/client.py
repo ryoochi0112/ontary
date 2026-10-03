@@ -69,6 +69,7 @@ from ontary.meta import OntologyRegistry
 from ontary.model import (
     ActionParams,
     CapabilityHandle,
+    FunctionParams,
     LinkHandle,
     OntologyObject,
     _class_stamp,
@@ -561,7 +562,32 @@ class OntologyClient(_TypedReadMixin):
 
     # -- functions --------------------------------------------------------
 
-    def call_function(self, api_name: str, params: dict[str, Any]) -> Any:
+    def _api_name_for_function_params(self, params: FunctionParams) -> str:
+        cls = type(params)
+        name, registry = _class_stamp(cls)
+        if name is None or registry is None:
+            raise ValidationFailed(
+                f"{cls.__name__!r} is not decorated with @ontology.function(...) "
+                "-- it has no registered function api_name",
+                code="UNKNOWN_NAME",
+            )
+        if registry is not self._ontology.registry:
+            raise ValidationFailed(
+                f"{cls.__name__!r} (api_name {name!r}) was declared on a "
+                "different Ontology -- it is not part of this client's ontology",
+                code="UNKNOWN_NAME",
+            )
+        return name
+
+    @overload
+    def call_function(self, api_name: FunctionParams) -> Any: ...
+    @overload
+    def call_function(
+        self, api_name: str, params: dict[str, Any] | None = None
+    ) -> Any: ...
+    def call_function(
+        self, api_name: str | FunctionParams, params: dict[str, Any] | None = None
+    ) -> Any:
         """Call a declared Function and return its derived value.
 
         This is the function **audit boundary**. A function that
@@ -594,6 +620,16 @@ class OntologyClient(_TypedReadMixin):
         A release that min-N then refuses is not a release and appends
         nothing; two reasons to audit one call still append one entry.
         """
+        if isinstance(api_name, FunctionParams):
+            if params is not None:
+                raise ValidationFailed(
+                    "typed-form call_function accepts exactly one FunctionParams argument",
+                    code="INVALID_PARAMS",
+                )
+            call_params: dict[str, Any] | FunctionParams = api_name
+            api_name = self._api_name_for_function_params(api_name)
+        else:
+            call_params = {} if params is None else params
         try:
             function_def = self._ontology.registry.get_function(api_name)
         except ValidationFailed:
@@ -609,7 +645,7 @@ class OntologyClient(_TypedReadMixin):
                     self._ontology.registry,
                     capability_providers=self._capability_providers,
                 ),
-                params,
+                call_params,
             )
         audited = function_def.audited
         accesses: builtins.list[CapabilityAccessRecord] | None = [] if audited else None
@@ -629,12 +665,12 @@ class OntologyClient(_TypedReadMixin):
         )
         invocation_id = self._id_factory()
         try:
-            result = self._ontology.functions.call(api_name, bound, params)
+            result = self._ontology.functions.call(api_name, bound, call_params)
         except Exception as exc:
             if audited or disclosures:
                 self._append_function_audit(
                     api_name,
-                    params,
+                    call_params,
                     "error",
                     accesses or [],
                     invocation_id,
@@ -643,14 +679,14 @@ class OntologyClient(_TypedReadMixin):
             raise
         if audited or disclosures:
             self._append_function_audit(
-                api_name, params, "ok", accesses or [], invocation_id
+                api_name, call_params, "ok", accesses or [], invocation_id
             )
         return result
 
     def _append_function_audit(
         self,
         api_name: str,
-        params: dict[str, Any],
+        params: dict[str, Any] | FunctionParams,
         outcome: str,
         accesses: builtins.list[CapabilityAccessRecord],
         invocation_id: str,
@@ -676,7 +712,7 @@ class OntologyClient(_TypedReadMixin):
                 # discriminator; this field is simply not applicable.
                 target_type="",
                 target_id=None,
-                params=params,
+                params=params.model_dump(mode="json") if isinstance(params, FunctionParams) else params,
                 outcome=outcome,
                 ts=self._clock(),
                 # The reason this boundary exists: what the handler reached

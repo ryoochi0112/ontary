@@ -59,7 +59,7 @@ def _provider_ontology() -> tuple[Ontology, dict[str, Any]]:
         api_name="boundProviders",
         capabilities=[read_primary, read_secondary],
     )
-    def bound_providers(query: BoundQuery, _params: dict[str, Any]) -> dict[str, Any]:
+    def bound_providers(query: BoundQuery) -> dict[str, Any]:
         return {"capabilities": dict(query._capability_providers)}
 
     ontology.validate()

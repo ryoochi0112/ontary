@@ -27,8 +27,6 @@ auto-bind `EscalateTicket`'s handler with zero manual wiring (spec AC6).
 
 from __future__ import annotations
 
-from typing import Any
-
 from ontary import (
     ActionContext,
     ActionError,
@@ -36,6 +34,7 @@ from ontary import (
     BoundQuery,
     Cardinality,
     DirectProperty,
+    FunctionParams,
     LinkHandle,
     ObjectStore,
     Ontology,
@@ -242,15 +241,19 @@ def _archive_ticket(ctx: ActionContext, params: ArchiveTicketParams) -> dict[str
     return {"escalation_id": params.escalation_id}
 
 
+class TicketStatsParams(FunctionParams):
+    queue_id: str
+
+
 @_ontology.function(
+    TicketStatsParams,
     description="Mean ticket age (hours) for a queue.",
     input_description="A queue_id.",
     output_description="A mean age_hours value.",
     api_name="ticketStats",
 )
-def _ticket_stats(query: BoundQuery, params: dict[str, Any]) -> float:
-    mean = query.aggregate("Ticket", "age_hours", where={"queue_id": params["queue_id"]})
-    assert isinstance(mean, float)
+def _ticket_stats(query: BoundQuery, params: TicketStatsParams) -> float | int:
+    mean = query.aggregate("Ticket", "age_hours", where={"queue_id": params.queue_id})
     return mean
 
 

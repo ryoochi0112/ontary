@@ -14,13 +14,16 @@ built `OntologyDef` as `Ontology.definition` (+ `Ontology.validate()`).
 from __future__ import annotations
 
 import builtins
+import inspect
 import types
+import warnings
 from collections.abc import Callable, Mapping, Sequence
 from datetime import date, datetime
 from enum import Enum
 from typing import (
     Any,
     Literal,
+    Protocol,
     TypeVar,
     Union,
     cast,
@@ -40,7 +43,7 @@ from ontary.diagnose import (
     _stored_rule_findings,
 )
 from ontary.errors import ValidationFailed
-from ontary.functions import FunctionHandler, FunctionRegistry
+from ontary.functions import BoundQuery, FunctionHandler, FunctionRegistry
 from ontary.meta import (
     ActionParameterDef,
     ActionTypeDef,
@@ -59,6 +62,7 @@ from ontary.meta import (
 )
 from ontary.model import ActionParams as ActionParams
 from ontary.model import CapabilityHandle as CapabilityHandle
+from ontary.model import FunctionParams as FunctionParams
 from ontary.model import LinkHandle as LinkHandle
 from ontary.model import OntologyObject as OntologyObject
 from ontary.model import _class_stamp as _class_stamp
@@ -479,6 +483,17 @@ def _derive_properties(cls: type["OntologyObject"]) -> tuple[list[PropertyDef], 
 
 _T = TypeVar("_T", bound=OntologyObject)
 _P = TypeVar("_P", bound=ActionParams)
+_FP = TypeVar("_FP", bound=FunctionParams)
+_R = TypeVar("_R")
+_H = TypeVar("_H", bound=Callable[..., Any])
+
+
+class _NoClassFunctionDecorator(Protocol):
+    @overload
+    def __call__(self, fn: Callable[[BoundQuery], _R]) -> Callable[[BoundQuery], _R]: ...
+
+    @overload
+    def __call__(self, fn: FunctionHandler) -> FunctionHandler: ...
 
 
 def _marker(
@@ -551,16 +566,15 @@ def _api_name_for_registered(
     return name
 
 
-def _derive_action_params(
-    cls: type[ActionParams], registry: OntologyRegistry
+def _derive_params(
+    cls: type[ActionParams] | type[FunctionParams],
+    registry: OntologyRegistry,
+    *,
+    owner: Literal["action", "function"],
 ) -> list[ActionParameterDef]:
-    """Introspects `cls.model_fields` -> `list[ActionParameterDef]` (spec
-    §6): plain annotations use the same scalar mapping as `OntologyObject`
-    properties; `target()`/`scope_ref()`-marked fields derive `refers_to`/
-    `scope_semantics` instead (and must be `str`-annotated -- checked here,
-    the earliest point the annotation is visible). Required rule mirrors
-    `_derive_properties`: non-Optional -> required, with a `prop()`-style
-    `required=` override on the marker itself.
+    """Derive action or function parameters from model fields. Both share
+    the scalar, choice, struct, Optional, and ref rules; functions reject
+    the action-only target and scope markers.
     """
     params: list[ActionParameterDef] = []
     needs_rebuild = False
@@ -574,6 +588,12 @@ def _derive_action_params(
         scope_semantics = cast(
             "Literal['target', 'scope'] | None", meta.get("semantics")
         )
+        if owner == "function" and scope_semantics is not None:
+            raise ValidationFailed(
+                f"{cls.__name__}.{field_name}: functions take ref(); "
+                "target()/scope_ref() are action-only",
+                code="ONTOLOGY_INVALID",
+            )
         if refers_to_cls is not None:
             if annotation is not str:
                 raise ValidationFailed(
@@ -638,6 +658,12 @@ def _derive_action_params(
     if needs_rebuild:
         cls.model_rebuild(force=True)
     return params
+
+
+def _derive_action_params(
+    cls: type[ActionParams], registry: OntologyRegistry
+) -> list[ActionParameterDef]:
+    return _derive_params(cls, registry, owner="action")
 
 
 _C = TypeVar("_C", bound=OntologyObject)
@@ -724,7 +750,14 @@ class Ontology:
         self._classes: dict[str, type[OntologyObject]] = {}
         self._object_scope_kwargs: dict[str, dict[str, Any]] = {}
         self._action_handlers: dict[str, tuple[TypedHandler, type[ActionParams]]] = {}
-        self._function_handlers: dict[str, FunctionHandler] = {}
+        self._function_handlers: dict[
+            str,
+            tuple[
+                Callable[..., Any],
+                type[FunctionParams] | None,
+                Literal["typed", "none", "legacy"],
+            ],
+        ] = {}
         self._definition: OntologyDef | None = None
 
     def _check_not_frozen(self, what: str) -> None:
@@ -1052,8 +1085,38 @@ class Ontology:
 
         return decorator
 
+    @overload
     def function(
         self,
+        params_cls: type[_FP],
+        /,
+        *,
+        description: str | None = ...,
+        input_description: str = ...,
+        output_description: str = ...,
+        api_name: str | None = ...,
+        capabilities: Sequence[CapabilityHandle[builtins.object]] = ...,
+        audit: bool | None = ...,
+    ) -> Callable[[Callable[[BoundQuery, _FP], _R]], Callable[[BoundQuery, _FP], _R]]: ...
+
+    @overload
+    def function(
+        self,
+        params_cls: None = None,
+        /,
+        *,
+        description: str | None = ...,
+        input_description: str = ...,
+        output_description: str = ...,
+        api_name: str | None = ...,
+        capabilities: Sequence[CapabilityHandle[builtins.object]] = ...,
+        audit: bool | None = ...,
+    ) -> _NoClassFunctionDecorator: ...
+
+    def function(
+        self,
+        params_cls: type[FunctionParams] | None = None,
+        /,
         *,
         description: str | None = None,
         input_description: str = "",
@@ -1061,11 +1124,10 @@ class Ontology:
         api_name: str | None = None,
         capabilities: Sequence[CapabilityHandle[builtins.object]] = (),
         audit: bool | None = None,
-    ) -> Callable[[FunctionHandler], FunctionHandler]:
-        """Derives a `FunctionDef` and declares the decorated handler
-        (`(query: BoundQuery, params: dict) -> Any`) on this `Ontology`
-        (spec `typed-actions.md` §6/AC8): `api_name` defaults to
-        `fn.__name__`. The handler is bound onto the `OntologyDef`'s
+    ) -> Any:
+        """Derives a `FunctionDef` and declares a typed, no-input, or legacy
+        handler on this `Ontology`. `api_name` defaults to `fn.__name__`.
+        The handler is bound onto the `OntologyDef`'s
         `FunctionRegistry` exactly once, lazily at `.definition` build time
         -- NOT here -- since `FunctionRegistry` lives on `OntologyDef`
         (mirrors how `.action()`'s handlers are only bound once a runtime
@@ -1077,9 +1139,54 @@ class Ontology:
         """
         name = api_name if api_name is not None else None
 
-        def decorator(fn: FunctionHandler) -> FunctionHandler:
+        def decorator(fn: _H) -> _H:
             resolved_name = name if name is not None else fn.__name__
             self._check_not_frozen(f"function {resolved_name!r}")
+            if params_cls is not None:
+                if not isinstance(params_cls, type) or not issubclass(
+                    params_cls, FunctionParams
+                ):
+                    raise ValidationFailed(
+                        f"function {resolved_name!r}: params class must inherit FunctionParams",
+                        code="ONTOLOGY_INVALID",
+                    )
+                existing_registry = params_cls.__dict__.get("_ontary_registry")
+                if existing_registry is not None and existing_registry is not self.registry:
+                    raise ValidationFailed(
+                        f"{params_cls.__name__!r} is already registered as a "
+                        "function params class on another Ontology",
+                        code="ONTOLOGY_INVALID",
+                    )
+                for existing_name, (_, existing_cls, _) in self._function_handlers.items():
+                    if existing_cls is params_cls:
+                        raise ValidationFailed(
+                            f"{params_cls.__name__!r} is already declared as "
+                            f"function {existing_name!r} (a params class may be declared once)",
+                            code="ONTOLOGY_INVALID",
+                        )
+                mode: Literal["typed", "none", "legacy"] = "typed"
+                parameters: list[ActionParameterDef] | None = _derive_params(
+                    params_cls, self.registry, owner="function"
+                )
+            else:
+                try:
+                    signature = inspect.signature(fn)
+                    positional = [
+                        param for param in signature.parameters.values()
+                        if param.kind in (
+                            inspect.Parameter.POSITIONAL_ONLY,
+                            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                        )
+                    ]
+                    no_inputs = (
+                        len(signature.parameters) == 1
+                        and len(positional) == 1
+                        and positional[0].default is inspect.Parameter.empty
+                    )
+                except (TypeError, ValueError):
+                    no_inputs = False
+                mode = "none" if no_inputs else "legacy"
+                parameters = [] if no_inputs else None
             capability_names = self._capability_api_names(
                 capabilities, declared_on=f"function {resolved_name!r}"
             )
@@ -1090,11 +1197,23 @@ class Ontology:
                 else f"Computes {resolved_name}.",
                 input_description=input_description,
                 output_description=output_description,
+                parameters=parameters,
                 capabilities=capability_names,
                 audit=audit,
             )
+            if mode == "legacy":
+                warnings.warn(
+                    f"function {resolved_name!r} takes a params dict; this form is deprecated "
+                    "since 0.19.0 and will be removed in 0.20.0 -- declare a "
+                    "FunctionParams class (@ontology.function(MyParams)) or a (query) handler",
+                    DeprecationWarning,
+                    stacklevel=2,
+                )
             self.registry.register_function(fn_def)  # dup api_name raises
-            self._function_handlers[resolved_name] = fn
+            if params_cls is not None:
+                params_cls._ontary_api_name = resolved_name
+                params_cls._ontary_registry = self.registry
+            self._function_handlers[resolved_name] = (fn, params_cls, mode)
             return fn
 
         return decorator
@@ -1170,8 +1289,8 @@ class Ontology:
         """
         if self._definition is None:
             functions = FunctionRegistry(self.registry)
-            for fn_name, fn in self._function_handlers.items():
-                functions.register(fn_name, fn)
+            for fn_name, (fn, params_cls, mode) in self._function_handlers.items():
+                functions.register(fn_name, fn, params_cls=params_cls, mode=mode)
             self._definition = OntologyDef(
                 name=self.name,
                 registry=self.registry,

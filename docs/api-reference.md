@@ -2,7 +2,7 @@
 
 **English** · [日本語](api-reference.ja.md) · [← README](../README.md)
 
-The curated front door of `ontary`: **42 names** in `__all__`. The rest of the
+The curated front door of `ontary`: **43 names** in `__all__`. The rest of the
 engine remains available from its canonical submodule (`ontary.meta`,
 `ontary.store`, and so on).
 
@@ -32,14 +32,14 @@ read, serve — start with the [README](../README.md).
 
 ## Front door
 
-`__all__` is sorted, duplicate-free, importable, and exactly 42 names. These
+`__all__` is sorted, duplicate-free, importable, and exactly 43 names. These
 are the names an ontology author should reach for without choosing an engine
 namespace.
 
 ### Authoring vocabulary
 
 `ActionContext`, `ActionParams`, `BoundQuery`, `CapabilityHandle`, `Cardinality`,
-`Consumer`, `DirectProperty`, `CustomResolver`, `LinkHandle`, `Ontology`,
+`Consumer`, `DirectProperty`, `CustomResolver`, `FunctionParams`, `LinkHandle`, `Ontology`,
 `OntologyObject`, `RowVisibilityStore`, `SelfScope`, `Sensitivity`,
 `Source`, `Store`, `ViaLink`, `prop`, `ref`, `scope_ref`, `target`.
 
@@ -476,7 +476,7 @@ and builds a single-use runtime internally.
 | `.exists(obj_type, where=None)` | `bool` |
 | `.count_contributors(obj_type, where=None)` | `int` |
 | `.execute(params)` or `.execute(action, params)` | `dict[str, Any]` |
-| `.call_function(api_name, params)` | `Any` |
+| `.call_function(params: FunctionParams)` or `.call_function(api_name: str, params: dict[str, Any] \| None = None)` | `Any` |
 | `.ingest(obj_type, records, source, *, on_error="raise")` | `IngestReport` (raises `IngestError` when failures exist) |
 | `.ingest_links(link_api_name, pairs, source, *, on_error="raise")` | `IngestReport` (raises `IngestError` when failures exist) |
 
@@ -877,9 +877,61 @@ the code the MCP server reports for it. `None` on an `ok` entry.
 
 ## Functions
 
-A function is `(query: BoundQuery, params: dict) -> Any`, decorated with
-`@ontology.function(...)`. No store handle ever reaches it — only already-guarded
-reads. Functions return derived values and never write.
+A function handler takes a `BoundQuery`. A typed function also declares a
+`FunctionParams` subclass with `@ontology.function(params_cls, ...)`.
+`FunctionParams` rejects unknown fields; its annotations define the validated
+inputs and MCP parameter schema. No store handle ever reaches the handler — only
+already-guarded reads. Functions return derived values and never write.
+
+```python
+class TicketStatsParams(FunctionParams):
+    queue_id: str
+
+@ontology.function(TicketStatsParams, api_name="ticketStats")
+def ticket_stats(query: BoundQuery, params: TicketStatsParams) -> float:
+    mean = query.aggregate("Ticket", "age_hours", where={"queue_id": params.queue_id})
+    assert isinstance(mean, float)
+    return mean
+
+client.call_function(TicketStatsParams(queue_id="q1"))
+```
+
+There are three declaration forms. A typed function declares a `FunctionParams`
+subclass; callers may pass an instance as above or pass its values in a dict with
+the function name, such as `client.call_function("ticketStats", {"queue_id": "q1"})`.
+The dict is validated and the handler receives a `TicketStatsParams` instance.
+A no-input function omits the params class and takes only `query`:
+
+```python
+@ontology.function(api_name="health")
+def health(query: BoundQuery) -> bool:
+    return query.exists("Ticket")
+
+client.call_function("health")
+client.call_function("health", {})
+```
+
+Without a params class, a handler is the no-input form only when it takes
+exactly one parameter, `query`, with no default and nothing else. Any other handler, such as
+`(query, params: dict)`, is the legacy dict form. It remains
+available in 0.19.0 and emits a `DeprecationWarning` at declaration; it is
+removed in 0.20.0. Declare a `FunctionParams` subclass instead.
+
+```python
+@ontology.function(api_name="legacyTicketStats")
+def legacy_ticket_stats(query: BoundQuery, params: dict) -> float:
+    return query.aggregate("Ticket", "age_hours", where={"queue_id": params["queue_id"]})
+```
+
+Unknown fields, missing required fields, invalid types, and values outside
+declared choices raise `ValidationFailed` with `code="INVALID_PARAMS"` before the
+handler runs. A no-input function also rejects non-empty params with that code.
+
+`FunctionDef.parameters` and MCP `list_functions` expose typed inputs as
+parameters with `name`, `type`, `choices`, `fields`, `required`, and `refers_to`,
+matching the action parameter shape without `scope_semantics`. The value is
+`[]` for a no-input function and `null` for a legacy dict-form function, whose
+parameter shape is unknown.
 
 ### `BoundQuery`
 
@@ -888,8 +940,8 @@ A `GuardedQuery` with the consumer fixed: `.get`, `.list`, `.count`, `.exists`, 
 `.capability(handle)`. Typed overloads
 work the same as on `OntologyClient` (`query.get(Ticket, id) -> Ticket | None`).
 
-Function *params* stay `dict[str, Any]` on both surfaces — typed function params are
-not part of this API.
+For a function with no inputs, declare a one-argument handler `(query)` and call
+it with no params or `{}`.
 
 `PreconditionFailed` (`FUNCTION_ERROR`) covers an undeclared api_name, a duplicate
 registration, or no bound handler.
@@ -1368,7 +1420,7 @@ data-driven ontologies; most authors should use `Ontology`.
 | `StructFieldDef` | `name`, `type`, `choices`, `required` |
 | `TransitionDef` | `initial`, `moves` |
 | `RuleDef` | `name`, `message`, `check` |
-| `FunctionDef` | `api_name`, `description`, `input_description`, `output_description`, `capabilities` |
+| `FunctionDef` | `api_name`, `description`, `input_description`, `output_description`, `parameters`, `capabilities` |
 | `Sensitivity` | `ai_usable`, `human_visible` |
 
 `PropertyType` is `Literal["str", "int", "float", "bool", "date", "datetime", "json", "struct"]`.

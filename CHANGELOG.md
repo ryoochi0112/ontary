@@ -11,6 +11,19 @@ you**.
 
 ## [Unreleased]
 
+### Added
+
+- Typed Function parameters (#45). A `FunctionParams` subclass validates a
+  function's inputs, types the handler, and exposes its parameter definitions
+  through MCP `list_functions`. A `(query)` handler declares a function with no
+  inputs, and `call_function(api_name)` no longer needs a params argument.
+
+### Deprecated
+
+- Dict-form Function handlers (#45). They remain supported in 0.19.0 with a
+  declaration-time `DeprecationWarning` and are removed in 0.20.0; use a
+  `FunctionParams` subclass.
+
 ### Fixed
 
 - `prop(choices=[...])` on an `ActionParams` field now sets `choices` on its

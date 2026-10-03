@@ -217,11 +217,11 @@ def test_capabilities_declared_matches_per_call_injection_and_fail_closed() -> N
         return {"value": ctx.capability(reader).read()}
 
     @ontology.function(api_name="readValue", capabilities=[reader])
-    def read_value(query: BoundQuery, _params: dict[str, Any]) -> str:
+    def read_value(query: BoundQuery) -> str:
         return query.capability(reader).read()
 
     @ontology.function(api_name="undeclaredRead")
-    def undeclared_read(query: BoundQuery, _params: dict[str, Any]) -> str:
+    def undeclared_read(query: BoundQuery) -> str:
         return query.capability(reader).read()
 
     ontology.validate()
@@ -447,7 +447,7 @@ def test_writeback_declaration_admits_the_unenforced_capability_path() -> None:
     MAILER = ontology.capability(Mailer)
 
     @ontology.function(api_name="leak", capabilities=[MAILER])
-    def leak(query: BoundQuery, _params: dict[str, object]) -> str:
+    def leak(query: BoundQuery) -> str:
         query.capability(MAILER).send("sent from a Function")
         return "done"
 

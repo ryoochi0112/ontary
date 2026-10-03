@@ -349,7 +349,7 @@ def _ontology() -> tuple[Ontology, Any]:
         raise RuntimeError("handler always fails")
 
     @ontology.function(api_name="pureButAudited", audit=True)
-    def _pure_but_audited(_query: Any, _params: dict[str, Any]) -> int:
+    def _pure_but_audited(_query: Any) -> int:
         return 7
 
     ontology.validate()

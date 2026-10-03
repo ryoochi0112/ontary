@@ -2,7 +2,7 @@
 
 [English](api-reference.md) · **日本語** · [← README](../README.md)
 
-`ontary` のキュレーションされたフロントドア: `__all__` の **42 個の名前**。
+`ontary` のキュレーションされたフロントドア: `__all__` の **43 個の名前**。
 残りのエンジン API は、`ontary.meta`、`ontary.store` などの
 定義元サブモジュールから利用します。
 
@@ -32,13 +32,13 @@
 
 ## フロントドア
 
-`__all__` はソート済み・重複なし・import 可能で、ちょうど 42 個です。オントロジーの
+`__all__` はソート済み・重複なし・import 可能で、ちょうど 43 個です。オントロジーの
 作者がエンジンの名前空間を選ばずに使う名前だけをここに置きます。
 
 ### Authoring vocabulary / 宣言用語彙
 
 `ActionContext`、`ActionParams`、`BoundQuery`、`CapabilityHandle`、`Cardinality`、
-`Consumer`、`CustomResolver`、`DirectProperty`、`LinkHandle`、`Ontology`、
+`Consumer`、`CustomResolver`、`DirectProperty`、`FunctionParams`、`LinkHandle`、`Ontology`、
 `OntologyObject`、`RowVisibilityStore`、`SelfScope`、`Sensitivity`、`Source`、
 `Store`、`ViaLink`、`prop`、`ref`、`scope_ref`、`target`。
 
@@ -53,7 +53,7 @@
 `ActionError`、`AuthorityError`、`ConflictError`、`InternalError`、`OntaryError`、
 `PermissionDenied`、`PreconditionFailed`、`ValidationFailed`、`VisibilityError`。
 
-この 42 個という個数は `tests/test_docs.py` が厳密に検証するため、root export の増加を
+この 43 個という個数は `tests/test_docs.py` が厳密に検証するため、root export の増加を
 見落としません。
 
 ```python
@@ -468,7 +468,7 @@ Action 実行器、バインド済みハンドラ — をちょうど 1 回だ�
 | `.exists(obj_type, where=None)` | `bool` |
 | `.count_contributors(obj_type, where=None)` | `int` |
 | `.execute(params)` または `.execute(action, params)` | `dict[str, Any]` |
-| `.call_function(api_name, params)` | `Any` |
+| `.call_function(params: FunctionParams)` または `.call_function(api_name: str, params: dict[str, Any] \| None = None)` | `Any` |
 | `.ingest(obj_type, records, source, *, on_error="raise")` | `IngestReport`（失敗があれば `IngestError`） |
 | `.ingest_links(link_api_name, pairs, source, *, on_error="raise")` | `IngestReport`（失敗があれば `IngestError`） |
 
@@ -860,9 +860,58 @@ Action の `roles=` だけがゲートでした。スコープを持つパラメ
 
 ## Function
 
-Function は `(query: BoundQuery, params: dict) -> Any` を `@ontology.function(...)` で
-デコレートしたものです。ストアハンドルはハンドラに一切届かず、すでにガードされた
-読み取りだけが渡ります。Function は導出値を返し、書き込みは行いません。
+Function ハンドラは `BoundQuery` を受け取ります。型付き Function は `FunctionParams` の
+サブクラスも `@ontology.function(params_cls, ...)` で宣言します。`FunctionParams` は未知のフィールドを
+拒否します。その型注釈が入力検証と MCP のパラメータスキーマを定義します。ストアハンドルはハンドラに一切届かず、
+すでにガードされた読み取りだけが渡ります。Function は導出値を返し、書き込みは行いません。
+
+```python
+class TicketStatsParams(FunctionParams):
+    queue_id: str
+
+@ontology.function(TicketStatsParams, api_name="ticketStats")
+def ticket_stats(query: BoundQuery, params: TicketStatsParams) -> float:
+    mean = query.aggregate("Ticket", "age_hours", where={"queue_id": params.queue_id})
+    assert isinstance(mean, float)
+    return mean
+
+client.call_function(TicketStatsParams(queue_id="q1"))
+```
+
+Function の宣言には 3 つの形式があります。型付き Function では `FunctionParams` の
+サブクラスを宣言します。上の例のようにインスタンスを渡すか、関数名と dict を渡せます
+（例: `client.call_function("ticketStats", {"queue_id": "q1"})`）。dict は検証されます。
+ハンドラには `TicketStatsParams` のインスタンスが渡されます。
+入力がない Function は params クラスを省略し、`query` だけを受け取ります。
+
+```python
+@ontology.function(api_name="health")
+def health(query: BoundQuery) -> bool:
+    return query.exists("Ticket")
+
+client.call_function("health")
+client.call_function("health", {})
+```
+
+params クラスを指定しない場合、引数が既定値なしの `query` 1 つだけのハンドラが入力なしの形式です。
+`(query, params: dict)` など、それ以外のハンドラはすべて旧 dict 形式です。
+0.19.0 では引き続き使用でき、宣言時に `DeprecationWarning` が出ます。0.20.0 で削除します。
+代わりに `FunctionParams` サブクラスを宣言してください。
+
+```python
+@ontology.function(api_name="legacyTicketStats")
+def legacy_ticket_stats(query: BoundQuery, params: dict) -> float:
+    return query.aggregate("Ticket", "age_hours", where={"queue_id": params["queue_id"]})
+```
+
+未知のフィールド、必須フィールドの不足、不正な型、宣言した選択肢にない値は、ハンドラの実行前に
+`ValidationFailed` と `code="INVALID_PARAMS"` を送出します。入力がない Function に空でない params を
+渡した場合も、同じコードで拒否します。
+
+`FunctionDef.parameters` と MCP の `list_functions` は、型付き入力を `name`、`type`、`choices`、
+`fields`、`required`、`refers_to` を持つパラメータとして公開します。これは `scope_semantics` を
+除いた Action パラメータと同じ形式です。入力がない Function では `[]`、旧形式の dict ハンドラでは
+パラメータの形状が不明なため `null` になります。
 
 ### `BoundQuery`
 
@@ -870,8 +919,7 @@ Function は `(query: BoundQuery, params: dict) -> Any` を `@ontology.function(
 `.aggregate`、`.aggregate_by`、`.count_contributors`、`.capability(handle)`。型付きオーバーロードは
 `OntologyClient` と同様に機能します（`query.get(Ticket, id) -> Ticket | None`）。
 
-Function の*パラメータ自体*はどちらの surface でも `dict[str, Any]` のままです —
-型付き Function パラメータはこの API には含まれません。
+入力がない Function は、引数が 1 つのハンドラ `(query)` として宣言し、params なしまたは `{}` で呼び出します。
 
 `PreconditionFailed`（`FUNCTION_ERROR`）は、未宣言の api_name、重複登録、ハンドラ未バインドを
 カバーします。
@@ -1340,7 +1388,7 @@ stateful セッションでも、各 request はその request 自身のトー�
 | `StructFieldDef` | `name`, `type`, `choices`, `required` |
 | `TransitionDef` | `initial`, `moves` |
 | `RuleDef` | `name`, `message`, `check` |
-| `FunctionDef` | `api_name`, `description`, `input_description`, `output_description`, `capabilities` |
+| `FunctionDef` | `api_name`, `description`, `input_description`, `output_description`, `parameters`, `capabilities` |
 | `Sensitivity` | `ai_usable`, `human_visible` |
 
 `PropertyType` は `Literal["str", "int", "float", "bool", "date", "datetime", "json", "struct"]`。

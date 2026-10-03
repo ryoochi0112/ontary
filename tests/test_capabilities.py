@@ -101,7 +101,7 @@ def _capability_fixture() -> dict[str, Any]:
         return {"status": "ok"}
 
     @ontology.function(api_name="Read", capabilities=[declared])
-    def read(query: BoundQuery, _params: dict[str, Any]) -> str:
+    def read(query: BoundQuery) -> str:
         selected = mode["value"]
         if selected == "undeclared":
             return query.capability(undeclared).read("function-argument")
