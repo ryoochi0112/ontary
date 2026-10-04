@@ -16,30 +16,47 @@ The attribute must be an `Ontology` instance, a zero-argument callable returning
 
 ## ontary validate
 
-The `ontary validate TARGET [--json]` command validates an ontology and reports diagnostics. It evaluates the target using `ontology.diagnose()`. This complete collector includes every finding that would cause validation to fail.
+The `ontary validate TARGET [--json] [--strict]` command validates an ontology and reports diagnostics. It evaluates the target using `ontology.diagnose()`. This complete collector includes every finding, including advisories that do not make the command exit with a failure code by default.
 
-The command outputs findings as `[SEVERITY] CODE at LOCATION: MESSAGE`. Each finding has an indented `fix: HINT` line. With no findings, it prints `No findings.`
+The command outputs findings as `[SEVERITY] CODE at LOCATION: MESSAGE`. Each finding has an indented `fix: HINT` line. A finding with a guide link also has an indented `guide: URL` line after `fix:`. With no findings, it prints `No findings.`
+
+By default, only findings with severity `error` make the command exit with code 1. The `--strict` flag also makes any remaining `warn` finding exit with code 1. Findings with severity `info` do not affect the exit code, and accepted findings are omitted by `diagnose()`.
 
 ### Text Output Example
 
 ```
-[WARN] STORED_DERIVABLE at Ticket.total_amount: property looks like a stored aggregate
-  fix: derive it with a Function instead of storing it
+[WARN] STORED_DERIVABLE at object Ticket, property avg_response_hours: the name reads as a score or aggregate
+  fix: if Ticket.avg_response_hours is computed from other rows, derive it with a Function; if it is recorded from outside, add accept="STORED_DERIVABLE" to the property
+  guide: https://ryoochi0112.github.io/ontary/ontology-design/#normalization-and-derived-values
 ```
 
 ### JSON Output Format
 
-When called with the `--json` flag, the command prints a JSON array of findings. Each finding object contains the keys `code`, `severity`, `location`, `message`, and `fix_hint`. The `severity` key contains `error`, `warn`, or `info`.
+When called with the `--json` flag, the command prints a JSON array of findings. Each finding object contains the keys `code`, `severity`, `location`, `message`, `fix_hint`, and `guide`. The `guide` value is the guide URL or `null` when the finding has no guide link. The `severity` key contains `error`, `warn`, or `info`. The `--strict` flag applies the same exit-code rule when JSON output is selected.
 
-### Advisory Warning Codes
+### Advisory Finding Codes
 
-The `diagnose` process may emit several advisory warning codes. These codes are `CRUD_ACTION_NAME`, `FORBIDDEN_TYPE_NAME`, `MICRO_ACTION`, `MIN_N_UNSET`, `STORED_DERIVABLE`, and `UNSCOPED_SENSITIVE`. Errors use `ONTOLOGY_INVALID` for declarations, `INVALID_RECORD` for stored rows that fail hydration, and `RULE_VIOLATED` for stored rows that break a declared rule.
+`diagnose()` may emit the following advisory findings. Each row describes the declaration shape that triggers its code.
+
+| Code | Trigger |
+|---|---|
+| `AUDIT_TYPE` | An object type name ends in `AuditLog`, `AuditEntry`, `AuditTrail`, `AuditRecord`, or `AuditEvent`. |
+| `CRUD_ACTION_NAME` | The first word of an action or Function API name is `Set`, `Update`, `Create`, `Delete`, `Remove`, or `Erase`, ignoring letter case. |
+| `FORBIDDEN_TYPE_NAME` | An object type name ends in `V` plus digits, `History`, or a year from 1900 to 2099, or ends in `Snapshot` without `snapshot=True`. |
+| `FREE_TEXT_STATUS` | A `status` or `*_status` property has type `str` and declares no choices. |
+| `MICRO_ACTION` | An action has one non-target parameter whose name matches a property on its target type. |
+| `MIN_N_UNSET` | A sensitive property is declared while `min_n` remains at its default value of 3. |
+| `STORED_DERIVABLE` | A property name has an aggregate prefix or suffix such as `avg_`, `total_`, or `_score`. |
+| `UNSCOPED_SENSITIVE` | A sensitive property belongs to an object type with no scope rule and no explicit unscoped declaration. |
+
+`MIN_N_UNSET` has severity `info`; the other advisory codes have severity `warn`. Errors use `ONTOLOGY_INVALID` for declarations, `INVALID_RECORD` for stored rows that fail hydration, and `RULE_VIOLATED` for stored rows that break a declared rule.
 
 ### Options
 
 | Flag | Description |
 |---|---|
 | `--json` | Print findings as a JSON array instead of text. |
+| `--strict` | Exit with code 1 if any `warn` finding remains, in addition to errors. |
 
 ## ontary serve
 
@@ -89,8 +106,8 @@ The `ontary.cli` module can be imported without the `mcp` extra. Only `ontary se
 
 | Command | Code | Meaning |
 |---|---|---|
-| `ontary validate` | `0` | No findings or no findings have severity `error`. |
-| `ontary validate` | `1` | One or more findings have severity `error`. |
+| `ontary validate [--strict]` | `0` | No findings have severity `error`; with `--strict`, no findings have severity `warn`. `info` findings do not affect the exit code. |
+| `ontary validate [--strict]` | `1` | One or more findings have severity `error`, or `--strict` is set and one or more findings have severity `warn`. |
 | `ontary validate` | `2` | Target cannot be loaded or diagnosed. Load failures print `ontary: <reason>` to stderr. |
 | `ontary serve` | `0` | The server stops normally. |
 | `ontary serve` | `2` | Target or store cannot load, or `mcp` extra is missing. |

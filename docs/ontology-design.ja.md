@@ -8,6 +8,8 @@
 コーディングエージェント向けのガイドです。第二の API リファレンスではなく
 設計ガイドとして使い、境界、所有権、関係、振る舞い、名前、セキュリティを
 選ぶためのものです。
+`ontary validate` は、このガイドの誤りのうちツールで検出できるものを報告し、各結果は
+該当セクションへリンクします（[CLI リファレンス](cli.ja.md)を参照）。
 
 Palantir Foundry の
 [Best practices](https://www.palantir.com/docs/foundry/ontology/ontology-best-practices/)、
@@ -95,7 +97,7 @@ DRY が当てはまるのは綴りだけでなく意味にも及びます。人�
 
 意図的な例外は、宣言された時点のスナップショットだけです。ドメインが、ある時点での
 スコアや決定を保存しなければならないなら、対象と観測時刻を含むスナップショット
-オブジェクトを明示的にモデル化します。通常のキャッシュ、レポート結果、重複した現在値を
+オブジェクトを明示的にモデル化し、`@ontology.object` に `snapshot=True` を付けて宣言します。通常のキャッシュ、レポート結果、重複した現在値を
 スナップショットと呼ばないでください。日常的な履歴にクローンは不要です。保存された
 行はすでに `valid_from` と `valid_to` を持ちます。
 
@@ -406,6 +408,12 @@ close-old-insert-new）を保持するため、履歴はストレージの関心
 ありません。時点の値を第一級にする必要があるなら、スナップショット型（例:
 `EngagementScoreSnapshot`）として明示的に宣言します。導出可能な事実の複製として
 認められるのはこれだけです。履歴は行履歴であり、`V2` 型は使いません。
+
+```python
+@ontology.object(layer="L0", snapshot=True)
+class EngagementScoreSnapshot(OntologyObject):
+    id: str = prop(primary_key=True)
+```
 
 *Source: Palantir, "Ontology design: Anti-patterns".*
 

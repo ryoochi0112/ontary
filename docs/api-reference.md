@@ -237,6 +237,9 @@ Registers the decorated `OntologyObject` subclass.
   min-N counting.
 - **`row_visibility`** — `(store, consumer, obj_id, payload) -> bool`, an extra
   per-row gate applied on top of scope.
+- **`accept`** — a lint code or a sequence of codes (`FORBIDDEN_TYPE_NAME`,
+  `AUDIT_TYPE`) this type accepts. **`snapshot`** — `True` declares a snapshot type.
+  Both are described in [Advisory findings](#advisory-findings-findingguide-accept-and-snapshot).
 
 `scope`, `contributor`, and `row_visibility` are shape-checked when the class is
 decorated. A misspelled `"unscoped"`, a single rule not wrapped in a list, or a
@@ -285,6 +288,10 @@ keep working on the same class.
 
 `choices=["open", "closed"]` limits a `str` property to those values. Every write
 path refuses any other value.
+
+`accept="STORED_DERIVABLE"` (or `"FREE_TEXT_STATUS"`, or a sequence of them) accepts
+that advisory finding for this property. See
+[Advisory findings](#advisory-findings-findingguide-accept-and-snapshot).
 
 `transitions=TransitionDef(initial=(...), moves={...})` declares allowed moves on
 a choice property. String values and string-valued `Enum` members (plain `Enum`
@@ -417,6 +424,62 @@ Base class for typed action-params models. Fields use the markers above.
 class EscalateTicketParams(ActionParams):
     ticket_id: str = target(Ticket)
     reason: str | None = None
+```
+
+#### Advisory findings: `Finding.guide`, `accept`, and `snapshot`
+
+`ontology.diagnose()` returns a `Finding` for each advisory code (the modelling
+lints and the security lints listed in [the CLI reference](cli.md)). A `Finding` has
+the fields `code`, `severity`, `location`, `message`, `fix_hint`, and `guide`.
+
+- **`Finding.guide`** (`str | None`, default `None`) is the URL of the section of the
+  published English design guide that explains the finding. It is
+  `GUIDE_URL + "#" + anchor`, built from `ontary.diagnose.GUIDE_URL` and
+  `ontary.diagnose.GUIDE_ANCHORS`. Every code in `ontary.diagnose.ADVISORY_CODES`
+  sets it. Findings with no guide section (`ONTOLOGY_INVALID`, `SCOPE_POLICY_ERROR`,
+  `INVALID_RECORD`, `RULE_VIOLATED`, `DIAGNOSE_RULE_FAILED`) leave it `None`.
+- **`accept`** says "this is intentional" at the declaration that caused the finding.
+  It takes one lint code or a sequence of codes. An accepted finding does not appear
+  in `diagnose()`, in the `ontary validate` text, or in `--json`. A code that is not
+  in the table below is refused (see the last bullet).
+
+  | Declaration | `accept` argument | Codes it accepts |
+  | --- | --- | --- |
+  | `prop(...)` | `accept=` | `STORED_DERIVABLE`, `FREE_TEXT_STATUS` |
+  | `@ontology.object(...)` | `accept=` | `FORBIDDEN_TYPE_NAME`, `AUDIT_TYPE` |
+  | `@ontology.action(...)` | `accept=` | `CRUD_ACTION_NAME`, `MICRO_ACTION` |
+  | `@ontology.function(...)` | `accept=` | `CRUD_ACTION_NAME` |
+
+  The accepted names are the `Literal` aliases `PropertyLint`, `ObjectLint`,
+  `ActionLint`, and `FunctionLint` in `ontary.meta`. They are not exported from
+  `ontary`, but they make a wrong code a `mypy` error at the call site. The same
+  `accept` field (`tuple[str, ...]`, default `()`) exists on `PropertyDef`,
+  `ObjectTypeDef`, `ActionTypeDef`, and `FunctionDef`, so a hand-built descriptor
+  behaves like a decorated class.
+- **`snapshot`** (`bool`, default `False`) on `@ontology.object(...)` declares the
+  type a point-in-time snapshot. It exempts the type from two findings: a
+  `STORED_DERIVABLE` finding for any of its properties, and a `FORBIDDEN_TYPE_NAME`
+  finding for a `Snapshot` name suffix. It does not exempt a `V<digits>`, year, or
+  `History` name. A `*Snapshot` type without `snapshot=True` still warns. The text
+  "declared snapshot" in `description` has no effect.
+- **A refused code.** A code that a declaration cannot accept raises
+  `ValidationFailed` with code `ONTOLOGY_INVALID` when the declaration is built. The
+  message names the declaration, the refused code, and the codes that declaration
+  accepts. This holds for an unknown code, a code for another kind of declaration,
+  an error code, and a security lint code (`UNSCOPED_SENSITIVE`, `MIN_N_UNSET`).
+  Lint codes are finding codes. They are never raised, so they are not in
+  `ERROR_CODES` and not in the [error code table](#error-codes).
+
+```python
+@ontology.object(layer="L0", scope="unscoped", snapshot=True)
+class AccountSnapshot(OntologyObject):
+    id: str = prop(primary_key=True)
+    health_score: int  # no STORED_DERIVABLE: the type is a declared snapshot
+
+@ontology.object(layer="L0", scope="unscoped")
+class Applicant(OntologyObject):
+    id: str = prop(primary_key=True)
+    credit_score: int = prop(accept="STORED_DERIVABLE")  # recorded from a bureau
 ```
 
 ---

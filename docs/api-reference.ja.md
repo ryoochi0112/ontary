@@ -231,6 +231,9 @@ ontology.validate(store=store)  # 編集したオントロジーを提供する�
 - **`contributor`** — 行の背後にいる*人物*を特定するスコープルール。min-N の計数に使われます。
 - **`row_visibility`** — `(store, consumer, obj_id, payload) -> bool`。スコープの上に
   重ねる行単位の追加ゲート。
+- **`accept`** — この型が受け入れる lint コード（`FORBIDDEN_TYPE_NAME`、`AUDIT_TYPE`）
+  1 つ、またはそのシーケンス。**`snapshot`** — `True` でスナップショット型として宣言。
+  どちらも[アドバイザリーな finding](#advisory-findings)で説明します。
 
 `scope`・`contributor`・`row_visibility` はデコレート時に形を検査します。
 `"unscoped"` の綴り間違い、リストで包んでいない単一ルール、callable でない
@@ -279,6 +282,10 @@ ontology.validate(store=store)  # 編集したオントロジーを提供する�
 
 `choices=["open", "closed"]` は `str` プロパティの値をその集合に限定します。
 それ以外の値は、どの書き込み経路でも拒否されます。
+
+`accept="STORED_DERIVABLE"`（または `"FREE_TEXT_STATUS"`、あるいはそれらのシーケンス）は、
+そのプロパティに対するアドバイザリーな finding を accept します。
+[アドバイザリーな finding](#advisory-findings)を参照してください。
 
 `transitions=TransitionDef(initial=(...), moves={...})` は choice プロパティで
 許可する状態遷移を宣言します。文字列、または値が文字列の `Enum` メンバー
@@ -411,7 +418,67 @@ class EscalateTicketParams(ActionParams):
     reason: str | None = None
 ```
 
+<a id="advisory-findings"></a>
+
+#### アドバイザリーな finding: `Finding.guide`・`accept`・`snapshot`
+
+`ontology.diagnose()` は、アドバイザリーなコード（モデリングの lint とセキュリティの
+lint。一覧は [CLI リファレンス](cli.ja.md)）ごとに `Finding` を返します。`Finding` の
+フィールドは `code`、`severity`、`location`、`message`、`fix_hint`、`guide` です。
+
+- **`Finding.guide`**（`str | None`、デフォルトは `None`）は、その finding を説明する
+  公開済み英語デザインガイドの該当セクションの URL です。`ontary.diagnose.GUIDE_URL`
+  と `ontary.diagnose.GUIDE_ANCHORS` から `GUIDE_URL + "#" + anchor` として作られます。
+  `ontary.diagnose.ADVISORY_CODES` のすべてのコードが設定します。ガイドのセクションが
+  ない finding（`ONTOLOGY_INVALID`、`SCOPE_POLICY_ERROR`、`INVALID_RECORD`、
+  `RULE_VIOLATED`、`DIAGNOSE_RULE_FAILED`）は `None` のままです。
+- **`accept`** は、finding の原因になった宣言の場所で「これは意図したものです」と
+  伝えます。lint コードを 1 つ、またはコードのシーケンスを渡します。accept した
+  finding は `diagnose()`、`ontary validate` のテキスト出力、`--json` のどれにも
+  現れません。下の表にないコードは拒否されます（最後の項目を参照）。
+
+  | 宣言 | `accept` 引数 | 受け付けるコード |
+  | --- | --- | --- |
+  | `prop(...)` | `accept=` | `STORED_DERIVABLE`, `FREE_TEXT_STATUS` |
+  | `@ontology.object(...)` | `accept=` | `FORBIDDEN_TYPE_NAME`, `AUDIT_TYPE` |
+  | `@ontology.action(...)` | `accept=` | `CRUD_ACTION_NAME`, `MICRO_ACTION` |
+  | `@ontology.function(...)` | `accept=` | `CRUD_ACTION_NAME` |
+
+  受け付ける名前は、`ontary.meta` の `Literal` エイリアス `PropertyLint`、
+  `ObjectLint`、`ActionLint`、`FunctionLint` です。`ontary` からは export されません
+  が、誤ったコードを呼び出し側の `mypy` エラーにします。同じ `accept` フィールド
+  （`tuple[str, ...]`、デフォルトは `()`）は `PropertyDef`、`ObjectTypeDef`、
+  `ActionTypeDef`、`FunctionDef` にもあり、手で組み立てた記述子もデコレートした
+  クラスと同じように動きます。
+- **`snapshot`**（`bool`、デフォルトは `False`）は `@ontology.object(...)` の引数で、
+  その型を時点のスナップショットとして宣言します。免除されるのは 2 つの finding です。
+  その型のプロパティに対する `STORED_DERIVABLE` と、`Snapshot` という名前の接尾辞に
+  対する `FORBIDDEN_TYPE_NAME` です。`V<数字>`、年、`History` の名前は免除されません。
+  `snapshot=True` のない `*Snapshot` の型は、これまでどおり警告されます。
+  `description` の「declared snapshot」という文字列には効果がありません。
+- **拒否されるコード。** 宣言が受け付けられないコードを渡すと、宣言を組み立てる
+  時点で `ValidationFailed`（コード `ONTOLOGY_INVALID`）が発生します。メッセージには、
+  宣言、拒否されたコード、その宣言が受け付けるコードが含まれます。未知のコード、
+  別の種類の宣言向けのコード、エラーコード、セキュリティ lint のコード
+  （`UNSCOPED_SENSITIVE`、`MIN_N_UNSET`）が対象です。lint コードは finding のコード
+  であり、raise されないため、`ERROR_CODES` にも[エラーコード表](#エラーコード)にも
+  ありません。
+
+```python
+@ontology.object(layer="L0", scope="unscoped", snapshot=True)
+class AccountSnapshot(OntologyObject):
+    id: str = prop(primary_key=True)
+    health_score: int  # STORED_DERIVABLE は出ない: 宣言済みのスナップショット型
+
+@ontology.object(layer="L0", scope="unscoped")
+class Applicant(OntologyObject):
+    id: str = prop(primary_key=True)
+    credit_score: int = prop(accept="STORED_DERIVABLE")  # 外部の信用情報機関から記録
+```
+
 ---
+
+<a id="scope-policy"></a>
 
 ## スコープポリシー
 

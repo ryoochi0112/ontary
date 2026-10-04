@@ -45,15 +45,19 @@ from ontary.diagnose import (
 from ontary.errors import ValidationFailed
 from ontary.functions import BoundQuery, FunctionHandler, FunctionRegistry
 from ontary.meta import (
+    ActionLint,
     ActionParameterDef,
     ActionTypeDef,
     CapabilityDef,
     Cardinality,
     FunctionDef,
+    FunctionLint,
     LinkTypeDef,
+    ObjectLint,
     ObjectTypeDef,
     OntologyRegistry,
     PropertyDef,
+    PropertyLint,
     RuleDef,
     Sensitivity,
     StructFieldDef,
@@ -103,6 +107,14 @@ _ANNOTATION_MAP: dict[Any, PropertyType] = {
 }
 
 
+def _normalize_accept(accept: str | Sequence[str] | None) -> tuple[str, ...]:
+    if accept is None:
+        return ()
+    if isinstance(accept, str):
+        return (accept,)
+    return tuple(dict.fromkeys(accept))
+
+
 def prop(
     *,
     primary_key: bool = False,
@@ -112,6 +124,7 @@ def prop(
     property_type: PropertyType | None = None,
     choices: Sequence[str] | None = None,
     transitions: TransitionDef | None = None,
+    accept: PropertyLint | Sequence[PropertyLint] | None = None,
     **field_kwargs: Any,
 ) -> Any:
     """`pydantic.Field(...)` plus ontology metadata, stashed in
@@ -120,7 +133,7 @@ def prop(
     to `Field`, so plain annotated fields and bare `Field(...)` keep
     working on the same class (AC3).
     """
-    ontary_meta: dict[str, Any] = {"primary_key": primary_key}
+    ontary_meta: dict[str, Any] = {"primary_key": primary_key, "accept": _normalize_accept(accept)}
     if sensitivity is not None:
         ontary_meta["sensitivity"] = sensitivity
     if scope_level is not None:
@@ -467,6 +480,7 @@ def _derive_properties(cls: type["OntologyObject"]) -> tuple[list[PropertyDef], 
                 required=required,
                 sensitivity=sensitivity,
                 scope_level=meta.get("scope_level"),
+                accept=meta.get("accept", ()),
             )
         )
 
@@ -866,6 +880,8 @@ class Ontology:
         scope: Literal["unscoped"] | Sequence[ScopeRule] | None = None,
         contributor: Sequence[ScopeRule] | None = None,
         row_visibility: RowVisibilityFn | None = None,
+        accept: ObjectLint | Sequence[ObjectLint] | None = None,
+        snapshot: bool = False,
     ) -> Callable[[type[_C]], type[_C]]:
         """Derives an `ObjectTypeDef` from `model_fields` and registers it.
         `scope`/`contributor`/`row_visibility` are shape-checked at decoration
@@ -895,6 +911,8 @@ class Ontology:
                 properties=props,
                 primary_key=primary_key,
                 owned=owned,
+                accept=_normalize_accept(accept),
+                snapshot=snapshot,
             )
             self.registry.register_object_type(obj_def)
             cls._ontary_api_name = name
@@ -1012,6 +1030,7 @@ class Ontology:
         description: str | None = None,
         api_name: str | None = None,
         capabilities: Sequence[CapabilityHandle[builtins.object]] = (),
+        accept: ActionLint | Sequence[ActionLint] | None = None,
     ) -> Callable[
         [Callable[[ActionContext, _P], dict[str, Any]]],
         Callable[[ActionContext, _P], dict[str, Any]],
@@ -1073,6 +1092,7 @@ class Ontology:
                 else f"Executes {name}.",
                 parameters=parameters,
                 capabilities=capability_names,
+                accept=_normalize_accept(accept),
             )
             mismatch = target_param_mismatch(action_def)
             if mismatch is not None:
@@ -1097,6 +1117,7 @@ class Ontology:
         api_name: str | None = ...,
         capabilities: Sequence[CapabilityHandle[builtins.object]] = ...,
         audit: bool | None = ...,
+        accept: FunctionLint | Sequence[FunctionLint] | None = ...,
     ) -> Callable[[Callable[[BoundQuery, _FP], _R]], Callable[[BoundQuery, _FP], _R]]: ...
 
     @overload
@@ -1111,6 +1132,7 @@ class Ontology:
         api_name: str | None = ...,
         capabilities: Sequence[CapabilityHandle[builtins.object]] = ...,
         audit: bool | None = ...,
+        accept: FunctionLint | Sequence[FunctionLint] | None = ...,
     ) -> _NoClassFunctionDecorator: ...
 
     def function(
@@ -1124,6 +1146,7 @@ class Ontology:
         api_name: str | None = None,
         capabilities: Sequence[CapabilityHandle[builtins.object]] = (),
         audit: bool | None = None,
+        accept: FunctionLint | Sequence[FunctionLint] | None = None,
     ) -> Any:
         """Derives a `FunctionDef` and declares a typed, no-input, or legacy
         handler on this `Ontology`. `api_name` defaults to `fn.__name__`.
@@ -1200,6 +1223,7 @@ class Ontology:
                 parameters=parameters,
                 capabilities=capability_names,
                 audit=audit,
+                accept=_normalize_accept(accept),
             )
             if mode == "legacy":
                 warnings.warn(

@@ -21,7 +21,10 @@ import pytest
 from pydantic import BaseModel
 
 import ontary
+import ontary.cli as cli
+from ontary import Ontology, OntologyObject, SelfScope, prop
 from ontary.declarations import Declarations
+from ontary.diagnose import ADVISORY_CODES
 from ontary.errors import ERROR_CODES
 
 README = Path(__file__).resolve().parent.parent / "README.md"
@@ -152,6 +155,17 @@ READER_DOCS = tuple(
     )
 )
 EXAMPLES = Path(__file__).resolve().parent.parent / "examples"
+
+
+def _cli_text_example_ontology() -> Ontology:
+    ontology = Ontology("cli-docs-example", scope_levels=["org"])
+
+    @ontology.object(layer="L0", scope=[SelfScope(level="org")])
+    class Ticket(OntologyObject):
+        id: str = prop(primary_key=True)
+        avg_response_hours: float
+
+    return ontology
 
 
 def test_queries_document_visible_row_count_disclosure_reasoning() -> None:
@@ -307,6 +321,49 @@ DEMOTED_NAMES_BY_MODULE = {
 
 def _read_readme() -> str:
     return README.read_text()
+
+
+@pytest.mark.parametrize("path", (_DOCS / "cli.md", _DOCS / "cli.ja.md"))
+def test_cli_docs_name_every_advisory_code(path: Path) -> None:
+    rows = {
+        match.group(1): match.group(2).strip()
+        for line in path.read_text().splitlines()
+        if (
+            match := re.match(r"\|\s*`([A-Z_]+)`\s*\|\s*(.*?)\s*\|", line)
+        )
+    }
+
+    missing = ADVISORY_CODES - rows.keys()
+    assert not missing, f"{path.name} is missing advisory code rows: {sorted(missing)}"
+    assert all(rows[code] for code in ADVISORY_CODES)
+
+
+def _text_output_example(path: Path, heading: str) -> str:
+    match = re.search(
+        rf"^### {re.escape(heading)}\n\n```\n(.*?)```",
+        path.read_text(),
+        re.MULTILINE | re.DOTALL,
+    )
+    assert match is not None, f"{path.name} has no {heading!r} fenced example"
+    return match.group(1)
+
+
+def test_cli_text_output_example_matches_real_cli_output(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    target = f"{__name__}:_cli_text_example_ontology"
+    code = cli.main(["validate", target])
+    actual_output = capsys.readouterr().out
+
+    assert code == 0
+    assert _text_output_example(_DOCS / "cli.md", "Text Output Example") == actual_output
+
+
+def test_japanese_cli_text_example_matches_english() -> None:
+    english = _text_output_example(_DOCS / "cli.md", "Text Output Example")
+    japanese = _text_output_example(_DOCS / "cli.ja.md", "テキスト出力の例")
+
+    assert japanese == english
 
 
 def test_new_english_pages_are_reachable_and_cross_linked() -> None:
@@ -474,8 +531,11 @@ def test_cookbook_recipes_execute_verbatim(recipe: str) -> None:
             raise AssertionError(
                 f"recipe {recipe!r} imports engine name(s) from {node.module!r}"
             )
-    namespace: dict[str, object] = {}
-    exec(compile(code, f"examples/tickets/README.md#{recipe}", "exec"), namespace)
+    namespace: dict[str, object] = {"__name__": f"cookbook_{recipe}"}
+    exec(
+        compile(code, f"examples/tickets/README.md#{recipe}", "exec", dont_inherit=True),
+        namespace,
+    )
 
 
 def test_readme_is_within_line_budget() -> None:

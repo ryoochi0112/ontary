@@ -16,30 +16,47 @@
 
 ## ontary validate
 
-`ontary validate TARGET [--json]` コマンドは、オントロジーを検証して診断結果を報告します。`ontology.diagnose()` を使用してターゲットを評価します。この完全なコレクター（収集機能）は、検証を失敗させるすべての検出事項を網羅して取得します。
+`ontary validate TARGET [--json] [--strict]` コマンドは、オントロジーを検証して診断結果を報告します。`ontology.diagnose()` を使用してターゲットを評価します。この完全なコレクターは、既定では終了コードに影響しないアドバイザリを含む、すべての診断結果を収集します。
 
-検出事項は `[SEVERITY] CODE at LOCATION: MESSAGE` という形式で出力されます。各検出事項には、インデントされた `fix: HINT` 行が続きます。検出事項がない場合は、`No findings.` と出力されます。
+検出事項は `[SEVERITY] CODE at LOCATION: MESSAGE` という形式で出力されます。各検出事項には、インデントされた `fix: HINT` 行が続きます。ガイドへのリンクがある場合は、その次にインデントされた `guide: URL` 行が続きます。検出事項がない場合は、`No findings.` と出力されます。
+
+通常は `error` 重要度の検出事項がある場合に限り、終了コードが 1 になります。`--strict` を指定すると、残っている `warn` 重要度の検出事項がある場合も終了コードが 1 になります。`info` 重要度の検出事項は終了コードに影響しません。受け入れ済みの検出事項は `diagnose()` から除外されます。
 
 ### テキスト出力の例
 
 ```
-[WARN] STORED_DERIVABLE at Ticket.total_amount: property looks like a stored aggregate
-  fix: derive it with a Function instead of storing it
+[WARN] STORED_DERIVABLE at object Ticket, property avg_response_hours: the name reads as a score or aggregate
+  fix: if Ticket.avg_response_hours is computed from other rows, derive it with a Function; if it is recorded from outside, add accept="STORED_DERIVABLE" to the property
+  guide: https://ryoochi0112.github.io/ontary/ontology-design/#normalization-and-derived-values
 ```
 
 ### JSON出力フォーマット
 
-`--json` フラグを指定して実行すると、検出事項が JSON 配列として出力されます。各検出オブジェクトには、`code`、`severity`、`location`、`message`、および `fix_hint` キーが含まれます。`severity` キーの値は、`error`、`warn`、または `info` です。
+`--json` フラグを指定して実行すると、検出事項が JSON 配列として出力されます。各検出オブジェクトには、`code`、`severity`、`location`、`message`、`fix_hint`、および `guide` キーが含まれます。`guide` の値はガイド URL です。ガイドへのリンクがない検出事項では `null` になります。`severity` キーの値は、`error`、`warn`、または `info` です。JSON 出力でも `--strict` は同じ終了コード規則を適用します。
 
-### アドバイザリ警告コード
+### アドバイザリ検出コード
 
-`diagnose` プロセスは、いくつかのアドバイザリ警告コードを出力することがあります。これらのコードは、`CRUD_ACTION_NAME`、`FORBIDDEN_TYPE_NAME`、`MICRO_ACTION`、`MIN_N_UNSET`、`STORED_DERIVABLE`、および `UNSCOPED_SENSITIVE` です。エラーには、宣言の不備に `ONTOLOGY_INVALID`、保存済み行のハイドレーション失敗に `INVALID_RECORD`、宣言済みルールへの違反に `RULE_VIOLATED` を使います。
+`diagnose()` は次のアドバイザリ検出事項を出力することがあります。各行に、そのコードが発生する宣言の形を示します。
+
+| コード | 発生条件 |
+|---|---|
+| `AUDIT_TYPE` | オブジェクト型名の末尾が `AuditLog`、`AuditEntry`、`AuditTrail`、`AuditRecord`、または `AuditEvent` の場合に発生します。 |
+| `CRUD_ACTION_NAME` | Action または Function の API 名の先頭語が、大文字と小文字を区別せず `Set`、`Update`、`Create`、`Delete`、`Remove`、または `Erase` の場合に発生します。 |
+| `FORBIDDEN_TYPE_NAME` | オブジェクト型名が `V` と数字、`History`、または 1900〜2099 の年で終わる場合に発生します。`snapshot=True` がない `Snapshot` 末尾も対象です。 |
+| `FREE_TEXT_STATUS` | `status` または `*_status` という名前の `str` 型プロパティに選択肢が宣言されていない場合に発生します。 |
+| `MICRO_ACTION` | Action の対象以外のパラメーターが1つだけあり、その名前が対象型のプロパティ名と一致する場合に発生します。 |
+| `MIN_N_UNSET` | 機微なプロパティが宣言され、`min_n` が既定値の 3 のままの場合に発生します。 |
+| `STORED_DERIVABLE` | プロパティ名に `avg_`、`total_`、`_score` などの集計を表す接頭辞または接尾辞がある場合に発生します。 |
+| `UNSCOPED_SENSITIVE` | スコープ規則も明示的な非スコープ宣言もないオブジェクト型に機微なプロパティがある場合に発生します。 |
+
+`MIN_N_UNSET` の重要度は `info` です。ほかのアドバイザリコードの重要度は `warn` です。エラーには、宣言の不備に `ONTOLOGY_INVALID`、保存済み行のハイドレーション失敗に `INVALID_RECORD`、宣言済みルールへの違反に `RULE_VIOLATED` を使います。
 
 ### オプション
 
 | フラグ | 説明 |
 |---|---|
 | `--json` | 検出事項をテキストではなく JSON 配列として出力します。 |
+| `--strict` | `error` に加え、残っている `warn` 検出事項がある場合に終了コード 1 で終了します。 |
 
 ## ontary serve
 
@@ -89,8 +106,8 @@ ontary serve your_app.ontology:ontology --dev --store ./dev.sqlite --port 8000
 
 | コマンド | コード | 意味 |
 |---|---|---|
-| `ontary validate` | `0` | 検出事項がないか、または `error` 重要度の検出事項がない場合。 |
-| `ontary validate` | `1` | 1つ以上の `error` 重要度の検出事項がある場合。 |
+| `ontary validate [--strict]` | `0` | `error` 重要度の検出事項がありません。`--strict` 指定時は `warn` 重要度の検出事項もありません。`info` は終了コードに影響しません。 |
+| `ontary validate [--strict]` | `1` | `error` 重要度の検出事項がある場合、または `--strict` 指定時に `warn` 重要度の検出事項がある場合。 |
 | `ontary validate` | `2` | ターゲットのロードまたは診断ができない場合。ロード失敗時は、標準エラー出力に `ontary: <reason>` が出力されます。 |
 | `ontary serve` | `0` | サーバーが正常に停止した場合。 |
 | `ontary serve` | `2` | ターゲットもしくはストアをロードできないか、または `mcp` エクストラがない場合。 |
