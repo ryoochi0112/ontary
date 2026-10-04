@@ -128,7 +128,7 @@ Python 3.12+。コアパッケージの依存は `pydantic` のみ。エクス�
 ### `ontary.testing`
 
 SDK 利用者向けのテストヘルパーは `make_store`、`consumer`、`raises_code`、
-`FixedClock`、`SequentialIds` です。`make_store(ontology)` は空の
+`FixedClock`、`SequentialIds`、`Scenario`、`scenario` です。`make_store(ontology)` は空の
 `InMemoryStore` を新しく作り、`consumer(...)` は有効な `Consumer` を組み立て、
 `raises_code(code)` はメッセージではなく機械可読なコードでエラーを検証します
 （`ontary.ingest.IngestError` を含む任意の `OntaryError` に加え、安定した文字列
@@ -136,6 +136,27 @@ SDK 利用者向けのテストヘルパーは `make_store`、`consumer`、`rais
 `FixedClock(start)` はタイムゾーン付きの同じ
 日時を毎回返し、naive な start は拒否します。`SequentialIds(prefix)` は
 `prefix-1`、`prefix-2`、…という決定的な ID を返します。
+
+`scenario(ontology, *, store=None, clock=None, id_factory=None, capabilities=None)`
+は、即時実行でチェーン可能な `Scenario` を返します。ストア、クロック、ID ファクトリは
+準備の書き込みより前に一度だけバインドされます。既定は、新しい `InMemoryStore`、
+`2026-01-01T00:00:00Z` の `FixedClock`、`SequentialIds("id")` です。上書きするときは
+空のストアを渡してください。すべてのメソッドは同じ `Scenario` を返します。
+
+| メソッド | 意味 |
+|---|---|
+| `given(*objects)` | 型付きの `OntologyObject` インスタンスを準備します。最初の `when` の前でのみ使えます。ストアが拒否した場合は、オブジェクトとエラーコードを示す `AssertionError` として再送出されます。 |
+| `given_link(handle, from_, to)` | 型付きの `LinkHandle` でリンクを準備します。端点はオブジェクトまたは id 文字列です。最初の `when` の前でのみ使えます。 |
+| `when(params, *, by)` | 1 つの `ActionParams` を、コンシューマー `by`（必須）として権限管理下で実行します。直前のステップが失敗し、`then_error` で検証されていない場合は、先に `AssertionError` を送出します。 |
+| `then(cls, pk, **fields)` | 直前のステップが成功していることを要求し、指定した各プロパティを、マスキングされていない現在の行と `==` で比較します。宣言されていないフィールドは `INVALID_RECORD` になります。 |
+| `then_result(expected)` | 成功していることと、戻り値が `expected` と等しいことを要求します。 |
+| `then_error(code)` | `code` で失敗していることと、現在のオブジェクトとリンクがステップ前の状態と等しいことを要求します。失敗を検証済みにするのはこのメソッドだけです。 |
+| `then_absent(cls, pk)` | 現在の行が存在しないことを要求します。成功後でも失敗後でも使えます。 |
+| `then_link(handle, from_, to)` | リンクが現在の状態に存在することを要求します。 |
+| `then_no_link(handle, from_, to)` | リンクが現在の状態に存在しないことを要求します。 |
+
+検証に失敗すると `AssertionError` になります。すべてのシナリオは `then*` で終わります。
+`when` で終わるシナリオは何も検証しません。
 
 ---
 

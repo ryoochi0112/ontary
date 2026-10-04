@@ -41,10 +41,24 @@ from ontary.query import (
 )
 from ontary.security import Consumer
 from ontary.store import StoredObject
+from ontary.typesys import struct_value
 
 T = TypeVar("T", bound=OntologyObject)
 F = TypeVar("F", bound=OntologyObject)
 _FloatAggregateFunc = Literal["mean", "sum", "min", "max"]
+
+
+def declared_snapshot(
+    obj: OntologyObject, api_name: str, registry: OntologyRegistry
+) -> dict[str, Any]:
+    """Convert declared properties to the payload used by typed writes."""
+    properties = registry.get_object_type(api_name).properties
+    struct_names = {p.name for p in properties if p.type == "struct"}
+    snapshot = obj.model_dump(include={p.name for p in properties} - struct_names)
+    for prop in properties:
+        if prop.type == "struct" and prop.fields is not None:
+            snapshot[prop.name] = struct_value(getattr(obj, prop.name), prop.fields)
+    return snapshot
 
 
 def api_name_for(

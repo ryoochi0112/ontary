@@ -41,7 +41,19 @@ import pytest
 from conftest import raises_code
 from pydantic import BaseModel
 
+from examples.tickets.ontology import (
+    Agent,
+    ArchiveTicketParams,
+    Escalation,
+    OpenEscalationParams,
+    Queue,
+    Ticket,
+    build_ontology,
+    escalationOnTicket,
+    ticketInQueue,
+)
 from ontary import Ontology, OntologyClient, OntologyObject, prop
+from ontary._scenario import SCENARIO_EPOCH
 from ontary.actions import ActionContext, ActionExecutor
 from ontary.audit import CapabilityAccessRecord
 from ontary.errors import AuthorityError, ConflictError, PreconditionFailed, ValidationFailed
@@ -69,7 +81,7 @@ from ontary.store import (
 )
 from ontary.store._shared import StoreClock, canonical_id
 from ontary.store.inmemory import InMemoryStore
-from ontary.testing import SequentialIds
+from ontary.testing import SequentialIds, consumer, scenario
 
 StoreFactory = Callable[[OntologyRegistry], Store]
 
@@ -1059,6 +1071,52 @@ def _make_widget_handler(
     ctx: ActionContext, params: _MakeWidgetParams
 ) -> dict[str, str]:
     return {"widget_id": ctx.create(Widget, label="gizmo").id}
+
+
+def test_scenario_conforms_across_store_backends(store_factory: StoreFactory) -> None:
+    """The same typed scenario runs on each Store implementation."""
+    ontology, _default_store = build_ontology()
+    store = store_factory(ontology.registry)
+    agent = consumer(
+        actor_id="agent-1", role="Agent", scope_level="queue", scope_id="queue-a"
+    )
+    viewer = consumer(
+        actor_id="viewer-1", role="Viewer", scope_level="queue", scope_id="queue-a"
+    )
+
+    (
+        scenario(ontology, store=store)
+        .given(
+            Agent(id="agent-1", display_name="Ada"),
+            Queue(id="queue-a", name="Billing"),
+            Ticket(
+                id="t-1",
+                subject="Invoice mismatch",
+                age_hours=4.0,
+                status="open",
+                queue_id="queue-a",
+            ),
+        )
+        .given_link(ticketInQueue, "t-1", "queue-a")
+        .when(
+            OpenEscalationParams(
+                ticket_id="t-1", agent_id="agent-1", reason="Duplicate invoice"
+            ),
+            by=agent,
+        )
+        .then(Escalation, "id-2", reason="Duplicate invoice", state="open")
+        .then_link(escalationOnTicket, "id-2", "t-1")
+        .when(ArchiveTicketParams(escalation_id="id-2"), by=viewer)
+        .then_error("PERMISSION_DENIED")
+        .then_link(ticketInQueue, "t-1", "queue-a")
+    )
+
+    assert {
+        row.lineage.valid_from
+        for api_name in ontology.registry.object_types
+        for row in store.read_all(api_name)
+    } == {SCENARIO_EPOCH.isoformat(timespec="microseconds")}
+    assert [entry.invocation_id for entry in store.audit_entries()] == ["id-1", "id-3"]
 
 
 def test_action_create_without_primary_key_fills_id_from_runtime_id_factory(

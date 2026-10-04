@@ -22,7 +22,7 @@ from typing import Any, Literal, NoReturn, TypeVar, cast, overload
 from pydantic import BaseModel, ValidationError
 
 from ontary._runtime import default_clock, default_id_factory
-from ontary._typed_api import api_name_for, resolve_capability
+from ontary._typed_api import api_name_for, declared_snapshot, resolve_capability
 from ontary.audit import CapabilityAccessRecord, _audit_error_code
 from ontary.errors import (
     ConflictError,
@@ -188,13 +188,7 @@ class ActionContext:
         return [p.name for p in obj_def.properties]
 
     def _declared_snapshot(self, obj: OntologyObject, api_name: str) -> dict[str, Any]:
-        properties = self._registry_or_raise("save").get_object_type(api_name).properties
-        struct_names = {p.name for p in properties if p.type == "struct"}
-        snapshot = obj.model_dump(include={p.name for p in properties} - struct_names)
-        for prop in properties:
-            if prop.type == "struct" and prop.fields is not None:
-                snapshot[prop.name] = struct_value(getattr(obj, prop.name), prop.fields)
-        return snapshot
+        return declared_snapshot(obj, api_name, self._registry_or_raise("save"))
 
     def _hand_out(self, cls: type[_O], stored: StoredObject) -> _O:
         obj = hydrate(cls, stored, self._consumer.kind)
