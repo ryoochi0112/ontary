@@ -361,7 +361,8 @@ class BoundQuery(_TypedReadMixin):
             self._consumer, link_type, from_id, reverse=reverse
         )
 
-FunctionHandler = Callable[[BoundQuery, dict[str, Any]], Any]
+# Public handler alias for a `(query)` or `(query, params)` function handler.
+FunctionHandler = Callable[..., Any]
 
 
 def _takes_query_only(fn: Callable[..., Any]) -> bool:
@@ -474,7 +475,6 @@ class FunctionRegistry:
                         f"function {api_name!r}: invalid params: {exc}",
                         code="INVALID_PARAMS",
                     ) from exc
-            assert function_def.parameters is not None
             for param in function_def.parameters:
                 if param.choices is None:
                     continue

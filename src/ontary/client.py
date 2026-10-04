@@ -720,6 +720,11 @@ class OntologyClient(_TypedReadMixin):
             call_params: dict[str, Any] | FunctionParams = api_name
             api_name = self._api_name_for_function_params(api_name)
         else:
+            if not isinstance(api_name, str):
+                raise ValidationFailed(
+                    "call_function expected an api name str or a FunctionParams instance",
+                    code="INVALID_PARAMS",
+                )
             call_params = {} if params is None else params
         try:
             function_def = self._ontology.registry.get_function(api_name)

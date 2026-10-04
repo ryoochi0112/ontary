@@ -704,9 +704,7 @@ def _function_payload(defn: FunctionDef) -> dict[str, Any]:
         "input_description": defn.input_description,
         "output_description": defn.output_description,
         "capabilities": list(defn.capabilities),
-        "parameters": None
-        if defn.parameters is None
-        else [_parameter_payload(parameter) for parameter in defn.parameters],
+        "parameters": [_parameter_payload(parameter) for parameter in defn.parameters],
     }
 
 

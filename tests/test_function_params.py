@@ -1,6 +1,6 @@
 import asyncio
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import pytest
 from conftest import raises_code
@@ -27,13 +27,15 @@ from ontary.store import ObjectStore
 def _function_def(
     parameters: list[ActionParameterDef] | None = None,
 ) -> FunctionDef:
-    return FunctionDef(
-        api_name="ticketStats",
-        description="Ticket statistics.",
-        input_description="A queue id.",
-        output_description="Statistics.",
-        parameters=parameters,
-    )
+    values: dict[str, Any] = {
+        "api_name": "ticketStats",
+        "description": "Ticket statistics.",
+        "input_description": "A queue id.",
+        "output_description": "Statistics.",
+    }
+    if parameters is not None:
+        values["parameters"] = parameters
+    return FunctionDef(**values)
 
 
 def test_function_params_is_a_separate_strict_model() -> None:
@@ -47,12 +49,23 @@ def test_function_params_is_a_separate_strict_model() -> None:
         TicketStatsParams.model_validate({"queue_id": "q1", "unexpected": True})
 
 
-def test_function_def_distinguishes_unspecified_and_no_inputs() -> None:
-    assert _function_def().parameters is None
+def test_function_def_defaults_unspecified_parameters_to_no_inputs() -> None:
+    assert _function_def().parameters == []
     assert _function_def([]).parameters == []
     assert _function_def([ActionParameterDef(name="queue_id", type="str")]).parameters == [
         ActionParameterDef(name="queue_id", type="str")
     ]
+
+
+def test_function_def_rejects_explicit_none_parameters() -> None:
+    with pytest.raises(ValidationError):
+        FunctionDef(
+            api_name="ticketStats",
+            description="Ticket statistics.",
+            input_description="A queue id.",
+            output_description="Statistics.",
+            parameters=None,  # type: ignore[arg-type]
+        )
 
 
 @pytest.mark.parametrize("semantics", ["target", "scope"])
@@ -336,6 +349,58 @@ def test_no_input_mode(make_consumer: Any) -> None:
             FunctionParams(),
         )
     assert "empty" in str(instance_error.value)
+
+
+def test_mcp_function_payload_parameters_are_never_none(make_consumer: Any) -> None:
+    ontology = _ontology()
+
+    @ontology.function(api_name="empty")
+    def empty(_query: BoundQuery) -> str:
+        return "ok"
+
+    class Params(FunctionParams):
+        count: int
+
+    @ontology.function(Params, api_name="withInput")
+    def with_input(_query: BoundQuery, params: Params) -> int:
+        return params.count
+
+    ontology.validate()
+    store = ObjectStore(ontology.registry)
+    consumer = make_consumer(
+        actor_id="u1", role="Member", scope_level="org", scope_id="o1", kind="human"
+    )
+    server = build_mcp_server(ontology, store, consumer)
+    functions_result = asyncio.run(server.call_tool("list_functions", {}))
+    assert functions_result.structured_content is not None
+    payloads = functions_result.structured_content["functions"]
+    by_name = {fn["api_name"]: fn for fn in payloads}
+    assert by_name["empty"]["parameters"] == []
+    typed_parameters = by_name["withInput"]["parameters"]
+    assert isinstance(typed_parameters, list)
+    assert [parameter["name"] for parameter in typed_parameters] == ["count"]
+    assert all(fn["parameters"] is not None for fn in payloads)
+
+
+def test_call_function_rejects_non_function_params_values(make_consumer: Any) -> None:
+    ontology = _ontology()
+
+    @ontology.function(api_name="empty")
+    def empty(_query: BoundQuery) -> str:
+        return "ok"
+
+    class ActionArguments(ActionParams):
+        value: str = "value"
+
+    store = ObjectStore(ontology.registry)
+    consumer = make_consumer(
+        actor_id="u1", role="Member", scope_level="org", scope_id="o1", kind="human"
+    )
+    client = ontology.bind(store).for_consumer(consumer)
+    for invalid_api_name in (ActionArguments(), 42):
+        with raises_code(ValidationFailed, "INVALID_PARAMS") as exc_info:
+            client.call_function(cast(Any, invalid_api_name))
+        assert "an api name str or a FunctionParams instance" in str(exc_info.value)
 
 
 

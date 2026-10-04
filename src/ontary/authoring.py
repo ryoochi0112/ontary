@@ -43,7 +43,6 @@ from ontary.diagnose import (
 from ontary.errors import ValidationFailed
 from ontary.functions import (
     BoundQuery,
-    FunctionHandler,
     FunctionRegistry,
     _dict_handler_refusal,
     _takes_query_only,
@@ -533,11 +532,7 @@ _H = TypeVar("_H", bound=Callable[..., Any])
 
 
 class _NoClassFunctionDecorator(Protocol):
-    @overload
     def __call__(self, fn: Callable[[BoundQuery], _R]) -> Callable[[BoundQuery], _R]: ...
-
-    @overload
-    def __call__(self, fn: FunctionHandler) -> FunctionHandler: ...
 
 
 def _marker(
