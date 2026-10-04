@@ -179,9 +179,10 @@ def test_validate_text_prints_guide_immediately_after_fix(
 
     assert capsys.readouterr().out == (
         "[WARN] STORED_DERIVABLE at object Ticket, property avg_response_hours: "
-        "looks like a stored aggregate; facts are stored once and derived by Functions\n"
-        "  fix: declare a Function that computes it from source rows, "
-        "or mark the type as a declared snapshot\n"
+        "the name reads as a score or aggregate\n"
+        "  fix: if Ticket.avg_response_hours is computed from other rows, "
+        "derive it with a Function; if it is recorded from outside, "
+        'add accept="STORED_DERIVABLE" to the property\n'
         "  guide: https://ryoochi0112.github.io/ontary/ontology-design/"
         "#normalization-and-derived-values\n"
     )

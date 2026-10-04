@@ -115,20 +115,3 @@ def test_literal_alias_members_and_no_top_level_exports() -> None:
         assert alias in meta.__all__
         assert alias not in ontary.__all__
         assert not hasattr(ontary, alias)
-
-
-def test_diagnose_does_not_consume_accept_or_snapshot_yet() -> None:
-    def findings(accepted: bool) -> Any:
-        ontology = Ontology(name="unchanged", scope_levels=["org"])
-
-        class ExampleSnapshot(OntologyObject):
-            id: str = prop(primary_key=True)
-            total_score: int = prop(accept="STORED_DERIVABLE" if accepted else None)
-
-        ontology.object(
-            layer="L0", scope="unscoped", snapshot=accepted,
-            accept="FORBIDDEN_TYPE_NAME" if accepted else None,
-        )(ExampleSnapshot)
-        return ontology.diagnose()
-
-    assert findings(True) == findings(False)

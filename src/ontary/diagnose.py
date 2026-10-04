@@ -10,6 +10,7 @@ a store (ontary#40).
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Literal
 
@@ -97,10 +98,6 @@ CRUD_ACTION_PREFIXES: tuple[str, ...] = (
 )
 FORBIDDEN_TYPE_SUFFIXES: tuple[str, ...] = ("V2", "V3", "History", "Snapshot")
 DEFAULT_MIN_N = 3
-# The design guide calls a first-class point-in-time value a snapshot.  This
-# exact marker lets an author explicitly sanction the otherwise forbidden
-# ``*Snapshot`` API-name suffix in the serializable ObjectTypeDef description.
-DECLARED_SNAPSHOT_MARKER = "declared snapshot"
 
 _DEFAULT_SENSITIVITY = Sensitivity()
 
@@ -157,23 +154,6 @@ def _is_sensitivity_marked(prop: PropertyDef) -> bool:
     ordinary property as sensitive.
     """
     return prop.sensitivity != _DEFAULT_SENSITIVITY
-
-
-def _linked_source_type(definition: "OntologyDef", object_type: str) -> str:
-    """Return the sole link sibling, or ``source`` when it is ambiguous."""
-    links = [
-        link
-        for link in definition.registry.link_types.values()
-        if link.from_type == object_type or link.to_type == object_type
-    ]
-    if len(links) != 1:
-        return "source"
-    link = links[0]
-    if link.from_type == object_type and link.to_type != object_type:
-        return link.to_type
-    if link.to_type == object_type and link.from_type != object_type:
-        return link.from_type
-    return "source"
 
 
 def _registry_owned_default_findings(
@@ -614,86 +594,110 @@ def _scope_rule_list_findings(
     return findings
 
 
-def _stored_derivable_findings(
-    definition: "OntologyDef"
-) -> tuple[Finding, ...]:
+def _stored_derivable_findings(definition: "OntologyDef") -> tuple[Finding, ...]:
     """Warn on aggregate-shaped properties that look like stored rollups."""
     findings: list[Finding] = []
     for api_name in sorted(definition.registry.object_types):
         obj = definition.registry.object_types[api_name]
-        sibling = _linked_source_type(definition, api_name)
+        if obj.snapshot:
+            continue
         for prop in sorted(obj.properties, key=lambda item: item.name):
-            if not _is_aggregate_name(prop.name):
+            if "STORED_DERIVABLE" in prop.accept or not _is_aggregate_name(prop.name):
                 continue
             findings.append(
                 _warn(
                     "STORED_DERIVABLE",
                     f"object {api_name}, property {prop.name}",
-                    "looks like a stored aggregate; facts are stored once and "
-                    "derived by Functions",
-                    "declare a Function that computes it from "
-                    f"{sibling} rows, or mark the type as a declared snapshot",
+                    "the name reads as a score or aggregate",
+                    f"if {api_name}.{prop.name} is computed from other rows, "
+                    "derive it with a Function; "
+                    'if it is recorded from outside, add accept="STORED_DERIVABLE" '
+                    "to the property",
                     GUIDE_URL + "#" + GUIDE_ANCHORS["STORED_DERIVABLE"][0],
                 )
             )
     return tuple(findings)
 
 
-def _crud_action_name_findings(
-    definition: "OntologyDef"
-) -> tuple[Finding, ...]:
-    """Warn when an action API name exposes a storage-level CRUD operation."""
+def _api_name_words(api_name: str) -> list[str]:
+    """Split snake case and camel case, including uppercase acronym words."""
+    separated = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1_\2", api_name.lstrip("_"))
+    separated = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", separated)
+    return [word for word in separated.split("_") if word]
+
+
+def _crud_action_name_findings(definition: "OntologyDef") -> tuple[Finding, ...]:
+    """Warn when an action or Function starts with a storage operation word."""
     findings: list[Finding] = []
-    for api_name in sorted(definition.registry.action_types):
-        if not api_name.startswith(CRUD_ACTION_PREFIXES):
-            continue
-        findings.append(
-            _warn(
-                "CRUD_ACTION_NAME",
-                f"action {api_name}",
-                "action name looks like a CRUD operation rather than a "
-                "business verb",
-                "Rename the action with the business outcome it performs.",
-                GUIDE_URL + "#" + GUIDE_ANCHORS["CRUD_ACTION_NAME"][
-                    1 if api_name.startswith(("Delete", "Remove", "Erase")) else 0
-                ],
+    for kind, declarations in (
+        ("action", definition.registry.action_types),
+        ("function", definition.registry.functions),
+    ):
+        for api_name in sorted(declarations):
+            declaration = declarations[api_name]
+            if "CRUD_ACTION_NAME" in declaration.accept:
+                continue
+            words = _api_name_words(api_name)
+            if not words or words[0].casefold() not in {
+                verb.casefold() for verb in CRUD_ACTION_PREFIXES
+            }:
+                continue
+            verb = words[0].capitalize()
+            remainder = "".join(
+                word.capitalize() if word.isupper() else word[0].upper() + word[1:]
+                for word in words[1:]
             )
-        )
+            retirement = verb in {"Delete", "Remove", "Erase"}
+            anchor = "retirement-and-removal" if retirement else "action-sprawl"
+            outcome = "Withdraw" if retirement else ("Register" if verb == "Create" else "Change")
+            hint = f"name the outcome, for example {outcome}{remainder}"
+            if retirement:
+                hint += ", and call ctx.retire() inside the handler"
+            hint += '; if the storage operation is intentional, add accept="CRUD_ACTION_NAME"'
+            findings.append(
+                _warn(
+                    "CRUD_ACTION_NAME",
+                    f"{kind} {api_name}",
+                    f'"{verb}" names a storage operation, not a business outcome',
+                    hint,
+                    GUIDE_URL + "#" + anchor,
+                )
+            )
     return tuple(findings)
 
 
-def _forbidden_type_name_findings(
-    definition: "OntologyDef"
-) -> tuple[Finding, ...]:
+def _forbidden_type_name_findings(definition: "OntologyDef") -> tuple[Finding, ...]:
     """Warn on version/history clones, except explicitly declared snapshots."""
     findings: list[Finding] = []
     for api_name in sorted(definition.registry.object_types):
         obj = definition.registry.object_types[api_name]
-        suffix = next(
-            (candidate for candidate in FORBIDDEN_TYPE_SUFFIXES if api_name.endswith(candidate)),
-            None,
+        if "FORBIDDEN_TYPE_NAME" in obj.accept:
+            continue
+        match = re.search(r"(V[0-9]+|(?:19|20)[0-9]{2}|History|Snapshot)$", api_name)
+        if match is None or match.start() == 0:
+            continue
+        suffix = match.group()
+        base_name = api_name[: match.start()]
+        if suffix == "Snapshot" and obj.snapshot:
+            continue
+        kind = (
+            "version" if suffix.startswith("V") else "year" if suffix.isdigit() else suffix.lower()
         )
-        if suffix is None:
-            continue
-        if suffix == "Snapshot" and DECLARED_SNAPSHOT_MARKER in obj.description.casefold():
-            continue
         findings.append(
             _warn(
                 "FORBIDDEN_TYPE_NAME",
                 f"object {api_name}",
-                "object type name looks like a version, history, or snapshot "
-                "clone",
-                "Keep one object type and let row history carry the past; declare a "
-                "snapshot explicitly when a point-in-time value is first-class.",
+                f'the name ends in "{suffix}", which reads as a {kind} clone',
+                f"keep one type, {base_name}; the store already keeps row history. "
+                "If a point-in-time value must be first-class, declare the type with "
+                'snapshot=True; if the name is intentional, add accept="FORBIDDEN_TYPE_NAME"',
                 GUIDE_URL + "#" + GUIDE_ANCHORS["FORBIDDEN_TYPE_NAME"][0],
             )
         )
     return tuple(findings)
 
 
-def _micro_action_findings(
-    definition: "OntologyDef"
-) -> tuple[Finding, ...]:
+def _micro_action_findings(definition: "OntologyDef") -> tuple[Finding, ...]:
     """Warn on the declared shape of a likely one-property write action.
 
     The descriptor IR does not contain a write set or handler body, so this is
@@ -706,6 +710,8 @@ def _micro_action_findings(
     object_types = definition.registry.object_types
     for api_name in sorted(definition.registry.action_types):
         action = definition.registry.action_types[api_name]
+        if "MICRO_ACTION" in action.accept:
+            continue
         target = object_types.get(action.target_type)
         if target is None:
             continue
@@ -719,9 +725,11 @@ def _micro_action_findings(
             _warn(
                 "MICRO_ACTION",
                 f"action {api_name}, parameter {parameter.name}",
-                "action shape looks like a single-property write",
-                "Model the business transition as one invariant-preserving "
-                "action instead of exposing a property setter.",
+                f"action shape looks like a one-property write to "
+                f"{action.target_type}.{parameter.name}",
+                f"make {api_name} express a business outcome for {action.target_type} "
+                f"and change {parameter.name} alongside the other facts that outcome "
+                'requires; if this one-property action is intentional, add accept="MICRO_ACTION"',
                 GUIDE_URL + "#" + GUIDE_ANCHORS["MICRO_ACTION"][0],
             )
         )

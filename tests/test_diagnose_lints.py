@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 import pytest
@@ -18,6 +17,7 @@ from ontary import (
     prop,
     target,
 )
+from ontary.meta import ActionLint, FunctionLint, ObjectLint, PropertyLint
 
 
 def _scoped_ontology(name: str, *, min_n: int = 3) -> Ontology:
@@ -46,9 +46,7 @@ def _golden_ticket_ontology(property_name: str = "avg_response_hours") -> Ontolo
     )
     if property_name != "avg_response_hours":
         ticket = ontology.registry.object_types["Ticket"]
-        ticket.properties[1] = ticket.properties[1].model_copy(
-            update={"name": property_name}
-        )
+        ticket.properties[1] = ticket.properties[1].model_copy(update={"name": property_name})
     return ontology
 
 
@@ -61,35 +59,23 @@ def test_stored_derivable_golden_finding_is_byte_exact() -> None:
         "code": "STORED_DERIVABLE",
         "severity": "warn",
         "location": "object Ticket, property avg_response_hours",
-        "message": (
-            "looks like a stored aggregate; facts are stored once and derived "
-            "by Functions"
-        ),
+        "message": "the name reads as a score or aggregate",
         "fix_hint": (
-            "declare a Function that computes it from Comment rows, or mark the "
-            "type as a declared snapshot"
+            "if Ticket.avg_response_hours is computed from other rows, derive it "
+            "with a Function; if it is recorded from outside, "
+            'add accept="STORED_DERIVABLE" to the property'
         ),
         "guide": (
-            "https://ryoochi0112.github.io/ontary/ontology-design/"
-            "#normalization-and-derived-values"
+            "https://ryoochi0112.github.io/ontary/ontology-design/#normalization-and-derived-values"
         ),
     }
-    assert json.dumps(dumped) == (
-        '{"code": "STORED_DERIVABLE", "severity": "warn", '
-        '"location": "object Ticket, property avg_response_hours", '
-        '"message": "looks like a stored aggregate; facts are stored once '
-        'and derived by Functions", "fix_hint": "declare a Function that '
-        'computes it from Comment rows, or mark the type as a declared '
-        'snapshot", "guide": "https://ryoochi0112.github.io/ontary/'
-        'ontology-design/#normalization-and-derived-values"}'
-    )
 
 
 def test_stored_derivable_negative_for_plain_property() -> None:
     assert _golden_ticket_ontology("response_hours").diagnose() == []
 
 
-def _ontology_with_action_name(api_name: str) -> Ontology:
+def _ontology_with_action_name(api_name: str, *, accept: ActionLint | None = None) -> Ontology:
     ontology = _scoped_ontology("action-name")
 
     @ontology.object(layer="L0", api_name="Ticket", scope=[SelfScope(level="org")])
@@ -106,6 +92,7 @@ def _ontology_with_action_name(api_name: str) -> Ontology:
         roles=["Operator"],
         api_name=api_name,
         display_name="Update status",
+        accept=accept,
     )
     def handler(_ctx: Any, _params: Params) -> dict[str, Any]:
         return {}
@@ -136,12 +123,20 @@ def test_crud_action_name_negative_when_only_api_name_uses_business_verb() -> No
     assert _ontology_with_action_name("ApproveTicket").diagnose() == []
 
 
-def _snapshot_named_ontology(description: str) -> Ontology:
+def _snapshot_named_ontology(
+    description: str = "A copied ticket value.",
+    *,
+    api_name: str = "TicketSnapshot",
+    snapshot: bool = False,
+    accept: ObjectLint | None = None,
+) -> Ontology:
     ontology = _scoped_ontology("snapshot-name")
 
     @ontology.object(
         layer="L0",
-        api_name="TicketSnapshot",
+        api_name=api_name,
+        snapshot=snapshot,
+        accept=accept,
         description=description,
         scope=[SelfScope(level="org")],
     )
@@ -159,16 +154,21 @@ def test_forbidden_type_name_positive_without_declared_snapshot_marker() -> None
     assert findings[0].severity == "warn"
 
 
-def test_forbidden_snapshot_name_negative_with_declared_snapshot_marker() -> None:
+def test_description_snapshot_marker_has_no_effect() -> None:
     assert (
-        _snapshot_named_ontology(
-            "A declared snapshot of Ticket at an observation time."
-        ).diagnose()
-        == []
+        _snapshot_named_ontology("A declared snapshot of Ticket at an observation time.")
+        .diagnose()[0]
+        .code
+        == "FORBIDDEN_TYPE_NAME"
     )
 
 
-def _ontology_with_micro_action(parameter_name: str) -> Ontology:
+def _ontology_with_micro_action(
+    parameter_name: str,
+    *,
+    api_name: str = "ApproveTicket",
+    accept: ActionLint | None = None,
+) -> Ontology:
     ontology = _scoped_ontology("micro-action")
 
     @ontology.object(layer="L0", api_name="Ticket", scope=[SelfScope(level="org")])
@@ -184,13 +184,14 @@ def _ontology_with_micro_action(parameter_name: str) -> Ontology:
         Params,
         target=Ticket,
         roles=["Operator"],
-        api_name="ApproveTicket",
+        api_name=api_name,
+        accept=accept,
     )
     def handler(_ctx: Any, _params: Params) -> dict[str, Any]:
         return {}
 
     if parameter_name != "status":
-        action = ontology.registry.action_types["ApproveTicket"]
+        action = ontology.registry.action_types[api_name]
         action.parameters[1] = action.parameters[1].model_copy(update={"name": parameter_name})
     return ontology
 
@@ -327,3 +328,256 @@ def test_each_lint_is_pinned_in_rules_tuple(code: str, rule_name: str) -> None:
     """Deleting any one rule from RULES must make its lint pin fail."""
     assert code
     assert any(rule.__name__ == rule_name for rule in diagnose_module.RULES)
+
+
+def _ontology_with_function_name(api_name: str, *, accept: FunctionLint | None = None) -> Ontology:
+    ontology = _scoped_ontology("function-name")
+
+    @ontology.function(api_name=api_name, accept=accept)
+    def handler(_query: Any) -> int:
+        return 0
+
+    return ontology
+
+
+@pytest.mark.parametrize(
+    "api_name",
+    [
+        "DeleteTicket",
+        "set_status",
+        "deleteTicket",
+        "_erase_user",
+        "UPDATE_TICKET",
+        "__CreateTicket",
+        "RemoveTicket",
+    ],
+)
+@pytest.mark.parametrize("kind", ["action", "function"])
+def test_crud_first_word_positive(api_name: str, kind: str) -> None:
+    ontology = (
+        _ontology_with_action_name(api_name)
+        if kind == "action"
+        else _ontology_with_function_name(api_name)
+    )
+    findings = ontology.diagnose()
+    assert [f.code for f in findings] == ["CRUD_ACTION_NAME"]
+    assert findings[0].location == f"{kind} {api_name}"
+    assert findings[0].guide is not None
+
+
+@pytest.mark.parametrize(
+    "api_name",
+    [
+        "SettleInvoice",
+        "SetupAccount",
+        "createdAtLookup",
+        "removalReason",
+        "ApproveTicket",
+    ],
+)
+@pytest.mark.parametrize("kind", ["action", "function"])
+def test_crud_first_word_negative(api_name: str, kind: str) -> None:
+    ontology = (
+        _ontology_with_action_name(api_name)
+        if kind == "action"
+        else _ontology_with_function_name(api_name)
+    )
+    assert ontology.diagnose() == []
+
+
+@pytest.mark.parametrize("kind", ["action", "function"])
+def test_crud_accept(kind: str) -> None:
+    ontology = (
+        _ontology_with_action_name("DeleteTicket", accept="CRUD_ACTION_NAME")
+        if kind == "action"
+        else _ontology_with_function_name("DeleteTicket", accept="CRUD_ACTION_NAME")
+    )
+    assert ontology.diagnose() == []
+
+
+def test_crud_golden_finding_is_byte_exact() -> None:
+    assert _ontology_with_action_name("DeleteTicket").diagnose()[0].model_dump() == {
+        "code": "CRUD_ACTION_NAME",
+        "severity": "warn",
+        "location": "action DeleteTicket",
+        "message": '"Delete" names a storage operation, not a business outcome',
+        "fix_hint": (
+            "name the outcome, for example WithdrawTicket, and call ctx.retire() "
+            "inside the handler; if the storage operation is intentional, "
+            'add accept="CRUD_ACTION_NAME"'
+        ),
+        "guide": diagnose_module.GUIDE_URL + "#retirement-and-removal",
+    }
+
+
+@pytest.mark.parametrize(
+    "api_name,example",
+    [
+        ("set_status", "ChangeStatus"),
+        ("UPDATE_TICKET", "ChangeTicket"),
+        ("CreateTicket", "RegisterTicket"),
+        ("_erase_user", "WithdrawUser"),
+    ],
+)
+def test_crud_hint_uses_rest_of_name(api_name: str, example: str) -> None:
+    finding = _ontology_with_action_name(api_name).diagnose()[0]
+    assert example in finding.fix_hint
+    assert 'accept="CRUD_ACTION_NAME"' in finding.fix_hint
+
+
+def test_crud_guide_selection_does_not_depend_on_anchor_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(
+        diagnose_module.GUIDE_ANCHORS,
+        "CRUD_ACTION_NAME",
+        ("retirement-and-removal", "action-sprawl"),
+    )
+    for api_name, anchor in [
+        ("SetStatus", "action-sprawl"),
+        ("DeleteTicket", "retirement-and-removal"),
+    ]:
+        assert _ontology_with_action_name(api_name).diagnose()[0].guide == (
+            diagnose_module.GUIDE_URL + "#" + anchor
+        )
+
+
+@pytest.mark.parametrize(
+    "api_name,suffix,kind,base",
+    [
+        ("SurveyResponseV2", "V2", "version", "SurveyResponse"),
+        ("SurveyV10", "V10", "version", "Survey"),
+        ("Survey2024", "2024", "year", "Survey"),
+        ("Survey1999", "1999", "year", "Survey"),
+        ("TicketHistory", "History", "history", "Ticket"),
+        ("TicketSnapshot", "Snapshot", "snapshot", "Ticket"),
+    ],
+)
+def test_forbidden_suffix_kinds(api_name: str, suffix: str, kind: str, base: str) -> None:
+    findings = _snapshot_named_ontology(api_name=api_name).diagnose()
+    assert [f.code for f in findings] == ["FORBIDDEN_TYPE_NAME"]
+    assert findings[0].message == (f'the name ends in "{suffix}", which reads as a {kind} clone')
+    assert f"keep one type, {base};" in findings[0].fix_hint
+    assert 'accept="FORBIDDEN_TYPE_NAME"' in findings[0].fix_hint
+
+
+@pytest.mark.parametrize(
+    "api_name",
+    [
+        "History",
+        "Snapshot",
+        "V2",
+        "2024",
+        "Form1099",
+        "Route66",
+        "Catch22",
+        "Ticket",
+    ],
+)
+def test_forbidden_suffix_negative(api_name: str) -> None:
+    assert _snapshot_named_ontology(api_name=api_name).diagnose() == []
+
+
+def test_forbidden_golden_finding_is_byte_exact() -> None:
+    assert _snapshot_named_ontology(api_name="SurveyResponseV2").diagnose()[0].model_dump() == {
+        "code": "FORBIDDEN_TYPE_NAME",
+        "severity": "warn",
+        "location": "object SurveyResponseV2",
+        "message": 'the name ends in "V2", which reads as a version clone',
+        "fix_hint": (
+            "keep one type, SurveyResponse; the store already keeps row history. "
+            "If a point-in-time value must be first-class, declare the type with "
+            'snapshot=True; if the name is intentional, add accept="FORBIDDEN_TYPE_NAME"'
+        ),
+        "guide": diagnose_module.GUIDE_URL + "#the-time-machine",
+    }
+
+
+def test_snapshot_flag_and_forbidden_accept() -> None:
+    assert _snapshot_named_ontology(snapshot=True).diagnose() == []
+    assert _snapshot_named_ontology(accept="FORBIDDEN_TYPE_NAME").diagnose() == []
+    assert "snapshot=True" in _snapshot_named_ontology().diagnose()[0].fix_hint
+
+
+@pytest.mark.parametrize("api_name", ["TicketV2", "Ticket2024", "TicketHistory"])
+def test_snapshot_flag_does_not_excuse_other_suffixes(api_name: str) -> None:
+    assert [
+        f.code for f in _snapshot_named_ontology(api_name=api_name, snapshot=True).diagnose()
+    ] == ["FORBIDDEN_TYPE_NAME"]
+
+
+def _stored_values_ontology(
+    *,
+    snapshot: bool = False,
+    description: str = "",
+    accept: PropertyLint | None = None,
+) -> Ontology:
+    ontology = _scoped_ontology("stored-values")
+
+    @ontology.object(layer="L0", scope="unscoped", snapshot=snapshot, description=description)
+    class Observation(OntologyObject):
+        id: str = prop(primary_key=True)
+        credit_score: int = prop(accept=accept)
+        exchange_rate: float = prop()
+        retry_count: int = prop()
+
+    return ontology
+
+
+def test_stored_accept_is_property_local() -> None:
+    assert [f.location for f in _stored_values_ontology(accept="STORED_DERIVABLE").diagnose()] == [
+        "object Observation, property exchange_rate",
+        "object Observation, property retry_count",
+    ]
+
+
+def test_snapshot_silences_all_stored_derivable_properties() -> None:
+    assert _stored_values_ontology(snapshot=True).diagnose() == []
+
+
+def test_description_marker_does_not_silence_stored_derivable() -> None:
+    assert len(_stored_values_ontology(description="declared snapshot").diagnose()) == 3
+
+
+def test_stored_hint_without_links_names_both_exits() -> None:
+    for finding in _stored_values_ontology().diagnose():
+        assert "derive it with a Function" in finding.fix_hint
+        assert "recorded from outside" in finding.fix_hint
+        assert 'accept="STORED_DERIVABLE"' in finding.fix_hint
+        assert "snapshot" not in finding.fix_hint
+        assert finding.location.split("property ")[1] in finding.fix_hint
+
+
+def test_micro_golden_finding_is_byte_exact() -> None:
+    assert _ontology_with_micro_action("status").diagnose()[0].model_dump() == {
+        "code": "MICRO_ACTION",
+        "severity": "warn",
+        "location": "action ApproveTicket, parameter status",
+        "message": "action shape looks like a one-property write to Ticket.status",
+        "fix_hint": (
+            "make ApproveTicket express a business outcome for Ticket and change "
+            "status alongside the other facts that outcome requires; if this "
+            'one-property action is intentional, add accept="MICRO_ACTION"'
+        ),
+        "guide": diagnose_module.GUIDE_URL + "#action-sprawl",
+    }
+
+
+@pytest.mark.parametrize(
+    "accept,remaining",
+    [
+        ("MICRO_ACTION", "CRUD_ACTION_NAME"),
+        ("CRUD_ACTION_NAME", "MICRO_ACTION"),
+    ],
+)
+def test_action_accepts_are_independent(accept: ActionLint, remaining: str) -> None:
+    assert [
+        f.code
+        for f in _ontology_with_micro_action(
+            "status", api_name="SetStatus", accept=accept
+        ).diagnose()
+    ] == [remaining]
+
+
+def test_micro_accept_removes_finding() -> None:
+    assert _ontology_with_micro_action("status", accept="MICRO_ACTION").diagnose() == []
