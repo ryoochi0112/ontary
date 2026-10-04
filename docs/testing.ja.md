@@ -13,7 +13,7 @@
 ```python
 from datetime import datetime, timezone
 from ontary import (
-    ActionContext, ActionError, ActionParams, DirectProperty,
+    ActionContext, ActionError, ActionParams, DirectProperty, Event,
     Ontology, OntologyObject, SelfScope, Source, prop, target,
 )
 from ontary.testing import (
@@ -40,10 +40,14 @@ class Ticket(OntologyObject):
 class EscalateTicket(ActionParams):
     ticket_id: str = target(Ticket)
 
+@ontology.event(description="A ticket was escalated.")
+class TicketEscalated(Event):
+    reason: str
+
 @ontology.action(
     EscalateTicket, target=Ticket, roles=["Agent"],
     display_name="Escalate ticket", description="Mark a ticket urgent.",
-    api_name="EscalateTicket",
+    api_name="EscalateTicket", emits=[TicketEscalated],
 )
 def escalate(ctx: ActionContext, params: EscalateTicket) -> dict[str, str]:
     ticket = ctx.get(Ticket, params.ticket_id)
@@ -51,12 +55,13 @@ def escalate(ctx: ActionContext, params: EscalateTicket) -> dict[str, str]:
         raise ActionError("ticket does not exist", code="PRECONDITION_FAILED")
     ticket.escalated = True
     ctx.save(ticket)
+    ctx.emit(TicketEscalated(reason="urgent"))
     return {"ticket_id": params.ticket_id}
 
 ontology.validate()
 ```
 
-ここからシナリオビルダーで最初のテストを書きます。シナリオは、検証したい業務ルールをそのまま読める形にします。つまり、開始状態を与え（given）、アクターがアクションを実行し（when）、結果が成り立つ（then）ことを確かめます。すべてのシナリオは `then` で終わります。最後のステップが `when` のままだと何も検証しないため、`then`、`then_result`、`then_error`、`then_absent`、`then_link`、`then_no_link` のいずれかで締めてください。
+ここからシナリオビルダーで最初のテストを書きます。シナリオは、検証したい業務ルールをそのまま読める形にします。つまり、開始状態を与え（given）、アクターがアクションを実行し（when）、結果が成り立つ（then）ことを確かめます。すべてのシナリオは `then` で終わります。最後のステップが `when` のままだと何も検証しないため、`then`、`then_result`、`then_error`、`then_absent`、`then_link`、`then_no_link`、`then_event` のいずれかで締めてください。
 
 `scenario(ontology)` は、何かを準備する前に、新しい `InMemoryStore`、`2026-01-01T00:00:00Z` の `FixedClock`、`SequentialIds("id")` をバインドします。`given` は型付きオブジェクトを受け取り、`when` には `by=` のコンシューマーが必須です。
 
@@ -82,6 +87,24 @@ then: Ticket 't-1' does not match after step 1 (EscalateTicket by Agent):
 ```
 
 `then_result(expected)` はアクションの戻り値を検証します。`then_absent(cls, pk)` は現在の行が存在しないこと、`then_link(handle, from_, to)` と `then_no_link(handle, from_, to)` はリンクの有無を検証し、`given_link(handle, from_, to)` はリンクを準備します。1つのシナリオに複数の `when` を置くことができ、`then` は最後のステップに適用されます。検証していない失敗ステップがあると、次の `when` でシナリオが止まります。
+
+## イベントの検証
+
+`then_event(event, *, about=None)` は、直前の `when` ステップが等しいイベントを送出したことを確認します。イベントの型が同じで、ペイロードが等しい必要があります。`about` をオブジェクトか id 文字列で渡すと、イベントの対象（subject）も一致しなければなりません。`then` と同じく監査エントリをマスクせずに読むため、コンシューマーに見えるものの検証にはなりません。それを検証したいときは、そのコンシューマーとして `client.events` で読んでください。
+
+```python
+def test_escalate_emits_event():
+    agent = consumer(role="Agent", scope_level="queue", scope_id="queue-a")
+    (scenario(ontology)
+        .given(
+            Queue(id="queue-a", name="Billing"),
+            Ticket(id="t-1", subject="Invoice mismatch", queue_id="queue-a"),
+        )
+        .when(EscalateTicket(ticket_id="t-1"), by=agent)
+        .then_event(TicketEscalated(reason="urgent"), about="t-1"))
+```
+
+検証に失敗すると `AssertionError` になり、実際に送出されたイベントが列挙されます。失敗したステップは、そのエラーコードとともに報告されます。
 
 ## エラーコードの検証
 

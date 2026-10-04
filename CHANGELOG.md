@@ -13,6 +13,18 @@ you**.
 
 ### Added
 
+- Events (#47). `@ontology.event` declares a business fact as an `Event` subclass.
+  An action lists the events it may emit with `emits=[...]`, and
+  `ctx.emit(event, *, about=None)` records one inside the action's transaction.
+  The subject defaults to the action's target. `client.events(event_type=None, /, *,
+  about=None, since=None, until=None)` reads them as `EventRecord`, governed by the
+  subject's latest scope and `row_visibility`, with `Sensitivity` redaction. An `ok`
+  `AuditEntry` lists its emitted events in `AuditEntry.events`, and
+  `Scenario.then_event` checks them in tests. `Event` and `EventRecord` join the
+  root exports.
+- `ActionTypeDef.emits` (#47). It lists the api names of the events an action may
+  emit, so `get_declarations` shows them. MCP `list_action_types` does not list
+  them yet.
 - Event error codes (#47). `UNDECLARED_EVENT` reports an action emitting an
   event type outside its `emits` declaration; `EVENT_SUBJECT_INVALID` reports
   an event whose subject cannot be resolved to a valid target object.
@@ -48,6 +60,10 @@ you**.
 
 ### Changed
 
+- **Breaking (store schema):** `SCHEMA_VERSION` is now 14. `audit_log` has a new
+  `events` column. A store stamped 13 is refused with `STORE_VERSION_UNSUPPORTED`;
+  drop and re-ingest it as described in
+  [docs/storage.md](docs/storage.md#moving-across-a-schema-version).
 - Lint messages and fix hints changed (#50). They now name the concrete fix, using
   your own declaration names. The codes and severities did not change.
 - `CRUD_ACTION_NAME` now covers Functions as well as actions (#50). It compares the

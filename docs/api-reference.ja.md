@@ -2,7 +2,7 @@
 
 [English](api-reference.md) · **日本語** · [← README](../README.md)
 
-`ontary` のキュレーションされたフロントドア: `__all__` の **43 個の名前**。
+`ontary` のキュレーションされたフロントドア: `__all__` の **45 個の名前**。
 残りのエンジン API は、`ontary.meta`、`ontary.store` などの
 定義元サブモジュールから利用します。
 
@@ -32,19 +32,19 @@
 
 ## フロントドア
 
-`__all__` はソート済み・重複なし・import 可能で、ちょうど 43 個です。オントロジーの
+`__all__` はソート済み・重複なし・import 可能で、ちょうど 45 個です。オントロジーの
 作者がエンジンの名前空間を選ばずに使う名前だけをここに置きます。
 
 ### Authoring vocabulary / 宣言用語彙
 
 `ActionContext`、`ActionParams`、`BoundQuery`、`CapabilityHandle`、`Cardinality`、
-`Consumer`、`CustomResolver`、`DirectProperty`、`FunctionParams`、`LinkHandle`、`Ontology`、
+`Consumer`、`CustomResolver`、`DirectProperty`、`Event`、`FunctionParams`、`LinkHandle`、`Ontology`、
 `OntologyObject`、`RowVisibilityStore`、`SelfScope`、`Sensitivity`、`Source`、
 `Store`、`ViaLink`、`prop`、`ref`、`scope_ref`、`target`。
 
 ### Runtime entries / ランタイム項目
 
-`Declarations`、`Finding`、`InMemoryStore`、`ObjectStore`、`OntologyClient`、
+`Declarations`、`EventRecord`、`Finding`、`InMemoryStore`、`ObjectStore`、`OntologyClient`、
 `Page`、`PostgresStore`、`ScopePolicy`、`TypedPage`、
 `__version__`、`build_mcp_server`、`declarations`。
 
@@ -53,7 +53,7 @@
 `ActionError`、`AuthorityError`、`ConflictError`、`InternalError`、`OntaryError`、
 `PermissionDenied`、`PreconditionFailed`、`ValidationFailed`、`VisibilityError`。
 
-この 43 個という個数は `tests/test_docs.py` が厳密に検証するため、root export の増加を
+この 45 個という個数は `tests/test_docs.py` が厳密に検証するため、root export の増加を
 見落としません。
 
 ```python
@@ -417,6 +417,82 @@ class EscalateTicketParams(ActionParams):
     ticket_id: str = target(Ticket)
     reason: str | None = None
 ```
+
+#### イベント: `Event`・`@ontology.event`・`emits=`・`ctx.emit`・`client.events`
+
+イベントは、Action が記録する業務上の事実です（たとえば「注文が出荷された」）。監査では
+ありません。監査は「誰が何をしたか」を記録し、イベントは「何が起きたか」を記録します。
+イベントは `Event` のサブクラスとして宣言します。フィールドの型規則は `ActionParams` と
+同じで、スカラー・選択肢・フラットな struct を使えます。`Sensitivity` もプロパティと同様に
+使え、制限付きフィールドは省略可能にします。イベントには primary key、transitions、
+`scope_level` はありません。
+
+```python
+from ontary import Event
+
+@ontology.event(description="An order has shipped.")
+class OrderShipped(Event):
+    carrier: str
+```
+
+`@ontology.event(*, description=None, api_name=None, accept=())` は、クラスを
+`EventTypeDef` として登録します。クラスは `Event` のサブクラスである必要があり、1 つの
+クラスに付けられるのは 1 回だけです。違反すると `ONTOLOGY_INVALID` を送出します。
+`accept=` は `"EVENT_NEVER_EMITTED"` を受け取ります。
+
+Action は、送出してよいイベントを `emits=[...]` に列挙します。`ActionTypeDef.emits` には
+その api_name が入り、`declarations` と MCP の `list_action_types` に表示されます。同じ
+`Ontology` に登録されたイベントではないクラスを `emits` に渡すと、宣言時に
+`ONTOLOGY_INVALID` になります。
+
+```python
+@ontology.action(ShipOrder, target=Order, roles=["ops"], emits=[OrderShipped])
+def ship(ctx: ActionContext, p: ShipOrder) -> dict[str, Any]:
+    order = ctx.get(Order, p.order_id)
+    ...
+    ctx.emit(OrderShipped(carrier=p.carrier))
+    return {}
+```
+
+`ctx.emit(event, *, about=None)` は、Action のトランザクション内でイベントを記録します。
+対象（subject）の既定値は、Action が解決した対象オブジェクトです。作成系の Action のように
+対象 id がない場合は、`about=<object>` を渡します。そのオブジェクトは、このコンテキスト
+（`get`・`all`・`create`・`traverse`）が渡したもので、Action の対象型でなければなりません。
+1 回の呼び出しで複数のイベントを送出でき、同じ型を 2 回送出することもできます。イベントは
+送出順に保持されます。イベントの `ts` は `ctx.now()` です。拒否はハンドラ内で送出される
+ため、Action 全体がロールバックされ、`error` として監査されます。
+
+| ケース | コード |
+| --- | --- |
+| イベントクラスがこの `Ontology` に登録されていない | `UNKNOWN_NAME` |
+| イベントが Action の `emits` にない | `UNDECLARED_EVENT` |
+| 対象を解決できない、対象型ではない、このコンテキストが渡していない、またはまだ行がない | `EVENT_SUBJECT_INVALID` |
+
+`client.events(event_type=None, /, *, about=None, since=None, until=None)` は、クライアントの
+コンシューマーが見られるイベントを、送出順の `list[EventRecord[E]]` で返します。`about` は
+オブジェクトか `(cls, id)` のタプルです。`since` は含み、`until` は含みません。どちらも
+タイムゾーン付きでなければなりません。ページングはありません。イベントクラスを渡すと
+各ペイロードがそのクラスになり、渡さない場合は保存されたフィールドを保持する素の `Event`
+になります。
+
+```python
+records = client.events(OrderShipped, about=(Order, "o-1"))
+records[0].payload.carrier
+```
+
+対象の最新の行がコンシューマーのスコープと `row_visibility` を通るとき、イベントは
+見えます。退役した対象では、その行は退役前の最後の行です。対象がスコープを移ると、新しい
+スコープは履歴全体を見られ、古いスコープは何も見られません。宣言が削除されたイベント型は
+隠れます。コンシューマーの種類に対して `Sensitivity` で制限されたペイロードフィールドは、
+ペイロードでは `None` になり、`redacted_fields` に載ります。
+
+`EventRecord` は frozen なジェネリッククラスです。フィールドは `event_type`、
+`about_type`、`about_id`、`ts`、`invocation_id`、`payload`、
+`redacted_fields: frozenset[str]` です。
+
+イベントは呼び出しの監査行に保存されるため、Action と一緒にコミットまたはロールバックされます。
+`AuditEntry.events` はそれらをマスクせずに列挙します。[`AuditEntry`](#auditentry) を
+参照してください。
 
 <a id="advisory-findings"></a>
 
@@ -894,6 +970,7 @@ ctx.save(order)                   # `status` だけを書く
 | --- | --- |
 | `.capability(handle) -> P` | 宣言済み Capability の取得 |
 | `.consumer` | 呼び出し元の `Consumer` |
+| `.emit(event, *, about=None)` | この呼び出しに、宣言済みのイベントを記録する。「オントロジーを宣言する」のイベントの節を参照 |
 | `.now() -> datetime` | 呼び出しの唯一の時刻（`Ontology.bind` を参照）。`datetime.now()` や時刻用 Capability の代わりに使います |
 
 `get` と `all` は信頼されたハンドラ向けの読み取りです。生データを返し、redaction と scope の制限を適用しません。
@@ -931,7 +1008,7 @@ Action が監査ログの下でロールバックされうるためです。
 
 `ts`、`actor`、`role`、`action`、`target_type`、`target_id`、`params`、`outcome`、
 `invocation_id`、`error_code`、および完全性レコード: `writes: list[WriteRecord]`、
-`capability_accesses: list[CapabilityAccessRecord]`。
+`capability_accesses: list[CapabilityAccessRecord]`、`events: list[EmittedEvent]`。
 
 **`kind: Literal["action", "function"]`** — このエントリを生成したもの。Action と
 Function は 1 つのログを共有するため、読み手が両者を区別する手段が `kind` です（同じ
@@ -945,6 +1022,10 @@ Function は 1 つのログを共有するため、読み手が両者を区別�
 同じパラメータで 2 回呼ぶと、それ以外では区別できません。`None` はこのフィールドが存在
 しなかった頃のエントリ（古いエンジンが書いたストアファイル）を意味し、後から捏造される
 ことはありません。
+
+**`events: list[EmittedEvent]`** — `ok` の action エントリが送出したイベントを、送出順に
+マスクせず列挙します。監査は管理者向けのビューだからです。`denied` と `error` のエントリでは
+常に空です。
 
 **`unscoped_params: list[str]`** — `scope="unscoped"` の型を指すため、Action の
 スコープゲートを通らなかった `target(...)` パラメータの一覧です。これらのパラメータでは、
@@ -965,6 +1046,7 @@ Action の `roles=` だけがゲートでした。スコープを持つパラメ
 - `WriteRecord` — `op`（`create`/`update`/`link`）、`object_type`、`link_type`、
   `object_id`、`from_id`、`to_id`
 - `CapabilityAccessRecord` — `api_name`、`count`
+- `EmittedEvent` — `event_type`、`about_type`、`about_id`、`payload`（保存形式）
 
 ---
 

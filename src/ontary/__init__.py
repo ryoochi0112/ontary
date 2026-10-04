@@ -63,7 +63,7 @@ from ontary.meta import (
     Cardinality,
     Sensitivity,
 )
-from ontary.model import FunctionParams
+from ontary.model import Event, EventRecord, FunctionParams
 from ontary.query import Page, TypedPage
 from ontary.scope import (
     CustomResolver,
@@ -120,6 +120,8 @@ __all__ = [
     "CustomResolver",
     "Declarations",
     "DirectProperty",
+    "Event",
+    "EventRecord",
     "Finding",
     "FunctionParams",
     "InMemoryStore",

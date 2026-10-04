@@ -685,8 +685,8 @@ def test_ontary_all_is_sorted_unique_and_importable() -> None:
     # The front door is pinned EXACTLY, not to a ceiling: both references
     # publish this number in prose, so a name added or dropped without editing
     # them must fail here rather than drift under a budget.
-    assert len(all_names) == 43, (
-        "ontary.__all__ is no longer the documented 43 names: "
+    assert len(all_names) == 45, (
+        "ontary.__all__ is no longer the documented 45 names: "
         f"{len(all_names)} names -- update docs/api-reference{{,.ja}}.md too"
     )
     assert len(all_names) == len(set(all_names)), (

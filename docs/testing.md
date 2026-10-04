@@ -13,7 +13,7 @@ First, set up your ontology module. We declare the ontology registry, objects, a
 ```python
 from datetime import datetime, timezone
 from ontary import (
-    ActionContext, ActionError, ActionParams, DirectProperty,
+    ActionContext, ActionError, ActionParams, DirectProperty, Event,
     Ontology, OntologyObject, SelfScope, Source, prop, target,
 )
 from ontary.testing import (
@@ -40,10 +40,14 @@ class Ticket(OntologyObject):
 class EscalateTicket(ActionParams):
     ticket_id: str = target(Ticket)
 
+@ontology.event(description="A ticket was escalated.")
+class TicketEscalated(Event):
+    reason: str
+
 @ontology.action(
     EscalateTicket, target=Ticket, roles=["Agent"],
     display_name="Escalate ticket", description="Mark a ticket urgent.",
-    api_name="EscalateTicket",
+    api_name="EscalateTicket", emits=[TicketEscalated],
 )
 def escalate(ctx: ActionContext, params: EscalateTicket) -> dict[str, str]:
     ticket = ctx.get(Ticket, params.ticket_id)
@@ -51,12 +55,13 @@ def escalate(ctx: ActionContext, params: EscalateTicket) -> dict[str, str]:
         raise ActionError("ticket does not exist", code="PRECONDITION_FAILED")
     ticket.escalated = True
     ctx.save(ticket)
+    ctx.emit(TicketEscalated(reason="urgent"))
     return {"ticket_id": params.ticket_id}
 
 ontology.validate()
 ```
 
-Now we write the first test with the scenario builder. A scenario reads like the business rule it checks: given a starting state, when an actor runs an action, then the outcome holds. Every scenario ends in a `then`. A scenario whose last step is a `when` checks nothing, so finish with `then`, `then_result`, `then_error`, `then_absent`, `then_link`, or `then_no_link`.
+Now we write the first test with the scenario builder. A scenario reads like the business rule it checks: given a starting state, when an actor runs an action, then the outcome holds. Every scenario ends in a `then`. A scenario whose last step is a `when` checks nothing, so finish with `then`, `then_result`, `then_error`, `then_absent`, `then_link`, `then_no_link`, or `then_event`.
 
 `scenario(ontology)` binds a fresh `InMemoryStore`, a `FixedClock` at `2026-01-01T00:00:00Z`, and `SequentialIds("id")` before it seeds anything. `given` takes typed objects, and `when` needs an explicit `by=` consumer.
 
@@ -82,6 +87,24 @@ then: Ticket 't-1' does not match after step 1 (EscalateTicket by Agent):
 ```
 
 `then_result(expected)` checks the action's return value. `then_absent(cls, pk)` checks that no current row exists, `then_link(handle, from_, to)` and `then_no_link(handle, from_, to)` check links, and `given_link(handle, from_, to)` seeds a link. A scenario may contain several `when` steps, and `then` applies to the last one. A failed step you did not check stops the scenario at the next `when`.
+
+## Asserting events
+
+`then_event(event, *, about=None)` checks that the last `when` step emitted an equal event. The event must have the same type and an equal payload. When you pass `about`, given as an object or an id string, the event's subject must match too. It reads the audit entry unredacted, as `then` does, so it does not test what a consumer may see. To test that, read with `client.events` as that consumer.
+
+```python
+def test_escalate_emits_event():
+    agent = consumer(role="Agent", scope_level="queue", scope_id="queue-a")
+    (scenario(ontology)
+        .given(
+            Queue(id="queue-a", name="Billing"),
+            Ticket(id="t-1", subject="Invoice mismatch", queue_id="queue-a"),
+        )
+        .when(EscalateTicket(ticket_id="t-1"), by=agent)
+        .then_event(TicketEscalated(reason="urgent"), about="t-1"))
+```
+
+A failing check raises `AssertionError` and lists the events that were emitted. A step that failed is reported with its error code.
 
 ## Asserting error codes
 

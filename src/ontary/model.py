@@ -25,6 +25,8 @@ from ontary.typesys import _storage_scalar_violation
 __all__ = [
     "ActionParams",
     "CapabilityHandle",
+    "Event",
+    "EventRecord",
     "FunctionParams",
     "LinkHandle",
     "OntologyObject",
