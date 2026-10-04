@@ -13,6 +13,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Protocol, assert_type
 
+import pytest
 from conftest import raises_code
 
 import ontary
@@ -29,6 +30,7 @@ from examples.tickets.ontology import (
     queueOfOrg,
     ticketInQueue,
 )
+from examples.tickets.ontology import EscalateTicketParams as EscalateTicket
 from ontary import (
     ActionContext,
     ActionParams,
@@ -44,6 +46,7 @@ from ontary import (
 from ontary.authoring import Ontology, OntologyObject, prop
 from ontary.client import OntologyClient, OntologyRuntime
 from ontary.errors import ValidationFailed, VisibilityError
+from ontary.testing import Scenario, consumer, scenario
 
 
 class _InlineCapabilityProvider(Protocol):
@@ -59,6 +62,63 @@ INLINE_CAPABILITY: CapabilityHandle[_InlineCapabilityProvider] = _CAPABILITY_ONT
     name="InlineCapabilityProvider",
     description="A minimal capability used to pin handle identity.",
 )
+
+
+def test_agent_escalates_an_open_ticket_golden_scenario() -> None:
+    ontology, _store = build_ontology()
+    agent = consumer(role="Agent", scope_level="queue", scope_id="queue-a")
+
+    result = (
+        scenario(ontology)
+        .given(
+            Queue(id="queue-a", name="Billing"),
+            Ticket(
+                id="t-1",
+                subject="Invoice mismatch",
+                age_hours=4.0,
+                queue_id="queue-a",
+            ),
+        )
+        .when(EscalateTicket(ticket_id="t-1"), by=agent)
+        .then(Ticket, "t-1", escalated=True)
+    )
+
+    assert_type(result, Scenario)
+    assert isinstance(result, Scenario)
+
+
+def test_viewer_cannot_escalate_golden_scenario() -> None:
+    ontology, _store = build_ontology()
+    viewer = consumer(role="Viewer", scope_level="queue", scope_id="queue-a")
+
+    scenario(ontology).given(
+        Queue(id="queue-a", name="Billing"),
+        Ticket(
+            id="t-1",
+            subject="Invoice mismatch",
+            age_hours=4.0,
+            queue_id="queue-a",
+        ),
+    ).when(EscalateTicket(ticket_id="t-1"), by=viewer).then_error(
+        "PERMISSION_DENIED"
+    )
+
+
+def test_scenario_input_types_reject_dicts_and_unregistered_classes() -> None:
+    ontology, _store = build_ontology()
+
+    with pytest.raises(AssertionError) as given_error:
+        scenario(ontology).given({"id": "t-1"})  # type: ignore[arg-type]
+    assert getattr(given_error.value.__cause__, "code", None) == "UNKNOWN_NAME"
+
+    agent = consumer(role="Agent", scope_level="queue", scope_id="queue-a")
+    invalid_when = scenario(ontology).when(
+        {"ticket_id": "t-1"}, by=agent  # type: ignore[arg-type]
+    )
+    invalid_when.then_error("INVALID_PARAMS")
+
+    with raises_code(ValidationFailed, "UNKNOWN_NAME"):
+        scenario(ontology).then(dict, "t-1")  # type: ignore[type-var]
 
 
 def _client() -> tuple[OntologyClient, dict[str, str]]:
