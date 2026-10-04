@@ -49,6 +49,7 @@ AUDIT_LOG_COLUMNS: tuple[str, ...] = (
     "principal",
     "unscoped_params",
     "error_code",
+    "events",
 )
 
 _AUDIT_LOG_COLUMN_LIST = ", ".join(AUDIT_LOG_COLUMNS)
@@ -347,6 +348,7 @@ TABLE_SPECS: tuple[TableSpec, ...] = (
             ColumnSpec("principal", "TEXT", "NULL", _AUDIT_PRINCIPAL_PREFIX),
             ColumnSpec("unscoped_params", "TEXT", "NOT NULL DEFAULT '[]'"),
             ColumnSpec("error_code", "TEXT", "NULL"),
+            ColumnSpec("events", "TEXT", "NOT NULL DEFAULT '[]'"),
         ),
         prefix="\n",
         sqlite_order=2,
@@ -369,6 +371,7 @@ TABLE_SPECS: tuple[TableSpec, ...] = (
             "principal",
             "unscoped_params",
             "error_code",
+            "events",
         ),
     ),
 )

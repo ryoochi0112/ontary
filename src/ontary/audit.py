@@ -54,6 +54,15 @@ class CapabilityAccessRecord(BaseModel):
     count: int
 
 
+class EmittedEvent(BaseModel):
+    """One business fact recorded on its invocation, in emission order."""
+
+    event_type: str
+    about_type: str
+    about_id: str
+    payload: dict[str, Any]
+
+
 class AuditEntry(BaseModel):
     """A single append-only audit log entry."""
 
@@ -106,6 +115,7 @@ class AuditEntry(BaseModel):
     # AC11), captured via `capture_action_writes` -- empty for
     # denied/error/rolled-back attempts, since nothing was committed.
     writes: list[WriteRecord] = Field(default_factory=list)
+    events: list[EmittedEvent] = Field(default_factory=list)
     capability_accesses: list[CapabilityAccessRecord] = Field(default_factory=list)
     # Scope-bearing `target` parameters that passed the scope gate WITHOUT a
     # scope check because they refer to a `scope="unscoped"` type (#35): the

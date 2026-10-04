@@ -27,6 +27,7 @@ from __future__ import annotations
 import itertools
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -55,7 +56,7 @@ from examples.tickets.ontology import (
 from ontary import Ontology, OntologyClient, OntologyObject, prop
 from ontary._scenario import SCENARIO_EPOCH
 from ontary.actions import ActionContext, ActionExecutor
-from ontary.audit import CapabilityAccessRecord
+from ontary.audit import CapabilityAccessRecord, EmittedEvent
 from ontary.errors import AuthorityError, ConflictError, PreconditionFailed, ValidationFailed
 from ontary.ingest import bulk_link, bulk_upsert
 from ontary.meta import (
@@ -3006,6 +3007,7 @@ def test_audit_append_and_read_back(store: Store) -> None:
     assert got.target_id == "intent-1"
     assert got.params == {"statement": "improve pride"}
     assert got.outcome == "ok"
+    assert got.events == []
 
 
 def test_audit_writes_round_trip(store: Store) -> None:
@@ -3348,6 +3350,14 @@ def test_audit_append_participates_in_the_enclosing_transaction(store: Store) ->
                     target_type="Company",
                     outcome="ok",
                     params={"message": "should not survive"},
+                    events=[
+                        EmittedEvent(
+                            event_type="CompanyCreated",
+                            about_type="Company",
+                            about_id="c-1",
+                            payload={"name": "Acme"},
+                        )
+                    ],
                 )
             )
             raise RuntimeError("boom after the audit append")
@@ -3408,6 +3418,14 @@ def test_audit_entries_are_not_mutable_through_the_returned_models(
             outcome="ok",
             params={"message": "original"},
             writes=[WriteRecord(op="create", object_type="Company", object_id="c-1")],
+            events=[
+                EmittedEvent(
+                    event_type="CompanyCreated",
+                    about_type="Company",
+                    about_id="c-1",
+                    payload={"details": {"name": "Acme"}},
+                )
+            ],
         )
     )
 
@@ -3415,11 +3433,22 @@ def test_audit_entries_are_not_mutable_through_the_returned_models(
     first[0].outcome = "tampered"
     first[0].params["message"] = "rewritten"
     first[0].writes[0].object_id = "tampered"
+    first[0].events[0].about_id = "tampered"
+    first[0].events[0].payload["details"]["name"] = "rewritten"
+    first[0].events.clear()
 
     second = store.audit_entries()
     assert second[0].outcome == "ok"
     assert second[0].params == {"message": "original"}
     assert second[0].writes[0].object_id == "c-1"
+    assert second[0].events == [
+        EmittedEvent(
+            event_type="CompanyCreated",
+            about_type="Company",
+            about_id="c-1",
+            payload={"details": {"name": "Acme"}},
+        )
+    ]
 
 
 def test_capture_action_writes_are_a_context_manager_yielding_list(
@@ -3549,10 +3578,26 @@ def test_audit_entries_round_trip_every_field(store: Store) -> None:
         capability_accesses=[CapabilityAccessRecord(api_name="llm", count=3)],
         unscoped_params=["product_id"],
         error_code="PRECONDITION_FAILED",
+        events=[
+            EmittedEvent(
+                event_type="TicketUpdated",
+                about_type="Ticket",
+                about_id="ticket-9",
+                payload={"status": "open", "attempt": 1, "details": {"ok": True}},
+            ),
+            EmittedEvent(
+                event_type="TicketUpdated",
+                about_type="Ticket",
+                about_id="ticket-9",
+                payload={"status": "closed", "attempt": 2, "note": None},
+            ),
+        ],
     )
     store.append_audit(entry)
 
     got = store.audit_entries()[0]
+    assert got.events == entry.events
+    assert [event.payload["attempt"] for event in got.events] == [1, 2]
     # #49: pinned by name too, so the loop below cannot pass vacuously
     # before `error_code` is a declared field.
     assert got.error_code == "PRECONDITION_FAILED"
@@ -4079,3 +4124,58 @@ def test_bind_clock_conflict_and_idempotence(store: Store) -> None:
     current = store.read_current("Team", "t1")
     assert current is not None
     assert current.lineage.valid_from == _T0_ISO
+
+
+def test_audit_events_default_is_independent() -> None:
+    fields = dict(
+        actor="alice", role="Operator", action="DoThing", target_type="Ticket", outcome="ok"
+    )
+    first = AuditEntry(**fields)
+    second = AuditEntry(**fields)
+    first.events.append(
+        EmittedEvent(event_type="TicketUpdated", about_type="Ticket", about_id="t-1", payload={})
+    )
+    assert second.events == []
+
+
+@pytest.mark.parametrize("bad_payload", [{"bad": {"a"}}, {"bad": object()}])
+def test_append_audit_never_raises_on_unserializable_event_payload(
+    store: Store, bad_payload: dict[str, Any]
+) -> None:
+    entry = AuditEntry(
+        actor="alice",
+        role="Operator",
+        action="DoThing",
+        target_type="Ticket",
+        outcome="ok",
+        events=[
+            EmittedEvent(
+                event_type="TicketUpdated",
+                about_type="Ticket",
+                about_id="t-1",
+                payload={"ok": "fine", **bad_payload},
+            )
+        ],
+    )
+    store.append_audit(entry)
+    got = store.audit_entries()[0].events[0]
+    assert got.event_type == "TicketUpdated"
+    assert got.about_type == "Ticket"
+    assert got.about_id == "t-1"
+    assert got.payload["ok"] == "fine"
+    assert got.payload["bad"] == {"$unserializable": repr(bad_payload["bad"])}
+
+
+def test_sqlite_refuses_schema_13(tmp_path: Path) -> None:
+    path = tmp_path / "v13.sqlite"
+    with sqlite3.connect(path) as conn:
+        conn.execute("PRAGMA user_version = 13")
+    with raises_code(ConflictError, "STORE_VERSION_UNSUPPORTED") as caught:
+        ObjectStore(build_registry(), str(path))
+    assert str(caught.value) == (
+        "store file schema version 13 is not supported by this "
+        "engine (engine SCHEMA_VERSION=14); this backend ships "
+        "without a migration ladder -- point it at a file created by a "
+        "matching ontary version, or create a fresh one and migrate the data "
+        "yourself"
+    )

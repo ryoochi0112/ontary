@@ -150,7 +150,9 @@ and later and is rebuilt by re-ingest like any other schema move. It changed fro
 to 12 in 0.16.0, when `audit_log` gained the `unscoped_params` column (#35); a
 store stamped 11 is refused by 0.16.0 and later in the same way. It changed from 12
 to 13 in 0.17.0, when `audit_log` gained the `error_code` column (#49); a store
-stamped 12 is refused by 0.17.0 and later in the same way. Check the engine's number with
+stamped 12 is refused by 0.17.0 and later in the same way. It changed from 13
+to 14 in 0.19.0, when `audit_log` gained the `events` column (#47); a store
+stamped 13 is refused by 0.19.0 and later in the same way. Check the engine's number with
 `ontary.store.SCHEMA_VERSION` and the store's with
 `SELECT value FROM schema_meta WHERE key = 'schema_version'` before an upgrade so
 the re-ingest is planned rather than discovered at startup.
