@@ -13,6 +13,9 @@ you**.
 
 ### Added
 
+- Event error codes (#47). `UNDECLARED_EVENT` reports an action emitting an
+  event type outside its `emits` declaration; `EVENT_SUBJECT_INVALID` reports
+  an event whose subject cannot be resolved to a valid target object.
 - Typed Function parameters (#45). A `FunctionParams` subclass validates a
   function's inputs, types the handler, and exposes its parameter definitions
   through MCP `list_functions`. A `(query)` handler declares a function with no

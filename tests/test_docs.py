@@ -129,8 +129,16 @@ ADDED_SINCE_080_ERROR_CODES = frozenset(
         "CLOCK_CONFLICT",
         "CLOCK_REGRESSION",
         "CLOCK_NOT_TIMEZONE_AWARE",
+        "UNDECLARED_EVENT",
+        "EVENT_SUBJECT_INVALID",
     }
 )
+EVENT_ERROR_CODE_MEANINGS = {
+    "UNDECLARED_EVENT": "An action emitted an event type it did not declare.",
+    "EVENT_SUBJECT_INVALID": (
+        "An emitted event's subject could not be resolved to a valid target object."
+    ),
+}
 NEW_ENGLISH_DOCS = tuple(
     _DOCS / name
     for name in (
@@ -609,6 +617,16 @@ def test_changelog_new_error_codes_match_catalog_diff() -> None:
     bullet = changelog[start:] if end == -1 else changelog[start:end]
     listed_codes = re.findall(r"`([A-Z][A-Z0-9_]+)`", bullet)
 
+    unreleased_start = changelog.index("## [Unreleased]")
+    next_release = changelog.find("\n## [", unreleased_start + 1)
+    unreleased = (
+        changelog[unreleased_start:]
+        if next_release == -1
+        else changelog[unreleased_start:next_release]
+    )
+    unreleased_codes = set(re.findall(r"`([A-Z][A-Z0-9_]+)`", unreleased))
+    assert set(EVENT_ERROR_CODE_MEANINGS) <= unreleased_codes
+
     # The released bullet is a historical record: it lists what 0.8.0 added,
     # including codes later cut. So it is compared against the historical set,
     # never against today's catalogue.
@@ -629,6 +647,12 @@ def test_changelog_new_error_codes_match_catalog_diff() -> None:
         (EXPECTED_PRE_080_ERROR_CODES | EXPECTED_080_NEW_ERROR_CODES)
         - REMOVED_SINCE_080_ERROR_CODES
     ) | ADDED_SINCE_080_ERROR_CODES
+
+
+def test_event_error_codes_have_validation_kind_and_spec_meanings() -> None:
+    for code, meaning in EVENT_ERROR_CODE_MEANINGS.items():
+        assert ERROR_CODES[code].kind == "validation"
+        assert ERROR_CODES[code].description == meaning
 
 
 @pytest.mark.parametrize("path", API_REFERENCES, ids=lambda p: p.name)
