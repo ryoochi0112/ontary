@@ -2,6 +2,8 @@
 
 [← README](../README.md) · [API reference](api-reference.md)
 
+*Reference* — This page describes the `ontary` command-line tools for lookup, and [Getting started](getting-started.md) shows where to begin.
+
 ## Overview
 
 The package installs two console scripts: `ontary` (`ontary.cli:main`) and `ontary-mcp` (`ontary.mcp_server:main`).

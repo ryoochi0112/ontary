@@ -2,6 +2,8 @@
 
 [Back to the README](../README.md) · [API reference](api-reference.md)
 
+*How-to guide* — This page gives steps to choose and bind a storage backend, and the [API reference](api-reference.md) lists the classes behind it.
+
 The runtime depends on the `Store` protocol, not on a particular database. Choose
 the backend for the deployment shape, then bind the ontology once and hand out
 consumer views from that runtime. Storage does not replace the guarded client

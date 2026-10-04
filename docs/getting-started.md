@@ -2,6 +2,8 @@
 
 [← README](../README.md) · [API reference](api-reference.md)
 
+*Tutorial* — This page teaches by doing: you build a small ontology step by step, and [Ontology design](ontology-design.md) and the [API reference](api-reference.md) cover the why and the details.
+
 This tutorial helps you build your first working ontology in ten minutes. You will define objects, actions, and functions.
 
 ## Install

@@ -2,6 +2,8 @@
 
 [English](cli.md) · **日本語** · [← README](../README.md)
 
+*リファレンス* — `ontary` のコマンドラインツールを調べるためのページで、最初に読むページは[はじめに](getting-started.ja.md)です。
+
 ## 概要
 
 本パッケージは、2つのコンソールスクリプトをインストールします。これらは `ontary`（`ontary.cli:main`）と `ontary-mcp`（`ontary.mcp_server:main`）です。

@@ -2,6 +2,8 @@
 
 **English** · [日本語](api-reference.ja.md) · [← README](../README.md)
 
+*Reference* — This page lists the public names of `ontary` for lookup, and [Getting started](getting-started.md) and [Testing your ontology](testing.md) show them in use.
+
 The curated front door of `ontary`: **45 names** in `__all__`. The rest of the
 engine remains available from its canonical submodule (`ontary.meta`,
 `ontary.store`, and so on).

@@ -2,6 +2,8 @@
 
 [English](api-reference.md) · **日本語** · [← README](../README.md)
 
+*リファレンス* — `ontary` の公開名を調べるための一覧ページで、使い方は[はじめに](getting-started.ja.md)と[オントロジーのテスト](testing.ja.md)で確認できます。
+
 `ontary` のキュレーションされたフロントドア: `__all__` の **45 個の名前**。
 残りのエンジン API は、`ontary.meta`、`ontary.store` などの
 定義元サブモジュールから利用します。

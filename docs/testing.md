@@ -2,6 +2,8 @@
 
 [← README](../README.md) · [API reference](api-reference.md)
 
+*How-to guide* — This page gives steps to test your ontology with deterministic scenarios, and the [API reference](api-reference.md) lists the helpers.
+
 ## Why deterministic tests
 
 Tests should not depend on wall-clock time or random ids. The `ontary.testing` module provides small, deterministic helpers: a given/when/then scenario builder and the low-level helpers underneath it. They need no engine imports and no custom pytest fixtures; failures raise `AssertionError`.

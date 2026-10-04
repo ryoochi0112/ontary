@@ -2,6 +2,8 @@
 
 [← README](../README.md) · [Changelog](../CHANGELOG.md)
 
+*Project* — This page gives maintainers the steps to publish a release, and [Compatibility](compatibility.md) explains what may change between versions.
+
 Maintainer runbook. `X.Y.Z` is the version being released. Pushing an
 annotated tag `vX.Y.Z` runs
 [`release.yml`](../.github/workflows/release.yml): the `gate` job checks the

@@ -125,16 +125,22 @@ exit codes: [CLI reference](docs/cli.md).
 | Learn about | Destination |
 | --- | --- |
 | The docs site (EN / 日本語) | https://ryoochi0112.github.io/ontary/ |
+| **Tutorials** | |
 | First ontology in ten minutes | [Getting started](docs/getting-started.md) · [日本語](docs/getting-started.ja.md) |
-| Authoring an ontology | [Ontology design guide](docs/ontology-design.md) · [日本語](docs/ontology-design.ja.md) |
-| Names and errors | [API reference](docs/api-reference.md) · [error codes](docs/api-reference.md#error-codes) · [日本語](docs/api-reference.ja.md) |
+| **How-to guides** | |
+| Testing your ontology | [Testing](docs/testing.md) · [日本語](docs/testing.ja.md) |
 | Storage and tenancy | [Storage, tenancy, and schema](docs/storage.md) |
 | MCP serving | [MCP serving](docs/mcp-serving.md) |
-| Command line | [CLI reference](docs/cli.md) · [日本語](docs/cli.ja.md) |
-| Testing your ontology | [Testing](docs/testing.md) · [日本語](docs/testing.ja.md) |
 | Worked recipes | [Tickets reference app](examples/tickets/README.md) |
+| **Reference** | |
+| Names and errors | [API reference](docs/api-reference.md) · [error codes](docs/api-reference.md#error-codes) · [日本語](docs/api-reference.ja.md) |
+| Command line | [CLI reference](docs/cli.md) · [日本語](docs/cli.ja.md) |
+| Compatibility | [Compatibility](docs/compatibility.md) |
+| **Explanation** | |
+| Authoring an ontology | [Ontology design guide](docs/ontology-design.md) · [日本語](docs/ontology-design.ja.md) |
+| **Project** | |
 | What is planned | [Roadmap](docs/roadmap.md) |
-| Compatibility and migration | [CHANGELOG.md](CHANGELOG.md) · [Compatibility](docs/compatibility.md) |
+| Change history | [CHANGELOG.md](CHANGELOG.md) |
 | Cutting a release (maintainers) | [Releasing](docs/releasing.md) |
 | Reporting a vulnerability | [Security policy](SECURITY.md) |
 

@@ -1,5 +1,7 @@
 # Roadmap
 
+*Project* — This page describes where `ontary` is heading, and [Getting started](getting-started.md) shows how to build with it today.
+
 ontary aims to be a genuinely useful SDK for building and running an
 **operational ontology**: a model of your operations that people and AI
 agents both work through.
