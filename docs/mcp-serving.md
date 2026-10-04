@@ -2,6 +2,8 @@
 
 [Back to the README](../README.md) · [API reference](api-reference.md)
 
+*How-to guide* — This page gives steps to serve your runtime over MCP, with the [API reference](api-reference.md) for details and [Ontology design](ontology-design.md) for what to expose.
+
 MCP is a serving surface over the same ontology runtime, not a second authorization
 model. The server exposes introspection, guarded reads, actions, and Functions using
 the consumer and providers supplied at construction. The underlying ontology

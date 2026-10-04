@@ -2,6 +2,8 @@
 
 **English** · [日本語](ontology-design.ja.md)
 
+*Explanation* — This page explains how to think about ontology boundaries and security before you build, and [Getting started](getting-started.md) and the [API reference](api-reference.md) show the code.
+
 This guide is for people and coding agents deciding what an ontology should mean
 before they declare it with `Ontology` and `OntologyObject`, or generate the
 lower-level `ObjectTypeDef`, `PropertyDef`, `LinkTypeDef`, `ActionTypeDef`, and
