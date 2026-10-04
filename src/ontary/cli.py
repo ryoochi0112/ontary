@@ -51,6 +51,11 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     validate.add_argument("target", metavar="pkg.module:attr")
     validate.add_argument("--json", action="store_true", dest="as_json")
+    validate.add_argument(
+        "--strict",
+        action="store_true",
+        help="exit with code 1 if any warning findings remain",
+    )
 
     serve = commands.add_parser(
         "serve",
@@ -159,7 +164,7 @@ def _render_findings(findings: list[Finding], as_json: bool) -> None:
             print(f"  guide: {finding.guide}")
 
 
-def _run_validate(target: str, as_json: bool) -> int:
+def _run_validate(target: str, as_json: bool, strict: bool = False) -> int:
     try:
         ontology, _returned_store = _load_target(target)
     except _LoadFailure as exc:
@@ -175,7 +180,11 @@ def _run_validate(target: str, as_json: bool) -> int:
         return 2
 
     _render_findings(findings, as_json)
-    return 1 if any(finding.severity == "error" for finding in findings) else 0
+    if any(finding.severity == "error" for finding in findings):
+        return 1
+    if strict and any(finding.severity == "warn" for finding in findings):
+        return 1
+    return 0
 
 
 def _start_dev_server(
@@ -264,7 +273,7 @@ def main(argv: list[str] | None = None) -> int:
         print(ontary.__version__)
         return 0
     if args.command == "validate":
-        return _run_validate(args.target, args.as_json)
+        return _run_validate(args.target, args.as_json, args.strict)
     if args.command == "serve":
         return _run_serve(args.target, args.store, args.port)
 
