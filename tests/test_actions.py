@@ -4835,6 +4835,7 @@ def test_action_context_exposes_no_store_handle(
         "capability",
         "consumer",
         "create",
+        "emit",
         "get",
         "link",
         "now",

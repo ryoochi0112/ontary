@@ -327,7 +327,6 @@ ERROR_CODES: dict[str, ErrorCodeInfo] = {
             "A handler requested a capability its action or function did not declare."
         ),
     ),
-    # reserved-for-later: T4 adds the ActionContext.emit raise sites.
     "UNDECLARED_EVENT": ErrorCodeInfo(
         kind="validation",
         description="An action emitted an event type it did not declare.",

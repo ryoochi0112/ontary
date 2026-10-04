@@ -69,6 +69,7 @@ from ontary.meta import (
     RuleDef,
     TransitionDef,
 )
+from ontary.model import ActionParams, Event
 from ontary.scope import ScopePolicy
 from ontary.security import Consumer
 from ontary.store import (
@@ -82,7 +83,7 @@ from ontary.store import (
 )
 from ontary.store._shared import StoreClock, canonical_id
 from ontary.store.inmemory import InMemoryStore
-from ontary.testing import SequentialIds, consumer, scenario
+from ontary.testing import FixedClock, SequentialIds, consumer, scenario
 
 StoreFactory = Callable[[OntologyRegistry], Store]
 
@@ -3062,6 +3063,99 @@ def test_audit_capability_accesses_round_trip(store: Store) -> None:
 
     got = store.audit_entries()[0]
     assert got.capability_accesses == accesses
+
+
+@pytest.mark.parametrize("fail", [False, True], ids=["ok", "rollback"])
+def test_action_emission_commits_or_rolls_back_with_writes(
+    store_factory: StoreFactory, fail: bool,
+) -> None:
+    """#47: the executor's events and writes share one transaction on every backend."""
+    ontology = Ontology("event-conformance", scope_levels=["org"], min_n=1)
+
+    @ontology.object(layer="L0", scope="unscoped", owned=True)
+    class Order(OntologyObject):
+        id: str = prop(primary_key=True)
+        status: str
+
+    class State(Enum):
+        SHIPPED = "shipped"
+
+    class Detail(BaseModel):
+        state: State
+        at: datetime
+
+    @ontology.event()
+    class OrderShipped(Event):
+        carrier: str
+        at: datetime
+        state: State
+        detail: Detail
+
+    class CreateOrder(ActionParams):
+        pass
+
+    observed: list[datetime] = []
+
+    @ontology.action(CreateOrder, target=Order, roles=["Operator"], emits=[OrderShipped])
+    def create(ctx: ActionContext, params: CreateOrder) -> dict[str, Any]:
+        observed.append(ctx.now())
+        order = ctx.create(Order, id="order-1", status="new")
+        for carrier in ("first", "second"):
+            ctx.emit(OrderShipped(
+                carrier=carrier, at=ctx.now(), state=State.SHIPPED,
+                detail=Detail(state=State.SHIPPED, at=ctx.now()),
+            ), about=order)
+        order.status = "shipped"
+        ctx.save(order)
+        if fail:
+            raise PreconditionFailed("shipment refused after emission", code="PRECONDITION_FAILED")
+        return {"order_id": order.id}
+
+    instant = datetime(2026, 10, 4, 9, tzinfo=timezone.utc)
+    store = store_factory(ontology.registry)
+    client = ontology.bind(
+        store, clock=FixedClock(instant), id_factory=SequentialIds("inv")
+    ).for_consumer(consumer(role="Operator"))
+    if fail:
+        with pytest.raises(PreconditionFailed) as caught:
+            client.execute(CreateOrder())
+        assert caught.value.code == "PRECONDITION_FAILED"
+        assert str(caught.value) == "shipment refused after emission"
+        assert store.read_all("Order") == []
+        assert store.read_last("Order", "order-1") is None
+        assert _history_rows(store, "Order", "order-1") == []
+    else:
+        assert client.execute(CreateOrder()) == {"order_id": "order-1"}
+        row = store.read_current("Order", "order-1")
+        assert row is not None
+        assert row.payload == {"id": "order-1", "status": "shipped"}
+
+    entries = store.audit_entries()
+    assert len(entries) == 1
+    entry = entries[0]
+    assert entry.kind == "action"
+    assert entry.ts == observed[0] == instant
+    assert entry.invocation_id == "inv-1"
+    assert entry.target_id is None
+    if fail:
+        assert entry.outcome == "error"
+        assert entry.error_code == "PRECONDITION_FAILED"
+        assert entry.events == []
+        assert entry.writes == []
+    else:
+        assert entry.outcome == "ok"
+        assert entry.error_code is None
+        assert [write.op for write in entry.writes] == ["create", "update"]
+        assert entry.events == [
+            EmittedEvent(
+                event_type="OrderShipped", about_type="Order", about_id="order-1",
+                payload={
+                    "carrier": carrier, "at": instant.isoformat(), "state": "shipped",
+                    "detail": {"state": "shipped", "at": instant.isoformat()},
+                },
+            )
+            for carrier in ("first", "second")
+        ]
 
 
 def test_append_audit_never_raises_on_unserializable_param(store: Store) -> None:

@@ -59,6 +59,8 @@ ENGINE_EXCEPTION_CODES: dict[str, tuple[type[OntaryError], str]] = {
     "FUNCTION_ERROR": (PreconditionFailed, "precondition"),
     "ONTOLOGY_INVALID": (ValidationFailed, "validation"),
     "UNDECLARED_CAPABILITY": (ValidationFailed, "validation"),
+    "UNDECLARED_EVENT": (ValidationFailed, "validation"),
+    "EVENT_SUBJECT_INVALID": (ValidationFailed, "validation"),
     "CAPABILITY_NOT_PROVIDED": (PreconditionFailed, "precondition"),
     "UNKNOWN_FIELD": (ValidationFailed, "validation"),
     "UNKNOWN_NAME": (ValidationFailed, "validation"),
@@ -83,16 +85,13 @@ MCP_AUTH_EXCEPTION_CODES: dict[str, tuple[type[OntaryError], str]] = {
 
 # These catalog entries are deliberately not emitted by a coded raise site:
 # two are kind-level fallback codes retained for callers that construct the
-# base kind, one is an ingest report code, one is the MCP generic envelope, and
-# the event codes are reserved for T4's ActionContext.emit raise sites. They
-# remain in the catalog because they are stable wire/report values.
+# base kind, one is an ingest report code, and one is the MCP generic envelope.
+# They remain in the catalog because they are stable wire/report values.
 NON_RAISED_CODES: set[tuple[str, str]] = {
     ("STORE_ERROR", "internal"),
     ("AUTHORITY_ERROR", "authority"),
     ("OWNED_PROPERTY_REFUSED", "authority"),
     ("INTERNAL_ERROR", "internal"),
-    ("UNDECLARED_EVENT", "validation"),
-    ("EVENT_SUBJECT_INVALID", "validation"),
 }
 
 
