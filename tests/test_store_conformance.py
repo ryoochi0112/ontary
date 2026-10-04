@@ -53,7 +53,7 @@ from examples.tickets.ontology import (
     escalationOnTicket,
     ticketInQueue,
 )
-from ontary import Ontology, OntologyClient, OntologyObject, prop
+from ontary import Ontology, OntologyClient, OntologyObject, prop, target
 from ontary._scenario import SCENARIO_EPOCH
 from ontary.actions import ActionContext, ActionExecutor
 from ontary.audit import CapabilityAccessRecord, EmittedEvent
@@ -70,7 +70,7 @@ from ontary.meta import (
     TransitionDef,
 )
 from ontary.model import ActionParams, Event
-from ontary.scope import ScopePolicy
+from ontary.scope import DirectProperty, ScopePolicy, SelfScope, ViaLink
 from ontary.security import Consumer
 from ontary.store import (
     AuditEntry,
@@ -4273,3 +4273,81 @@ def test_sqlite_refuses_schema_13(tmp_path: Path) -> None:
         "matching ontary version, or create a fresh one and migrate the data "
         "yourself"
     )
+
+
+@pytest.mark.parametrize("scope_route", ["property", "link"])
+@pytest.mark.parametrize("change", ["retire", "move"])
+def test_event_history_follows_retired_or_rescoped_subject_on_every_backend(
+    store_factory: StoreFactory, scope_route: str, change: str,
+) -> None:
+    ontology = Ontology("event-visibility-conformance", scope_levels=["org"], min_n=1)
+
+    @ontology.object(layer="L0", scope=[SelfScope(level="org")])
+    class Organization(OntologyObject):
+        id: str = prop(primary_key=True)
+
+    rules = (
+        [DirectProperty(level="org", property_name="org_id")]
+        if scope_route == "property" else
+        [ViaLink(link_api_name="inOrganization", direction="from", parent_type="Organization")]
+    )
+
+    @ontology.object(layer="L0", scope=rules, owned=True)
+    class Order(OntologyObject):
+        id: str = prop(primary_key=True)
+        org_id: str
+
+    ontology.link("inOrganization", Order, Organization, Cardinality.MANY_TO_ONE, owned=True)
+
+    @ontology.event()
+    class OrderChanged(Event):
+        reason: str
+
+    class ChangeOrder(ActionParams):
+        order_id: str = target(Order)
+        retire: bool
+
+    @ontology.action(ChangeOrder, target=Order, roles=["Operator"], emits=[OrderChanged])
+    def change_order(ctx: ActionContext, params: ChangeOrder) -> dict[str, Any]:
+        ctx.emit(OrderChanged(reason="cancelled" if params.retire else "updated"))
+        if params.retire:
+            ctx.retire(Order, params.order_id)
+        return {}
+
+    store = store_factory(ontology.registry)
+    clock = _SettableClock(_T0)
+    runtime = ontology.bind(store, clock=clock, id_factory=SequentialIds("inv"))
+    for org_id in ("org-1", "org-2"):
+        store.insert("Organization", {"id": org_id}, _TEAM_SRC)
+    store.insert("Order", {"id": "order-1", "org_id": "org-1"}, _TEAM_SRC)
+    if scope_route == "link":
+        store.create_link("inOrganization", "order-1", "org-1")
+    old_scope = runtime.for_consumer(consumer(role="Operator", scope_id="org-1"))
+    new_scope = runtime.for_consumer(consumer(role="Operator", scope_id="org-2"))
+    old_scope.execute(ChangeOrder(order_id="order-1", retire=False))
+    assert [r.payload.reason for r in old_scope.events(OrderChanged)] == ["updated"]
+    assert new_scope.events(OrderChanged) == []
+
+    clock.value = _T1
+    if change == "retire":
+        old_scope.execute(ChangeOrder(order_id="order-1", retire=True))
+        assert store.read_current("Order", "order-1") is None
+        assert store.links_from("inOrganization", "order-1") == []
+        records = old_scope.events(OrderChanged)
+        assert [r.payload.reason for r in records] == ["updated", "cancelled"]
+        assert [r.ts for r in records] == [_T0, _T1]
+        assert [r.invocation_id for r in records] == ["inv-1", "inv-2"]
+        assert new_scope.events(OrderChanged) == []
+    else:
+        if scope_route == "property":
+            store.update("Order", "order-1", {"org_id": "org-2"}, _TEAM_SRC)
+        else:
+            store.close_link("inOrganization", "order-1", "org-1")
+            store.create_link("inOrganization", "order-1", "org-2")
+        new_scope.execute(ChangeOrder(order_id="order-1", retire=False))
+        assert old_scope.events(OrderChanged) == []
+        records = new_scope.events(OrderChanged)
+        assert [r.payload.reason for r in records] == ["updated", "updated"]
+        assert [r.ts for r in records] == [_T0, _T1]
+        assert [r.invocation_id for r in records] == ["inv-1", "inv-2"]
+    assert all(r.about_type == "Order" and r.about_id == "order-1" for r in records)

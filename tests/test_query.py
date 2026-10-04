@@ -3140,6 +3140,7 @@ def test_every_public_read_routes_through_the_disclosure_gate(
         "aggregate": lambda guarded: guarded.aggregate(human, "Reading", "score"),
         "aggregate_by": lambda guarded: guarded.aggregate_by(human, "Reading", "score", "shelf_id"),
         "count_contributors": lambda guarded: guarded.count_contributors(human, "Reading"),
+        "visible_events": lambda guarded: guarded.visible_events(human, about=("Reading", "r0")),
     }
     public_reads = {
         name

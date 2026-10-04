@@ -69,10 +69,13 @@ from ontary.meta import OntologyRegistry
 from ontary.model import (
     ActionParams,
     CapabilityHandle,
+    Event,
+    EventRecord,
     FunctionParams,
     LinkHandle,
     OntologyObject,
     _class_stamp,
+    _UnfilteredEvent,
 )
 from ontary.ontology import OntologyDef, resolve_definition
 from ontary.query import (
@@ -96,6 +99,7 @@ __all__ = [
 
 T = TypeVar("T", bound=OntologyObject)
 F = TypeVar("F", bound=OntologyObject)
+E = TypeVar("E", bound=Event)
 
 
 def _checked_provider_map(
@@ -307,6 +311,93 @@ class OntologyClient(_TypedReadMixin):
         self.actions = runtime.actions
 
     # -- reads --------------------------------------------------------
+
+    @overload
+    def events(
+        self, event_type: type[E], /, *,
+        about: OntologyObject | tuple[type[OntologyObject], str] | None = None,
+        since: datetime | None = None, until: datetime | None = None,
+    ) -> builtins.list[EventRecord[E]]: ...
+
+    @overload
+    def events(
+        self, event_type: None = None, /, *,
+        about: OntologyObject | tuple[type[OntologyObject], str] | None = None,
+        since: datetime | None = None, until: datetime | None = None,
+    ) -> builtins.list[EventRecord[Event]]: ...
+
+    def events(
+        self, event_type: type[E] | None = None, /, *,
+        about: OntologyObject | tuple[type[OntologyObject], str] | None = None,
+        since: datetime | None = None, until: datetime | None = None,
+    ) -> builtins.list[EventRecord[E]] | builtins.list[EventRecord[Event]]:
+        """Read visible facts using the subject's latest scope and row policy.
+
+        Results follow audit seq, then emission order. ``since`` includes its
+        instant and ``until`` excludes it; both must be timezone-aware. A
+        supplied event class hydrates payloads into that author model. Without
+        one, payloads are ``Event`` instances retaining their stored fields.
+        """
+        name = None if event_type is None else self._api_name_for_event(event_type)
+        subject = self._event_about(about)
+        payload_cls: type[Event] = _UnfilteredEvent if event_type is None else event_type
+        records: builtins.list[EventRecord[Any]] = []
+        for entry, event, hidden in self._query.visible_events(
+            self._consumer, event_type=name, about=subject, since=since, until=until,
+        ):
+            # Explicit None overrides any author default for a redacted field.
+            payload = payload_cls.model_validate({
+                **event.payload, **dict.fromkeys(hidden),
+            })
+            records.append(EventRecord(
+                event_type=event.event_type, about_type=event.about_type, about_id=event.about_id,
+                ts=entry.ts, invocation_id=entry.invocation_id, payload=payload,
+                redacted_fields=hidden,
+            ))
+        return records
+
+    def _api_name_for_event(self, cls: type[Event]) -> str:
+        if not isinstance(cls, type) or not issubclass(cls, Event):
+            raise ValidationFailed("events event_type must be an Event subclass", code="UNKNOWN_NAME")
+        name, registry = _class_stamp(cls)
+        if name is None or registry is None:
+            raise ValidationFailed(
+                f"{cls.__name__!r} is not decorated with @ontology.event(...) "
+                "-- it has no registered api_name",
+                code="UNKNOWN_NAME",
+            )
+        if registry is not self._registry:
+            raise ValidationFailed(
+                f"{cls.__name__!r} (api_name {name!r}) was registered on a different Ontology "
+                "-- it is not part of this client's ontology",
+                code="UNKNOWN_NAME",
+            )
+        try:
+            self._ontology.registry.get_event_type(name)
+        except ValidationFailed as exc:
+            raise ValidationFailed(
+                f"{cls.__name__!r} (api_name {name!r}) is not registered on this client's ontology",
+                code="UNKNOWN_NAME",
+            ) from exc
+        return name
+
+    def _event_about(
+        self, about: OntologyObject | tuple[type[OntologyObject], str] | None,
+    ) -> tuple[str, str] | None:
+        if about is None:
+            return None
+        if isinstance(about, OntologyObject):
+            name = self._api_name_for(type(about))
+            primary_key = self._ontology.registry.get_object_type(name).primary_key
+            object_id = getattr(about, primary_key, None)
+        else:
+            cls, object_id = about
+            name = self._api_name_for(cls)
+        if not isinstance(object_id, str):
+            raise ValidationFailed(
+                f"events about must name a string id for {name}", code="INVALID_PARAMS",
+            )
+        return name, object_id
 
     @overload
     def list(
