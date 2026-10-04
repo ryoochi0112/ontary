@@ -127,6 +127,7 @@ exit codes: [CLI reference](docs/cli.md).
 | The docs site (EN / 日本語) | https://ryoochi0112.github.io/ontary/ |
 | **Tutorials** | |
 | First ontology in ten minutes | [Getting started](docs/getting-started.md) · [日本語](docs/getting-started.ja.md) |
+| Model a leave-request approval | [Leave-request tutorial](docs/tutorial-leave-requests.md) |
 | **How-to guides** | |
 | Testing your ontology | [Testing](docs/testing.md) · [日本語](docs/testing.ja.md) |
 | Storage and tenancy | [Storage, tenancy, and schema](docs/storage.md) |

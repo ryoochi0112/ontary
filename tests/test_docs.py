@@ -145,6 +145,7 @@ NEW_ENGLISH_DOCS = tuple(
         "storage.md",
         "mcp-serving.md",
         "getting-started.md",
+        "tutorial-leave-requests.md",
         "cli.md",
         "testing.md",
     )

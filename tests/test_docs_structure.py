@@ -19,6 +19,7 @@ SECTION_TITLES = (
 )
 SECTION_OF: dict[str, str] = {
     "getting-started.md": "Tutorials",
+    "tutorial-leave-requests.md": "Tutorials",
     "testing.md": "How-to guides",
     "storage.md": "How-to guides",
     "mcp-serving.md": "How-to guides",

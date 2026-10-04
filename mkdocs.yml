@@ -52,6 +52,7 @@ nav:
   - Home: index.md
   - Tutorials:
       - Getting started: getting-started.md
+      - Model a leave-request approval: tutorial-leave-requests.md
   - How-to guides:
       - Testing your ontology: testing.md
       - Storage, tenancy, and schema: storage.md
