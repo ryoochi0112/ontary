@@ -37,6 +37,20 @@ EXPECTED_JA_NAV_TRANSLATIONS: dict[str, str] = {
     "Explanation": "解説",
     "Project": "プロジェクト",
 }
+ORIENTATION_MARKERS: dict[str, str] = {
+    "Tutorials": "*Tutorial* — ",
+    "How-to guides": "*How-to guide* — ",
+    "Reference": "*Reference* — ",
+    "Explanation": "*Explanation* — ",
+    "Project": "*Project* — ",
+}
+JA_ORIENTATION_MARKERS: dict[str, str] = {
+    "Tutorials": "*チュートリアル* — ",
+    "How-to guides": "*ハウツーガイド* — ",
+    "Reference": "*リファレンス* — ",
+    "Explanation": "*解説* — ",
+    "Project": "*プロジェクト* — ",
+}
 
 
 def _nav_sections() -> list[tuple[str, list[str]]]:
@@ -151,3 +165,110 @@ def test_japanese_nav_translations_match_the_five_sections() -> None:
     }
     assert set(translations) == section_titles
     assert translations == EXPECTED_JA_NAV_TRANSLATIONS
+
+
+def _linked_page_section(source: Path, target: str) -> str | None:
+    """Return the nav section for a relative Markdown link under docs/.
+
+    Japanese pages use the same section as their English sibling. Links to
+    README, CHANGELOG, external URLs, anchors, and non-nav pages are ignored.
+    """
+    target = target.strip()
+    if not target or re.match(r"[A-Za-z][A-Za-z0-9+.-]*:", target):
+        return None
+
+    target_path = target.split()[0].strip("<>").split("#", 1)[0].split("?", 1)[0]
+    if not target_path or target_path.startswith("/"):
+        return None
+
+    linked_path = (source.parent / target_path).resolve()
+    try:
+        linked_name = linked_path.relative_to(DOCS.resolve()).name
+    except ValueError:
+        return None
+
+    if linked_name.endswith(".ja.md"):
+        linked_name = f"{linked_name[:-len('.ja.md')]}.md"
+    return SECTION_OF.get(linked_name)
+
+
+def test_every_section_page_has_a_marked_cross_section_orientation_line() -> None:
+    english_markers = tuple(ORIENTATION_MARKERS.values())
+    japanese_markers = tuple(JA_ORIENTATION_MARKERS.values())
+
+    for english_name, section in SECTION_OF.items():
+        english_path = DOCS / english_name
+        english_text = english_path.read_text()
+        if english_text.startswith("<!-- site-page:"):
+            continue
+
+        language_pages = [(english_path, ORIENTATION_MARKERS, english_markers)]
+        japanese_path = DOCS / f"{english_name[:-len('.md')]}.ja.md"
+        if japanese_path.is_file():
+            language_pages.append(
+                (japanese_path, JA_ORIENTATION_MARKERS, japanese_markers)
+            )
+
+        for path, markers_by_section, all_markers in language_pages:
+            lines = path.read_text().splitlines()
+            first_heading = next(
+                (index for index, line in enumerate(lines) if line.startswith("## ")),
+                len(lines),
+            )
+            marker_lines = [
+                (index, line)
+                for index, line in enumerate(lines[:8])
+                if index < first_heading and line.startswith(all_markers)
+            ]
+            assert len(marker_lines) == 1, (
+                f"{path.name} needs one orientation marker within its first 8 lines "
+                "and before its first level-two heading"
+            )
+
+            orientation_index, orientation_line = marker_lines[0]
+            expected_marker = markers_by_section[section]
+            assert orientation_line.startswith(expected_marker), (
+                f"{path.name} needs the {section!r} marker {expected_marker!r}"
+            )
+            linked_sections = [
+                linked_section
+                for match in re.finditer(r"\]\(([^)]+)\)", orientation_line)
+                if (
+                    linked_section := _linked_page_section(path, match.group(1))
+                )
+                is not None
+            ]
+            assert any(linked_section != section for linked_section in linked_sections), (
+                f"{path.name} orientation line must link to a page in another section"
+            )
+            assert orientation_index < first_heading
+
+
+def test_readme_where_to_go_lists_the_five_nav_groups_in_order() -> None:
+    lines = (ROOT / "README.md").read_text().splitlines()
+    section_start = lines.index("## Where to go")
+    section_end = next(
+        (
+            index
+            for index in range(section_start + 1, len(lines))
+            if lines[index].startswith("## ")
+        ),
+        len(lines),
+    )
+    section_lines = lines[section_start:section_end]
+    group_rows = [
+        re.fullmatch(r"\| \*\*(.+)\*\* \| \|", line)
+        for line in section_lines
+    ]
+    groups = [match.group(1) for match in group_rows if match is not None]
+    expected_groups = [title for title, _pages in _nav_sections() if title != "Home"]
+
+    assert groups == expected_groups
+    site_row = (
+        "| The docs site (EN / 日本語) | "
+        "https://ryoochi0112.github.io/ontary/ |"
+    )
+    assert site_row in section_lines
+    assert section_lines.index(site_row) < next(
+        index for index, match in enumerate(group_rows) if match is not None
+    )
