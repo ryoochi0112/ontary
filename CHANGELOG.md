@@ -25,9 +25,38 @@ you**.
 - Clock error codes (#46). `CLOCK_CONFLICT` (binding a store with a second
   clock), `CLOCK_REGRESSION` (a write earlier than the `valid_from` it closes),
   and `CLOCK_NOT_TIMEZONE_AWARE` (a clock returned a naive `datetime`).
+- Two new advisory lints (#50). `FREE_TEXT_STATUS` fires on a `status` or `*_status`
+  property typed `str` with no declared choices. `AUDIT_TYPE` fires on an object
+  type name ending in `AuditLog`, `AuditEntry`, `AuditTrail`, `AuditRecord`, or
+  `AuditEvent`.
+- `Finding.guide` (#50). It holds the URL of the design-guide section that explains
+  the finding, or `None`. All eight advisory codes set it. `ontary.diagnose` exports
+  `GUIDE_URL`, `GUIDE_ANCHORS`, and `ADVISORY_CODES`, and `ontary validate` prints a
+  `guide:` line under `fix:` and a `guide` key in `--json`.
+- `accept=` on `prop`, `@ontology.object`, `@ontology.action`, and
+  `@ontology.function` (#50). It accepts a modelling lint at the declaration that
+  caused it. A code the declaration cannot accept is refused with
+  `ONTOLOGY_INVALID`.
+- `snapshot=True` on `@ontology.object` (#50). It declares a snapshot type, which
+  gets no `STORED_DERIVABLE` finding and no `FORBIDDEN_TYPE_NAME` finding for a
+  `Snapshot` suffix.
+- `ontary validate --strict` (#50). It also exits 1 when any `warn` finding remains.
+  `info` findings never change the exit code.
 
 ### Changed
 
+- Lint messages and fix hints changed (#50). They now name the concrete fix, using
+  your own declaration names. The codes and severities did not change.
+- `CRUD_ACTION_NAME` now covers Functions as well as actions (#50). It compares the
+  first word of the api name, ignoring letter case, so `SettleInvoice` no longer
+  warns.
+- `FORBIDDEN_TYPE_NAME` now catches a year suffix such as `Survey2024` (#50). A type
+  named exactly `History` or `Snapshot` no longer fires, because it is not a clone
+  of another type.
+- The text "declared snapshot" in an object's `description` no longer exempts the
+  type from `STORED_DERIVABLE` or `FORBIDDEN_TYPE_NAME` (#50). Use `snapshot=True`.
+- In the tickets example, `Ticket.status` is now a choice property, so
+  `ontary validate --strict` passes on it (#50).
 - Audit `ts` is now the instant the invocation started (#46). It was read after
   the handler finished. Bind the clock before seeding data, or a clock set in
   the past can raise `CLOCK_REGRESSION` on the first update.
