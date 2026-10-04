@@ -419,8 +419,9 @@ team A sees: [2]
 
 Validation checks the model, and diagnosis reports errors and design advisories. Run this command beside `leave_requests.py`:
 ```bash
-ontary validate leave_requests:ontology
+PYTHONPATH=. ontary validate leave_requests:ontology
 ```
+The CLI imports the module by name, so `PYTHONPATH=.` puts the current directory on the import path.
 In **Try it**, run the same checks in Python. `validate()` raises on invalid declarations; `diagnose()` returns findings:
 ```python
 # Try it
@@ -508,7 +509,7 @@ print(sorted(result.structured_content["result"]))
 The CLI starts a localhost development server. `--dev` is required:
 
 ```bash
-ontary serve leave_requests:ontology --dev --store ./leave-requests.sqlite --port 8000
+PYTHONPATH=. ontary serve leave_requests:ontology --dev --store ./leave-requests.sqlite --port 8000
 ```
 
 ## The whole program
