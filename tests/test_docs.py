@@ -617,15 +617,16 @@ def test_changelog_new_error_codes_match_catalog_diff() -> None:
     bullet = changelog[start:] if end == -1 else changelog[start:end]
     listed_codes = re.findall(r"`([A-Z][A-Z0-9_]+)`", bullet)
 
-    unreleased_start = changelog.index("## [Unreleased]")
-    next_release = changelog.find("\n## [", unreleased_start + 1)
-    unreleased = (
-        changelog[unreleased_start:]
+    # The event codes shipped in 0.19.0; pin them to that release's section.
+    events_start = changelog.index("## [0.19.0]")
+    next_release = changelog.find("\n## [", events_start + 1)
+    events_section = (
+        changelog[events_start:]
         if next_release == -1
-        else changelog[unreleased_start:next_release]
+        else changelog[events_start:next_release]
     )
-    unreleased_codes = set(re.findall(r"`([A-Z][A-Z0-9_]+)`", unreleased))
-    assert set(EVENT_ERROR_CODE_MEANINGS) <= unreleased_codes
+    events_codes = set(re.findall(r"`([A-Z][A-Z0-9_]+)`", events_section))
+    assert set(EVENT_ERROR_CODE_MEANINGS) <= events_codes
 
     # The released bullet is a historical record: it lists what 0.8.0 added,
     # including codes later cut. So it is compared against the historical set,
