@@ -9,10 +9,20 @@ from datetime import datetime, timezone
 from typing import Any, TypeVar
 
 from ontary._typed_api import api_name_for, declared_snapshot
+from ontary.actions import _event_payload_to_storage
+from ontary.audit import EmittedEvent
 from ontary.authoring import Ontology
 from ontary.client import OntologyRuntime
 from ontary.errors import ValidationFailed
-from ontary.model import ActionParams, CapabilityHandle, LinkHandle, OntologyObject, hydrate
+from ontary.model import (
+    ActionParams,
+    CapabilityHandle,
+    Event,
+    LinkHandle,
+    OntologyObject,
+    _class_stamp,
+    hydrate,
+)
 from ontary.security import Consumer
 from ontary.store import Source, Store
 
@@ -46,6 +56,7 @@ class Scenario:
         self._role = ""
         self._outcome: Ok | Err | None = None
         self._before: _Snapshot | None = None
+        self._step_events: list[EmittedEvent] | None = None
 
     def _require_setup(self) -> None:
         if self._step:
@@ -135,6 +146,8 @@ class Scenario:
         self._action = type(params).__name__
         self._role = by.role
         self._outcome = None
+        self._step_events = None
+        audit_position = len(self._store.audit_entries())
         try:
             result = self._runtime.for_consumer(by).execute(params)
         except Exception as exc:
@@ -144,7 +157,104 @@ class Scenario:
             self._outcome = Err(code, exc)
         else:
             self._outcome = Ok(result)
+            api_name = type(params).__dict__.get("_ontary_api_name", self._action)
+            new_entries = self._store.audit_entries()[audit_position:]
+            own_entry = next(
+                (
+                    entry
+                    for entry in reversed(new_entries)
+                    if entry.kind == "action"
+                    and entry.outcome == "ok"
+                    and entry.action == api_name
+                ),
+                None,
+            )
+            if own_entry is not None:
+                self._step_events = list(own_entry.events)
         return self
+
+    def _event_api_name(self, event: Event) -> str:
+        cls = type(event)
+        name, registry = _class_stamp(cls)
+        if name is None or registry is None:
+            raise ValidationFailed(
+                f"{cls.__name__!r} is not decorated with @ontology.event(...) "
+                "-- it has no registered api_name",
+                code="UNKNOWN_NAME",
+            )
+        if registry is not self._ontology.registry:
+            raise ValidationFailed(
+                f"{cls.__name__!r} (api_name {name!r}) was registered on a "
+                "different Ontology -- it is not part of this scenario's ontology",
+                code="UNKNOWN_NAME",
+            )
+        try:
+            self._ontology.registry.get_event_type(name)
+        except ValidationFailed as exc:
+            raise ValidationFailed(
+                f"{cls.__name__!r} (api_name {name!r}) is not registered "
+                "on this scenario's ontology",
+                code="UNKNOWN_NAME",
+            ) from exc
+        return name
+
+    def then_event(
+        self, event: Event, *, about: OntologyObject | str | None = None
+    ) -> Scenario:
+        """Check an unredacted event emitted by the last successful ``when``."""
+        if isinstance(self._outcome, Err):
+            raise AssertionError(
+                f"then_event: {self._step_description()} failed with {self._outcome.code}"
+            ) from self._outcome.exc
+        if not isinstance(self._outcome, Ok):
+            raise AssertionError("then_event: no successful when to check")
+
+        event_name = self._event_api_name(event)
+        event_def = self._ontology.registry.get_event_type(event_name)
+        expected_payload = _event_payload_to_storage(event, event_def)
+
+        expected_about_type: str | None = None
+        expected_about_id: str | None = None
+        if isinstance(about, str):
+            expected_about_id = about
+        elif about is not None:
+            expected_about_type = api_name_for(
+                type(about), self._ontology.registry, owner="scenario"
+            )
+            primary_key = self._ontology.registry.get_object_type(
+                expected_about_type
+            ).primary_key
+            expected_about_id = str(getattr(about, primary_key))
+
+        emitted_events = self._step_events or []
+        for emitted in emitted_events:
+            if emitted.event_type != event_name or emitted.payload != expected_payload:
+                continue
+            if expected_about_id is not None and emitted.about_id != expected_about_id:
+                continue
+            if expected_about_type is not None and emitted.about_type != expected_about_type:
+                continue
+            return self
+
+        expectation = (
+            f"then_event: {self._step_description()}: expected {event_name} "
+            f"payload {expected_payload!r}"
+        )
+        if expected_about_id is not None:
+            if expected_about_type is None:
+                expectation += f" about id {expected_about_id!r}"
+            else:
+                expectation += (
+                    f" about ({expected_about_type!r}, {expected_about_id!r})"
+                )
+        if not emitted_events:
+            raise AssertionError(f"{expectation}; no events")
+        actual = "\n".join(
+            f"  {item.event_type} about ({item.about_type!r}, {item.about_id!r}) "
+            f"payload {item.payload!r}"
+            for item in emitted_events
+        )
+        raise AssertionError(f"{expectation}; emitted:\n{actual}")
 
     def then(self, cls: type[_F], pk: str, **fields: Any) -> Scenario:
         """Check named properties against the unredacted current stored row."""

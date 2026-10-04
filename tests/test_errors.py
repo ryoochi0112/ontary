@@ -59,6 +59,8 @@ ENGINE_EXCEPTION_CODES: dict[str, tuple[type[OntaryError], str]] = {
     "FUNCTION_ERROR": (PreconditionFailed, "precondition"),
     "ONTOLOGY_INVALID": (ValidationFailed, "validation"),
     "UNDECLARED_CAPABILITY": (ValidationFailed, "validation"),
+    "UNDECLARED_EVENT": (ValidationFailed, "validation"),
+    "EVENT_SUBJECT_INVALID": (ValidationFailed, "validation"),
     "CAPABILITY_NOT_PROVIDED": (PreconditionFailed, "precondition"),
     "UNKNOWN_FIELD": (ValidationFailed, "validation"),
     "UNKNOWN_NAME": (ValidationFailed, "validation"),

@@ -2,7 +2,7 @@
 
 **English** · [日本語](api-reference.ja.md) · [← README](../README.md)
 
-The curated front door of `ontary`: **43 names** in `__all__`. The rest of the
+The curated front door of `ontary`: **45 names** in `__all__`. The rest of the
 engine remains available from its canonical submodule (`ontary.meta`,
 `ontary.store`, and so on).
 
@@ -32,20 +32,20 @@ read, serve — start with the [README](../README.md).
 
 ## Front door
 
-`__all__` is sorted, duplicate-free, importable, and exactly 43 names. These
+`__all__` is sorted, duplicate-free, importable, and exactly 45 names. These
 are the names an ontology author should reach for without choosing an engine
 namespace.
 
 ### Authoring vocabulary
 
 `ActionContext`, `ActionParams`, `BoundQuery`, `CapabilityHandle`, `Cardinality`,
-`Consumer`, `DirectProperty`, `CustomResolver`, `FunctionParams`, `LinkHandle`, `Ontology`,
+`Consumer`, `DirectProperty`, `CustomResolver`, `Event`, `FunctionParams`, `LinkHandle`, `Ontology`,
 `OntologyObject`, `RowVisibilityStore`, `SelfScope`, `Sensitivity`,
 `Source`, `Store`, `ViaLink`, `prop`, `ref`, `scope_ref`, `target`.
 
 ### Runtime entries
 
-`Declarations`, `Finding`, `InMemoryStore`, `ObjectStore`,
+`Declarations`, `EventRecord`, `Finding`, `InMemoryStore`, `ObjectStore`,
 `OntologyClient`, `Page`, `PostgresStore`, `ScopePolicy`, `TypedPage`,
 `__version__`, `build_mcp_server`, and `declarations`.
 
@@ -55,7 +55,7 @@ namespace.
 `PermissionDenied`, `PreconditionFailed`, `ValidationFailed`, and
 `VisibilityError`.
 
-The 42-name count is asserted exactly by `tests/test_docs.py`, so a
+The 45-name count is asserted exactly by `tests/test_docs.py`, so a
 new root export cannot quietly expand this vocabulary.
 
 ```python
@@ -426,6 +426,82 @@ class EscalateTicketParams(ActionParams):
     reason: str | None = None
 ```
 
+#### Events: `Event`, `@ontology.event`, `emits=`, `ctx.emit`, `client.events`
+
+An event is a business fact an action records, such as "order shipped". It is not
+audit: audit says who did what, and an event says what happened. Declare an event
+as an `Event` subclass. Its fields use the same type rules as `ActionParams`:
+scalars, choices, and flat structs. `Sensitivity` works as it does on properties,
+and a restricted field must be optional. An event has no primary key, no
+transitions, and no `scope_level`.
+
+```python
+from ontary import Event
+
+@ontology.event(description="An order has shipped.")
+class OrderShipped(Event):
+    carrier: str
+```
+
+`@ontology.event(*, description=None, api_name=None, accept=())` registers the class
+as an `EventTypeDef`. The class must subclass `Event`, and one class may be decorated
+once; otherwise the call raises `ONTOLOGY_INVALID`. `accept=` takes
+`"EVENT_NEVER_EMITTED"`.
+
+An action lists the events it may emit with `emits=[...]`. `ActionTypeDef.emits` holds
+their api names, which MCP `list_action_types` shows as `emits`. A class in
+`emits` that is not a registered event of the same `Ontology` raises
+`ONTOLOGY_INVALID` at declaration.
+
+```python
+@ontology.action(ShipOrder, target=Order, roles=["ops"], emits=[OrderShipped])
+def ship(ctx: ActionContext, p: ShipOrder) -> dict[str, Any]:
+    order = ctx.get(Order, p.order_id)
+    ...
+    ctx.emit(OrderShipped(carrier=p.carrier))
+    return {}
+```
+
+`ctx.emit(event, *, about=None)` records the event inside the action's transaction.
+The subject defaults to the action's resolved target. When the action has no target
+id, such as a creating action, pass `about=<object>`. That object must come from this
+context (`get`, `all`, `create`, or `traverse`) and be of the action's target type.
+One invocation may emit many events, including the same type twice; they are kept in
+emission order. The event's `ts` is `ctx.now()`. Refusals raise inside the handler, so
+the action rolls back and is audited as `error`:
+
+| Case | Code |
+| --- | --- |
+| The event class is not registered on this `Ontology` | `UNKNOWN_NAME` |
+| The event is not in the action's `emits` | `UNDECLARED_EVENT` |
+| The subject cannot be resolved, is not of the target type, was not handed out by this context, or has no row yet | `EVENT_SUBJECT_INVALID` |
+
+`client.events(event_type=None, /, *, about=None, since=None, until=None)` returns
+the events the client's consumer may see, as `list[EventRecord[E]]`, in emission
+order. `about` is an object or a `(cls, id)` tuple. `since` is inclusive and `until`
+is exclusive; both must be timezone-aware. There is no paging. Passing an event class
+hydrates each payload into that class; without one, each payload is a plain `Event`
+that keeps its stored fields.
+
+```python
+records = client.events(OrderShipped, about=(Order, "o-1"))
+records[0].payload.carrier
+```
+
+An event is visible when its subject's latest row passes the consumer's scope and
+`row_visibility`. For a retired subject, that row is the last one before retirement.
+After a subject moves scope, the new scope sees its whole history and the old scope
+sees none. An event type no longer declared is hidden. Payload fields restricted by
+`Sensitivity` for the consumer kind are `None` in the payload and listed in
+`redacted_fields`.
+
+`EventRecord` is frozen and generic. Its fields are `event_type`, `about_type`,
+`about_id`, `ts`, `invocation_id`, `payload`, and `redacted_fields: frozenset[str]`.
+
+Events are stored on the invocation's audit row, so they commit or roll back with
+the action. `AuditEntry.events` lists them unredacted; see
+[`AuditEntry`](#auditentry).
+
 #### Advisory findings: `Finding.guide`, `accept`, and `snapshot`
 
 `ontology.diagnose()` returns a `Finding` for each advisory code (the modelling
@@ -449,9 +525,10 @@ the fields `code`, `severity`, `location`, `message`, `fix_hint`, and `guide`.
   | `@ontology.object(...)` | `accept=` | `FORBIDDEN_TYPE_NAME`, `AUDIT_TYPE` |
   | `@ontology.action(...)` | `accept=` | `CRUD_ACTION_NAME`, `MICRO_ACTION` |
   | `@ontology.function(...)` | `accept=` | `CRUD_ACTION_NAME` |
+  | `@ontology.event(...)` | `accept=` | `EVENT_NEVER_EMITTED` |
 
   The accepted names are the `Literal` aliases `PropertyLint`, `ObjectLint`,
-  `ActionLint`, and `FunctionLint` in `ontary.meta`. They are not exported from
+  `ActionLint`, `FunctionLint`, and `EventLint` in `ontary.meta`. They are not exported from
   `ontary`, but they make a wrong code a `mypy` error at the call site. The same
   `accept` field (`tuple[str, ...]`, default `()`) exists on `PropertyDef`,
   `ObjectTypeDef`, `ActionTypeDef`, and `FunctionDef`, so a hand-built descriptor
@@ -905,6 +982,7 @@ ctx.save(order)                   # writes only `status`
 | --- | --- |
 | `.capability(handle) -> P` | Fetch a declared capability |
 | `.consumer` | The calling `Consumer` |
+| `.emit(event, *, about=None)` | Record a declared event on this invocation. See Events under Authoring an ontology |
 | `.now() -> datetime` | The invocation's single instant (see `Ontology.bind`). Use it instead of `datetime.now()` or a clock capability |
 
 `get` and `all` are trusted handler reads. They return raw, unredacted, and
@@ -943,7 +1021,7 @@ could be rolled back underneath the audit log.
 
 `ts`, `actor`, `role`, `action`, `target_type`, `target_id`, `params`, `outcome`,
 `invocation_id`, `error_code`, plus integrity records: `writes: list[WriteRecord]`,
-`capability_accesses: list[CapabilityAccessRecord]`.
+`capability_accesses: list[CapabilityAccessRecord]`, `events: list[EmittedEvent]`.
 
 **`kind: Literal["action", "function"]`** — what produced the entry. Actions and
 functions share one log; `kind` is how a reader tells them apart, since nothing stops
@@ -957,6 +1035,10 @@ entries by this value rather than by matching fields and append order — two ca
 the same action with the same params are otherwise indistinguishable. `None` means
 the entry predates the field (a store file written by an older engine); it is never
 invented for such rows.
+
+**`events: list[EmittedEvent]`** — the events an `ok` action entry emitted, in emission
+order and unredacted, since audit is the administrative view. Every `denied` and
+`error` entry lists none.
 
 **`unscoped_params: list[str]`** — the `target(...)` parameters that skipped the
 action scope gate because they refer to a `scope="unscoped"` type. For them the
@@ -978,6 +1060,7 @@ the code the MCP server reports for it. `None` on an `ok` entry.
 - `WriteRecord` — `op` (`create`/`update`/`link`), `object_type`, `link_type`,
   `object_id`, `from_id`, `to_id`
 - `CapabilityAccessRecord` — `api_name`, `count`
+- `EmittedEvent` — `event_type`, `about_type`, `about_id`, `payload` (storage form)
 
 ---
 
@@ -1668,6 +1751,8 @@ table below is generated from it.
 | `ONTOLOGY_INVALID` | A declaration was rejected: `validate()` found invalid cross-references, or an authoring call (`@ontology.object(...)`, `ontology.link(...)`, `.definition`) refused a kwarg of the wrong shape: a misspelled `scope`/`cardinality` literal, a rule not wrapped in a list, a non-callable `row_visibility`, empty `scope_levels`, or `min_n` below 1. |
 | `SCOPE_POLICY_ERROR` | A ScopePolicy declaration is unusable: a rule references an undeclared object type, link type, or scope level; a type declares an empty contributor rule list; a type is listed in unscoped_types while also declaring scope rules; or an action's scope parameter refers to an unscoped type. |
 | `UNDECLARED_CAPABILITY` | A handler requested a capability its action or function did not declare. |
+| `UNDECLARED_EVENT` | An action emitted an event type it did not declare. |
+| `EVENT_SUBJECT_INVALID` | An emitted event's subject could not be resolved to a valid target object. |
 | `UNKNOWN_ACTION` | An action name is unregistered on the OntologyRegistry, or has no handler bound to it. |
 | `UNKNOWN_FIELD` | A typed `get`/`list` call named a key that is not one of the target class's declared properties (spec typed-authoring AC7). The existence-only check runs client-side before the guarded read layer; a hidden-but-declared key still reaches the visibility kind unchanged, and the string-form surface keeps its silent-non-match behavior (AC8). The error lives here since C3 of the staged refactor (previously `ontary.functions`, which re-exports it). |
 | `UNKNOWN_LINK_TYPE` | An operation referenced an unregistered link type. |
@@ -1684,7 +1769,7 @@ table below is generated from it.
 | `MIN_N_VIOLATION` | An aggregate would be computed over fewer than min_n distinct contributors. |
 | `VISIBILITY_DENIED` | A single-object read/write targeted an object outside the consumer's scope. |
 
-*55 codes across 7 kinds.*
+*57 codes across 7 kinds.*
 
 ---
 

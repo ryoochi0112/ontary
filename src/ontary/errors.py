@@ -327,6 +327,16 @@ ERROR_CODES: dict[str, ErrorCodeInfo] = {
             "A handler requested a capability its action or function did not declare."
         ),
     ),
+    "UNDECLARED_EVENT": ErrorCodeInfo(
+        kind="validation",
+        description="An action emitted an event type it did not declare.",
+    ),
+    "EVENT_SUBJECT_INVALID": ErrorCodeInfo(
+        kind="validation",
+        description=(
+            "An emitted event's subject could not be resolved to a valid target object."
+        ),
+    ),
     "CAPABILITY_NOT_PROVIDED": ErrorCodeInfo(
         kind="precondition",
         description="A declared capability had no provider bound for this call.",

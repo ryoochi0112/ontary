@@ -50,6 +50,7 @@ PropertyLint = Literal["STORED_DERIVABLE", "FREE_TEXT_STATUS"]
 ObjectLint = Literal["FORBIDDEN_TYPE_NAME", "AUDIT_TYPE"]
 ActionLint = Literal["CRUD_ACTION_NAME", "MICRO_ACTION"]
 FunctionLint = Literal["CRUD_ACTION_NAME"]
+EventLint = Literal["EVENT_NEVER_EMITTED"]
 
 
 def _validated_accept(
@@ -529,6 +530,20 @@ class CapabilityDef(BaseModel):
     description: str
 
 
+class EventTypeDef(BaseModel):
+    api_name: str
+    description: str | None
+    properties: list[PropertyDef]
+    accept: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def _valid_accept(self) -> EventTypeDef:
+        self.accept = _validated_accept(
+            f"EventTypeDef {self.api_name!r}", self.accept, get_args(EventLint)
+        )
+        return self
+
+
 class ActionTypeDef(BaseModel):
     accept: tuple[str, ...] = ()
     api_name: str
@@ -538,6 +553,7 @@ class ActionTypeDef(BaseModel):
     description: str
     parameters: list[ActionParameterDef] = []
     capabilities: list[str] = []
+    emits: list[str] = []
 
     @model_validator(mode="after")
     def _valid_accept(self) -> ActionTypeDef:
@@ -649,6 +665,7 @@ class OntologyRegistry:
         self._object_types: dict[str, ObjectTypeDef] = {}
         self._link_types: dict[str, LinkTypeDef] = {}
         self._action_types: dict[str, ActionTypeDef] = {}
+        self._event_types: dict[str, EventTypeDef] = {}
         self._functions: dict[str, FunctionDef] = {}
         self._capabilities: dict[str, CapabilityDef] = {}
 
@@ -675,6 +692,14 @@ class OntologyRegistry:
                 code="ONTOLOGY_INVALID",
             )
         self._action_types[action.api_name] = action
+
+    def register_event_type(self, event: EventTypeDef) -> None:
+        if event.api_name in self._event_types:
+            raise ValidationFailed(
+                f"duplicate EventTypeDef api_name: {event.api_name!r}",
+                code="ONTOLOGY_INVALID",
+            )
+        self._event_types[event.api_name] = event
 
     def register_function(self, fn: FunctionDef) -> None:
         if fn.api_name in self._functions:
@@ -703,6 +728,10 @@ class OntologyRegistry:
     @property
     def action_types(self) -> dict[str, ActionTypeDef]:
         return dict(self._action_types)
+
+    @property
+    def event_types(self) -> dict[str, EventTypeDef]:
+        return dict(self._event_types)
 
     @property
     def functions(self) -> dict[str, FunctionDef]:
@@ -737,6 +766,15 @@ class OntologyRegistry:
             raise ValidationFailed(
                 f"unregistered action type: {api_name!r}",
                 code="UNKNOWN_ACTION",
+            ) from exc
+
+    def get_event_type(self, api_name: str) -> EventTypeDef:
+        try:
+            return self._event_types[api_name]
+        except KeyError as exc:
+            raise ValidationFailed(
+                f"unregistered event type: {api_name!r}",
+                code="UNKNOWN_NAME",
             ) from exc
 
     def get_function(self, api_name: str) -> FunctionDef:
@@ -838,6 +876,12 @@ class OntologyRegistry:
                     f"ActionTypeDef {action.api_name!r}: dangling target_type "
                     f"{action.target_type!r}"
                 )
+
+            for event in action.emits:
+                if event not in self._event_types:
+                    errors.append(
+                        f"ActionTypeDef {action.api_name!r}: dangling event {event!r}"
+                    )
 
             for capability in action.capabilities:
                 if capability not in self._capabilities:

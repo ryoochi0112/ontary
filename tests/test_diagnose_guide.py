@@ -44,6 +44,7 @@ def test_guide_contract_maps_all_current_advisory_codes() -> None:
         "MIN_N_UNSET": ("security-design",),
         "FREE_TEXT_STATUS": ("choice-properties",),
         "AUDIT_TYPE": ("the-golden-hammer",),
+        "EVENT_NEVER_EMITTED": ("events",),
     }
     assert diagnose_module.ADVISORY_CODES == diagnose_module.GUIDE_ANCHORS.keys()
 

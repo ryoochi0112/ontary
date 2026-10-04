@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
+import json
 import warnings
 from enum import StrEnum
 from typing import Any, Literal
 
 import pytest
 
+import ontary.cli as cli
 import ontary.diagnose as diagnose_module
 from ontary import (
     ActionParams,
     Cardinality,
+    Event,
     ObjectStore,
     Ontology,
     OntologyObject,
@@ -20,7 +23,7 @@ from ontary import (
     prop,
     target,
 )
-from ontary.meta import ActionLint, FunctionLint, ObjectLint, PropertyLint
+from ontary.meta import ActionLint, EventLint, FunctionLint, ObjectLint, PropertyLint
 
 
 def _scoped_ontology(name: str, *, min_n: int = 3) -> Ontology:
@@ -327,6 +330,7 @@ def test_combined_ontology_reports_three_lints_in_one_sweep() -> None:
         ("MIN_N_UNSET", "_min_n_unset_findings"),
         ("FREE_TEXT_STATUS", "_free_text_status_findings"),
         ("AUDIT_TYPE", "_audit_type_findings"),
+        ("EVENT_NEVER_EMITTED", "_event_never_emitted_findings"),
     ],
 )
 def test_each_lint_is_pinned_in_rules_tuple(code: str, rule_name: str) -> None:
@@ -727,3 +731,85 @@ def test_warn_only_validate_and_bind_emit_no_python_warnings() -> None:
         ontology.validate()
         ontology.bind(ObjectStore(ontology.registry))
     assert captured == []
+
+
+def _event_ontology(
+    *, api_name: str = "TicketApproved", emits: bool = False,
+    accept: EventLint | tuple[()] = (),
+) -> Ontology:
+    ontology = _scoped_ontology("events")
+
+    @ontology.event(api_name=api_name, accept=accept)
+    class Approved(Event):
+        reason: str
+
+    @ontology.object(layer="L0", scope="unscoped")
+    class Ticket(OntologyObject):
+        id: str = prop(primary_key=True)
+
+    class ApproveTicket(ActionParams):
+        ticket_id: str = target(Ticket)
+
+    @ontology.action(
+        ApproveTicket, target=Ticket, roles=["Operator"],
+        emits=[Approved] if emits else [],
+    )
+    def handler(_ctx: Any, _params: ApproveTicket) -> dict[str, Any]:
+        return {}
+
+    return ontology
+
+
+@pytest.mark.parametrize("api_name", ["TicketApproved", "OrderShipped"])
+def test_event_never_emitted_golden_finding_is_byte_exact(api_name: str) -> None:
+    findings = _event_ontology(api_name=api_name).diagnose()
+    assert len(findings) == 1
+    assert findings[0].model_dump() == {
+        "code": "EVENT_NEVER_EMITTED",
+        "severity": "warn",
+        "location": f"event {api_name}",
+        "message": f"event {api_name} is declared but appears in no action's emits",
+        "fix_hint": (
+            f"add {api_name} to an action's emits=[{api_name}] or remove it; "
+            'if the unused event is intentional, add accept="EVENT_NEVER_EMITTED"'
+        ),
+        "guide": diagnose_module.GUIDE_URL + "#events",
+    }
+
+
+def test_event_emits_declaration_silences_finding_without_execution() -> None:
+    ontology = _event_ontology(emits=True)
+    assert ontology.diagnose() == []
+
+    @ontology.event()
+    class TicketRejected(Event):
+        reason: str
+
+    assert [f.location for f in ontology.diagnose()] == ["event TicketRejected"]
+
+
+def test_event_accept_silences_only_that_event_without_emits() -> None:
+    ontology = _event_ontology(accept="EVENT_NEVER_EMITTED")
+    assert ontology.diagnose() == []
+
+    @ontology.event()
+    class TicketRejected(Event):
+        reason: str
+
+    assert [f.location for f in ontology.diagnose()] == ["event TicketRejected"]
+
+
+def test_event_validate_strict_warning_exits_one_and_json_is_unchanged(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    target_name = f"{__name__}:_event_ontology"
+    normal_code = cli.main(["validate", target_name, "--json"])
+    normal_output = capsys.readouterr().out
+    strict_code = cli.main(["validate", target_name, "--strict", "--json"])
+    strict_output = capsys.readouterr().out
+
+    assert normal_code == 0
+    assert strict_code == 1
+    assert json.loads(strict_output) == json.loads(normal_output)
+    assert [item["code"] for item in json.loads(strict_output)] == ["EVENT_NEVER_EMITTED"]
+    assert [item["severity"] for item in json.loads(strict_output)] == ["warn"]

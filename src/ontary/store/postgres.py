@@ -784,6 +784,7 @@ class PostgresStore:
                     fields.principal,
                     fields.unscoped_params,
                     fields.error_code,
+                    fields.events,
                 ),
                 dialect="postgres",
             )

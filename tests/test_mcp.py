@@ -65,6 +65,7 @@ from ontary.mcp_server import (
     main,
 )
 from ontary.meta import Cardinality, Sensitivity
+from ontary.model import Event
 from ontary.scope import DirectProperty, SelfScope, ViaLink
 from ontary.security import Consumer
 from ontary.store import (
@@ -352,6 +353,37 @@ def test_list_action_types_matches_registry() -> None:
     assert names == {"RelocateBook"}
     action = payload["action_types"][0]
     assert {p["name"] for p in action["parameters"]} == {"book_id", "shelf_id"}
+    assert action["emits"] == []
+
+
+def test_list_action_types_lists_emitted_event_api_names() -> None:
+    ontology, Book = _base_library_ontology()
+
+    @ontology.event(api_name="bookRelabeled")
+    class BookRelabeled(Event):
+        title: str
+
+    @ontology.event(api_name="bookReviewed")
+    class BookReviewed(Event):
+        rating: float
+
+    class RelabelBook(ActionParams):
+        book_id: str = target(Book)
+
+    @ontology.action(
+        RelabelBook, target=Book, roles=["Librarian"],
+        emits=[BookRelabeled, BookReviewed],
+    )
+    def relabel(_ctx: ActionContext, _params: RelabelBook) -> dict[str, Any]:
+        return {}
+
+    ontology.validate()
+    server = build_mcp_server(ontology, ObjectStore(ontology.registry), _librarian())
+    actions = {
+        action["api_name"]: action
+        for action in _call(server, "list_action_types", {})["action_types"]
+    }
+    assert actions["RelabelBook"]["emits"] == ["bookRelabeled", "bookReviewed"]
 
 
 def test_list_functions_matches_registry() -> None:

@@ -24,6 +24,7 @@ from ontary import _runtime
 from ontary.audit import (
     AuditEntry,
     CapabilityAccessRecord,
+    EmittedEvent,
     WriteRecord,
     _safe_json_dumps,
 )
@@ -73,6 +74,7 @@ class AuditRowFields(NamedTuple):
     principal: str | None
     unscoped_params: str
     error_code: str | None
+    events: str
 
 
 def encode_audit_entry(entry: AuditEntry) -> AuditRowFields:
@@ -97,6 +99,10 @@ def encode_audit_entry(entry: AuditEntry) -> AuditRowFields:
         principal=entry.principal,
         unscoped_params=_safe_json_dumps(entry.unscoped_params),
         error_code=entry.error_code,
+        events=_safe_json_dumps([
+            {**event.model_dump(), "payload": json.loads(_safe_json_dumps(event.payload))}
+            for event in entry.events
+        ]),
     )
 
 
@@ -127,6 +133,7 @@ def decode_audit_entry(row: AuditRowLike) -> AuditEntry:
         principal=row["principal"],
         unscoped_params=json.loads(row["unscoped_params"]),
         error_code=row["error_code"],
+        events=[EmittedEvent(**event) for event in json.loads(row["events"])],
     )
 
 

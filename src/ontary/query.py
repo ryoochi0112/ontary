@@ -82,7 +82,7 @@ went away:
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
 from itertools import islice
@@ -90,8 +90,9 @@ from typing import Any, Final, Generic, Literal, NoReturn, TypeVar, final, overl
 
 from pydantic import BaseModel, ConfigDict
 
+from ontary.audit import AuditEntry, EmittedEvent
 from ontary.errors import InternalError, ValidationFailed, VisibilityError
-from ontary.meta import OntologyRegistry
+from ontary.meta import OntologyRegistry, PropertyDef
 from ontary.scope import (
     DirectProperty,
     RowVisibilityStore,
@@ -103,6 +104,7 @@ from ontary.scope import (
 )
 from ontary.security import Consumer, covers_scope
 from ontary.store import DEFAULT_BATCH, Store, StoredObject
+from ontary.store._shared import iso_instant
 from ontary.typesys import (
     PropertyType,
     _to_storage_scalar,
@@ -648,19 +650,27 @@ class GuardedQuery:
         obj: StoredObject,
         *,
         scope_cache: _ScopeReadCache | None = None,
+        resolved_scope: dict[str, str | None] | None = None,
     ) -> bool:
+        """Apply scope coverage and row policy using the read's scope frame.
+
+        Object reads resolve the current frame here. Event reads supply the
+        subject's scope, resolved at its retirement instant when it is retired.
+        """
         # The V/S/R/W family in
         # `test_exists_bound_matches_unbounded_walk_over_generated_row_shapes`
         # models both rejection branches here; a new branch needs a new kind.
         obj_type = obj.lineage.object_type
         if obj_type not in self._policy.unscoped_types:
-            resolved = resolve_owning_scope(
-                self._policy,
-                self._store,
-                obj_type,
-                obj.lineage.object_id,
-                cache=scope_cache,
-            )
+            resolved = resolved_scope
+            if resolved is None:
+                resolved = resolve_owning_scope(
+                    self._policy,
+                    self._store,
+                    obj_type,
+                    obj.lineage.object_id,
+                    cache=scope_cache,
+                )
             if not covers_scope(self._policy, consumer, resolved):
                 return False
 
@@ -679,6 +689,14 @@ class GuardedQuery:
         )
 
     # -- redaction -----------------------------------------------------
+
+    @staticmethod
+    def _hidden_properties(consumer: Consumer, properties: Sequence[PropertyDef]) -> set[str]:
+        return {
+            prop.name for prop in properties
+            if (consumer.kind == "human" and not prop.sensitivity.human_visible)
+            or (consumer.kind == "ai" and not prop.sensitivity.ai_usable)
+        }
 
     def _hidden_fields(
         self,
@@ -702,12 +720,7 @@ class GuardedQuery:
         except ValidationFailed:
             return set()
 
-        hidden: set[str] = set()
-        for prop in obj_def.properties:
-            if consumer.kind == "human" and not prop.sensitivity.human_visible:
-                hidden.add(prop.name)
-            if consumer.kind == "ai" and not prop.sensitivity.ai_usable:
-                hidden.add(prop.name)
+        hidden = self._hidden_properties(consumer, obj_def.properties)
 
         if disclosure == "supplied":
             # A consumer always SUPPLIES, never LEARNS, a scope-routing value
@@ -739,6 +752,73 @@ class GuardedQuery:
         hidden = self._hidden_fields(consumer, obj_type, disclosure="learned")
         payload = {k: v for k, v in obj.payload.items() if k not in hidden}
         return StoredObject(payload=payload, lineage=obj.lineage)
+
+    def visible_events(
+        self,
+        consumer: Consumer,
+        *,
+        event_type: str | None = None,
+        about: tuple[str, str] | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+    ) -> list[tuple[AuditEntry, EmittedEvent, frozenset[str]]]:
+        """Scan the tenant's audit log in seq and emission order (#47).
+
+        Visibility follows the subject's latest row, including its final row
+        after retirement. Subject policy checks use declarations alone and run
+        before reading audit. Events outside those checked types are hidden.
+        Reads cost O(audit log); there is no paging or SQL pushdown yet.
+        """
+        for boundary in (since, until):
+            if boundary is not None:
+                iso_instant(boundary)
+
+        event_types = self._registry.event_types
+        selected_event_types = set(event_types) if event_type is None else {event_type} & event_types.keys()
+        subject_types = {
+            action.target_type for action in self._registry.action_types.values()
+            if selected_event_types.intersection(action.emits)
+        }
+        if about is not None:
+            subject_types.add(about[0])
+        for subject_type in sorted(subject_types):
+            self._require_coherent_scope(subject_type)
+
+        candidates = [
+            (entry, event)
+            for entry in self._store.audit_entries()
+            if entry.kind == "action" and entry.outcome == "ok"
+            and (since is None or entry.ts >= since)
+            and (until is None or entry.ts < until)
+            for event in entry.events
+            if event.event_type in event_types
+            and event.about_type in subject_types
+            and (event_type is None or event.event_type == event_type)
+            and (about is None or (event.about_type, event.about_id) == about)
+        ]
+
+        scope_cache = _ScopeReadCache()
+        visible: list[tuple[AuditEntry, EmittedEvent, frozenset[str]]] = []
+        for entry, event in candidates:
+            subject = scope_cache.read_last(self._store, event.about_type, event.about_id)
+            if subject is None:
+                continue
+            resolved_scope = None
+            if event.about_type not in self._policy.unscoped_types:
+                resolved_scope = resolve_owning_scope(
+                    self._policy, self._store, event.about_type, event.about_id,
+                    cache=scope_cache, include_retired=True,
+                )
+            if not self._visible(
+                consumer, subject, scope_cache=scope_cache, resolved_scope=resolved_scope,
+            ):
+                continue
+            hidden = frozenset(self._hidden_properties(
+                consumer, event_types[event.event_type].properties,
+            ))
+            payload = {key: value for key, value in event.payload.items() if key not in hidden}
+            visible.append((entry, event.model_copy(update={"payload": payload}), hidden))
+        return visible
 
     def _validate_where_keys(
         self, obj_type: str, where: _NormalizedWhere | None

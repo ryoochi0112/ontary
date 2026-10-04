@@ -195,6 +195,56 @@ def shipped_needs_payment(order: Order) -> bool:
 宣言済みの任意の状態から開始できます。既存行への ingest update には引き続き遷移グラフが適用され、
 グラフで許可されない状態へ移すことはできません。
 
+### Events
+
+イベントはビジネス上の事実、たとえば「注文が出荷された」を表します。読み手は、イベントの対象に
+かかるオブジェクトのセキュリティと同じ条件でイベントを見ます。監査は別の記録です。監査はエンジンが
+残す管理用の「誰が何をしたか」の履歴であり、イベントは「何が起きたか」です。事実はイベントとして
+記録し、事実を知るために監査ログを読まないでください。
+
+イベント名は過去形にします。すでに起きたことを表すためです。`OrderShipped` とし、`ShipOrder` とは
+しません。命令形の名前は、それを引き起こすアクションのものです。
+
+事実を保持するために `*Event` というオブジェクト型を宣言しないでください。同じ事実を二重に保存し、
+エンジンの可視性ルールも回避してしまいます。`Event` を宣言し、アクションが `emits=` で発行するように
+します。
+
+イベントの対象は、アクションのターゲットです。ターゲット ID を持たないアクション(作成アクション)や、
+コンテキストが渡した、アクションのターゲットと同じ型の別のオブジェクトに関する事実のときは、
+`ctx.emit` に `about=` を渡します。
+イベントは保存先の監査行と同じ保持期間を共有します。呼び出しと一緒にコミットまたはロールバックされ、
+その行と同じ期間だけ残ります。
+
+```python
+from typing import Any
+
+from ontary import ActionContext, ActionParams, Event, Ontology, OntologyObject, prop, target
+
+_ontology = Ontology("orders", scope_levels=["team"])
+
+
+@_ontology.object(layer="L0", scope="unscoped")
+class Order(OntologyObject):
+    id: str = prop(primary_key=True)
+
+
+@_ontology.event(description="An order has shipped.")
+class OrderShipped(Event):
+    carrier: str
+
+
+class ShipOrder(ActionParams):
+    order_id: str = target(Order)
+    carrier: str
+
+
+@_ontology.action(ShipOrder, target=Order, roles=["ops"], emits=[OrderShipped])
+def ship(ctx: ActionContext, p: ShipOrder) -> dict[str, Any]:
+    ctx.get(Order, p.order_id)
+    ctx.emit(OrderShipped(carrier=p.carrier))
+    return {}
+```
+
 ### Interfaces
 
 Foundry の interface はオブジェクト型間の共通契約を定義します。**同等物はまだありません。

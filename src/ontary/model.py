@@ -11,6 +11,7 @@ re-exports every public name, so author-facing imports are unchanged.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, ClassVar, Generic, TypeVar
 
 from pydantic import BaseModel, ConfigDict, PrivateAttr, ValidationError
@@ -24,6 +25,8 @@ from ontary.typesys import _storage_scalar_violation
 __all__ = [
     "ActionParams",
     "CapabilityHandle",
+    "Event",
+    "EventRecord",
     "FunctionParams",
     "LinkHandle",
     "OntologyObject",
@@ -153,6 +156,42 @@ class ActionParams(BaseModel):
 
     _ontary_api_name: ClassVar[str | None] = None
     _ontary_registry: ClassVar[OntologyRegistry | None] = None
+
+
+class Event(BaseModel):
+    """Base class for declared business facts.
+
+    Declaration stamps belong to the class itself; resolve them through
+    `_class_stamp` so an undecorated subclass cannot inherit registration.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    _ontary_api_name: ClassVar[str | None] = None
+    _ontary_registry: ClassVar[OntologyRegistry | None] = None
+
+
+_E = TypeVar("_E", bound=Event)
+
+
+class EventRecord(BaseModel, Generic[_E]):
+    """A visible business fact and the metadata of its invocation."""
+
+    model_config = ConfigDict(frozen=True)
+
+    event_type: str
+    about_type: str
+    about_id: str
+    ts: datetime
+    invocation_id: str | None
+    payload: _E
+    redacted_fields: frozenset[str]
+
+
+class _UnfilteredEvent(Event):
+    """Preserve payload fields when a read supplies no author model class."""
+
+    model_config = ConfigDict(extra="allow")
 
 
 class FunctionParams(BaseModel):

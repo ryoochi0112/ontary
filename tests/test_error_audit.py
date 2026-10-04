@@ -276,6 +276,6 @@ def test_function_error_entry_carries_the_code(
 # -- storage ------------------------------------------------------------------
 
 
-def test_error_code_moves_the_store_schema_to_13() -> None:
-    """`audit_log.error_code` is a new column, so a v12 store is refused."""
-    assert SCHEMA_VERSION == 13
+def test_audit_store_schema_is_14() -> None:
+    """The events column follows error_code in the current audit schema."""
+    assert SCHEMA_VERSION == 14

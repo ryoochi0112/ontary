@@ -27,6 +27,7 @@ from __future__ import annotations
 import itertools
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -52,10 +53,10 @@ from examples.tickets.ontology import (
     escalationOnTicket,
     ticketInQueue,
 )
-from ontary import Ontology, OntologyClient, OntologyObject, prop
+from ontary import Ontology, OntologyClient, OntologyObject, prop, target
 from ontary._scenario import SCENARIO_EPOCH
 from ontary.actions import ActionContext, ActionExecutor
-from ontary.audit import CapabilityAccessRecord
+from ontary.audit import CapabilityAccessRecord, EmittedEvent
 from ontary.errors import AuthorityError, ConflictError, PreconditionFailed, ValidationFailed
 from ontary.ingest import bulk_link, bulk_upsert
 from ontary.meta import (
@@ -68,7 +69,8 @@ from ontary.meta import (
     RuleDef,
     TransitionDef,
 )
-from ontary.scope import ScopePolicy
+from ontary.model import ActionParams, Event
+from ontary.scope import DirectProperty, ScopePolicy, SelfScope, ViaLink
 from ontary.security import Consumer
 from ontary.store import (
     AuditEntry,
@@ -81,7 +83,7 @@ from ontary.store import (
 )
 from ontary.store._shared import StoreClock, canonical_id
 from ontary.store.inmemory import InMemoryStore
-from ontary.testing import SequentialIds, consumer, scenario
+from ontary.testing import FixedClock, SequentialIds, consumer, scenario
 
 StoreFactory = Callable[[OntologyRegistry], Store]
 
@@ -3006,6 +3008,7 @@ def test_audit_append_and_read_back(store: Store) -> None:
     assert got.target_id == "intent-1"
     assert got.params == {"statement": "improve pride"}
     assert got.outcome == "ok"
+    assert got.events == []
 
 
 def test_audit_writes_round_trip(store: Store) -> None:
@@ -3060,6 +3063,99 @@ def test_audit_capability_accesses_round_trip(store: Store) -> None:
 
     got = store.audit_entries()[0]
     assert got.capability_accesses == accesses
+
+
+@pytest.mark.parametrize("fail", [False, True], ids=["ok", "rollback"])
+def test_action_emission_commits_or_rolls_back_with_writes(
+    store_factory: StoreFactory, fail: bool,
+) -> None:
+    """#47: the executor's events and writes share one transaction on every backend."""
+    ontology = Ontology("event-conformance", scope_levels=["org"], min_n=1)
+
+    @ontology.object(layer="L0", scope="unscoped", owned=True)
+    class Order(OntologyObject):
+        id: str = prop(primary_key=True)
+        status: str
+
+    class State(Enum):
+        SHIPPED = "shipped"
+
+    class Detail(BaseModel):
+        state: State
+        at: datetime
+
+    @ontology.event()
+    class OrderShipped(Event):
+        carrier: str
+        at: datetime
+        state: State
+        detail: Detail
+
+    class CreateOrder(ActionParams):
+        pass
+
+    observed: list[datetime] = []
+
+    @ontology.action(CreateOrder, target=Order, roles=["Operator"], emits=[OrderShipped])
+    def create(ctx: ActionContext, params: CreateOrder) -> dict[str, Any]:
+        observed.append(ctx.now())
+        order = ctx.create(Order, id="order-1", status="new")
+        for carrier in ("first", "second"):
+            ctx.emit(OrderShipped(
+                carrier=carrier, at=ctx.now(), state=State.SHIPPED,
+                detail=Detail(state=State.SHIPPED, at=ctx.now()),
+            ), about=order)
+        order.status = "shipped"
+        ctx.save(order)
+        if fail:
+            raise PreconditionFailed("shipment refused after emission", code="PRECONDITION_FAILED")
+        return {"order_id": order.id}
+
+    instant = datetime(2026, 10, 4, 9, tzinfo=timezone.utc)
+    store = store_factory(ontology.registry)
+    client = ontology.bind(
+        store, clock=FixedClock(instant), id_factory=SequentialIds("inv")
+    ).for_consumer(consumer(role="Operator"))
+    if fail:
+        with pytest.raises(PreconditionFailed) as caught:
+            client.execute(CreateOrder())
+        assert caught.value.code == "PRECONDITION_FAILED"
+        assert str(caught.value) == "shipment refused after emission"
+        assert store.read_all("Order") == []
+        assert store.read_last("Order", "order-1") is None
+        assert _history_rows(store, "Order", "order-1") == []
+    else:
+        assert client.execute(CreateOrder()) == {"order_id": "order-1"}
+        row = store.read_current("Order", "order-1")
+        assert row is not None
+        assert row.payload == {"id": "order-1", "status": "shipped"}
+
+    entries = store.audit_entries()
+    assert len(entries) == 1
+    entry = entries[0]
+    assert entry.kind == "action"
+    assert entry.ts == observed[0] == instant
+    assert entry.invocation_id == "inv-1"
+    assert entry.target_id is None
+    if fail:
+        assert entry.outcome == "error"
+        assert entry.error_code == "PRECONDITION_FAILED"
+        assert entry.events == []
+        assert entry.writes == []
+    else:
+        assert entry.outcome == "ok"
+        assert entry.error_code is None
+        assert [write.op for write in entry.writes] == ["create", "update"]
+        assert entry.events == [
+            EmittedEvent(
+                event_type="OrderShipped", about_type="Order", about_id="order-1",
+                payload={
+                    "carrier": carrier, "at": instant.isoformat(), "state": "shipped",
+                    "detail": {"state": "shipped", "at": instant.isoformat()},
+                },
+            )
+            for carrier in ("first", "second")
+        ]
 
 
 def test_append_audit_never_raises_on_unserializable_param(store: Store) -> None:
@@ -3348,6 +3444,14 @@ def test_audit_append_participates_in_the_enclosing_transaction(store: Store) ->
                     target_type="Company",
                     outcome="ok",
                     params={"message": "should not survive"},
+                    events=[
+                        EmittedEvent(
+                            event_type="CompanyCreated",
+                            about_type="Company",
+                            about_id="c-1",
+                            payload={"name": "Acme"},
+                        )
+                    ],
                 )
             )
             raise RuntimeError("boom after the audit append")
@@ -3408,6 +3512,14 @@ def test_audit_entries_are_not_mutable_through_the_returned_models(
             outcome="ok",
             params={"message": "original"},
             writes=[WriteRecord(op="create", object_type="Company", object_id="c-1")],
+            events=[
+                EmittedEvent(
+                    event_type="CompanyCreated",
+                    about_type="Company",
+                    about_id="c-1",
+                    payload={"details": {"name": "Acme"}},
+                )
+            ],
         )
     )
 
@@ -3415,11 +3527,22 @@ def test_audit_entries_are_not_mutable_through_the_returned_models(
     first[0].outcome = "tampered"
     first[0].params["message"] = "rewritten"
     first[0].writes[0].object_id = "tampered"
+    first[0].events[0].about_id = "tampered"
+    first[0].events[0].payload["details"]["name"] = "rewritten"
+    first[0].events.clear()
 
     second = store.audit_entries()
     assert second[0].outcome == "ok"
     assert second[0].params == {"message": "original"}
     assert second[0].writes[0].object_id == "c-1"
+    assert second[0].events == [
+        EmittedEvent(
+            event_type="CompanyCreated",
+            about_type="Company",
+            about_id="c-1",
+            payload={"details": {"name": "Acme"}},
+        )
+    ]
 
 
 def test_capture_action_writes_are_a_context_manager_yielding_list(
@@ -3549,10 +3672,26 @@ def test_audit_entries_round_trip_every_field(store: Store) -> None:
         capability_accesses=[CapabilityAccessRecord(api_name="llm", count=3)],
         unscoped_params=["product_id"],
         error_code="PRECONDITION_FAILED",
+        events=[
+            EmittedEvent(
+                event_type="TicketUpdated",
+                about_type="Ticket",
+                about_id="ticket-9",
+                payload={"status": "open", "attempt": 1, "details": {"ok": True}},
+            ),
+            EmittedEvent(
+                event_type="TicketUpdated",
+                about_type="Ticket",
+                about_id="ticket-9",
+                payload={"status": "closed", "attempt": 2, "note": None},
+            ),
+        ],
     )
     store.append_audit(entry)
 
     got = store.audit_entries()[0]
+    assert got.events == entry.events
+    assert [event.payload["attempt"] for event in got.events] == [1, 2]
     # #49: pinned by name too, so the loop below cannot pass vacuously
     # before `error_code` is a declared field.
     assert got.error_code == "PRECONDITION_FAILED"
@@ -4079,3 +4218,136 @@ def test_bind_clock_conflict_and_idempotence(store: Store) -> None:
     current = store.read_current("Team", "t1")
     assert current is not None
     assert current.lineage.valid_from == _T0_ISO
+
+
+def test_audit_events_default_is_independent() -> None:
+    fields = dict(
+        actor="alice", role="Operator", action="DoThing", target_type="Ticket", outcome="ok"
+    )
+    first = AuditEntry(**fields)
+    second = AuditEntry(**fields)
+    first.events.append(
+        EmittedEvent(event_type="TicketUpdated", about_type="Ticket", about_id="t-1", payload={})
+    )
+    assert second.events == []
+
+
+@pytest.mark.parametrize("bad_payload", [{"bad": {"a"}}, {"bad": object()}])
+def test_append_audit_never_raises_on_unserializable_event_payload(
+    store: Store, bad_payload: dict[str, Any]
+) -> None:
+    entry = AuditEntry(
+        actor="alice",
+        role="Operator",
+        action="DoThing",
+        target_type="Ticket",
+        outcome="ok",
+        events=[
+            EmittedEvent(
+                event_type="TicketUpdated",
+                about_type="Ticket",
+                about_id="t-1",
+                payload={"ok": "fine", **bad_payload},
+            )
+        ],
+    )
+    store.append_audit(entry)
+    got = store.audit_entries()[0].events[0]
+    assert got.event_type == "TicketUpdated"
+    assert got.about_type == "Ticket"
+    assert got.about_id == "t-1"
+    assert got.payload["ok"] == "fine"
+    assert got.payload["bad"] == {"$unserializable": repr(bad_payload["bad"])}
+
+
+def test_sqlite_refuses_schema_13(tmp_path: Path) -> None:
+    path = tmp_path / "v13.sqlite"
+    with sqlite3.connect(path) as conn:
+        conn.execute("PRAGMA user_version = 13")
+    with raises_code(ConflictError, "STORE_VERSION_UNSUPPORTED") as caught:
+        ObjectStore(build_registry(), str(path))
+    assert str(caught.value) == (
+        "store file schema version 13 is not supported by this "
+        "engine (engine SCHEMA_VERSION=14); this backend ships "
+        "without a migration ladder -- point it at a file created by a "
+        "matching ontary version, or create a fresh one and migrate the data "
+        "yourself"
+    )
+
+
+@pytest.mark.parametrize("scope_route", ["property", "link"])
+@pytest.mark.parametrize("change", ["retire", "move"])
+def test_event_history_follows_retired_or_rescoped_subject_on_every_backend(
+    store_factory: StoreFactory, scope_route: str, change: str,
+) -> None:
+    ontology = Ontology("event-visibility-conformance", scope_levels=["org"], min_n=1)
+
+    @ontology.object(layer="L0", scope=[SelfScope(level="org")])
+    class Organization(OntologyObject):
+        id: str = prop(primary_key=True)
+
+    rules = (
+        [DirectProperty(level="org", property_name="org_id")]
+        if scope_route == "property" else
+        [ViaLink(link_api_name="inOrganization", direction="from", parent_type="Organization")]
+    )
+
+    @ontology.object(layer="L0", scope=rules, owned=True)
+    class Order(OntologyObject):
+        id: str = prop(primary_key=True)
+        org_id: str
+
+    ontology.link("inOrganization", Order, Organization, Cardinality.MANY_TO_ONE, owned=True)
+
+    @ontology.event()
+    class OrderChanged(Event):
+        reason: str
+
+    class ChangeOrder(ActionParams):
+        order_id: str = target(Order)
+        retire: bool
+
+    @ontology.action(ChangeOrder, target=Order, roles=["Operator"], emits=[OrderChanged])
+    def change_order(ctx: ActionContext, params: ChangeOrder) -> dict[str, Any]:
+        ctx.emit(OrderChanged(reason="cancelled" if params.retire else "updated"))
+        if params.retire:
+            ctx.retire(Order, params.order_id)
+        return {}
+
+    store = store_factory(ontology.registry)
+    clock = _SettableClock(_T0)
+    runtime = ontology.bind(store, clock=clock, id_factory=SequentialIds("inv"))
+    for org_id in ("org-1", "org-2"):
+        store.insert("Organization", {"id": org_id}, _TEAM_SRC)
+    store.insert("Order", {"id": "order-1", "org_id": "org-1"}, _TEAM_SRC)
+    if scope_route == "link":
+        store.create_link("inOrganization", "order-1", "org-1")
+    old_scope = runtime.for_consumer(consumer(role="Operator", scope_id="org-1"))
+    new_scope = runtime.for_consumer(consumer(role="Operator", scope_id="org-2"))
+    old_scope.execute(ChangeOrder(order_id="order-1", retire=False))
+    assert [r.payload.reason for r in old_scope.events(OrderChanged)] == ["updated"]
+    assert new_scope.events(OrderChanged) == []
+
+    clock.value = _T1
+    if change == "retire":
+        old_scope.execute(ChangeOrder(order_id="order-1", retire=True))
+        assert store.read_current("Order", "order-1") is None
+        assert store.links_from("inOrganization", "order-1") == []
+        records = old_scope.events(OrderChanged)
+        assert [r.payload.reason for r in records] == ["updated", "cancelled"]
+        assert [r.ts for r in records] == [_T0, _T1]
+        assert [r.invocation_id for r in records] == ["inv-1", "inv-2"]
+        assert new_scope.events(OrderChanged) == []
+    else:
+        if scope_route == "property":
+            store.update("Order", "order-1", {"org_id": "org-2"}, _TEAM_SRC)
+        else:
+            store.close_link("inOrganization", "order-1", "org-1")
+            store.create_link("inOrganization", "order-1", "org-2")
+        new_scope.execute(ChangeOrder(order_id="order-1", retire=False))
+        assert old_scope.events(OrderChanged) == []
+        records = new_scope.events(OrderChanged)
+        assert [r.payload.reason for r in records] == ["updated", "updated"]
+        assert [r.ts for r in records] == [_T0, _T1]
+        assert [r.invocation_id for r in records] == ["inv-1", "inv-2"]
+    assert all(r.about_type == "Order" and r.about_id == "order-1" for r in records)

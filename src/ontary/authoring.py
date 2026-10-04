@@ -50,6 +50,8 @@ from ontary.meta import (
     ActionTypeDef,
     CapabilityDef,
     Cardinality,
+    EventLint,
+    EventTypeDef,
     FunctionDef,
     FunctionLint,
     LinkTypeDef,
@@ -66,6 +68,7 @@ from ontary.meta import (
 )
 from ontary.model import ActionParams as ActionParams
 from ontary.model import CapabilityHandle as CapabilityHandle
+from ontary.model import Event
 from ontary.model import FunctionParams as FunctionParams
 from ontary.model import LinkHandle as LinkHandle
 from ontary.model import OntologyObject as OntologyObject
@@ -374,11 +377,32 @@ def _normalized_transitions(
     )
 
 
-def _derive_properties(cls: type["OntologyObject"]) -> tuple[list[PropertyDef], str]:
+def _check_event_metadata(
+    class_name: str, field_name: str, meta: dict[str, Any], *, event: bool
+) -> None:
+    if not event:
+        return
+    for marker in ("primary_key", "transitions", "scope_level"):
+        if (marker == "primary_key" and meta.get(marker)) or (
+            marker != "primary_key" and meta.get(marker) is not None
+        ):
+            raise ValidationFailed(
+                f"{class_name}.{field_name}: prop({marker}=...) "
+                "is not supported on events",
+                code="ONTOLOGY_INVALID",
+            )
+
+
+def _derive_properties(
+    cls: type[OntologyObject] | type[Event], *, event: bool = False
+) -> tuple[list[PropertyDef], str]:
     """Introspects `cls.model_fields` -> `(PropertyDef list, primary_key)`.
     Raises `ValidationFailed` with code `ONTOLOGY_INVALID` for a reserved field name, an
     unmappable annotation, an AC6 sensitivity/Optional mismatch, or a
     primary-key count other than exactly one.
+
+    Event mode refuses object identity/state/scope metadata and returns an
+    empty primary-key string; events carry payload fields without an identity.
 
     Also fixes up any Optional-annotated field an author left with no
     explicit default: without one, Pydantic still treats it as required
@@ -393,7 +417,7 @@ def _derive_properties(cls: type["OntologyObject"]) -> tuple[list[PropertyDef], 
     primary_keys: list[str] = []
     needs_rebuild = False
     for field_name, field_info in cls.model_fields.items():
-        if field_name in _RESERVED_FIELD_NAMES:
+        if not event and field_name in _RESERVED_FIELD_NAMES:
             raise ValidationFailed(
                 f"{cls.__name__}.{field_name}: reserved for OntologyObject "
                 "hydration metadata (redacted_fields/lineage), not usable "
@@ -402,6 +426,7 @@ def _derive_properties(cls: type["OntologyObject"]) -> tuple[list[PropertyDef], 
             )
 
         meta = _field_ontary_meta(field_info.json_schema_extra)
+        _check_event_metadata(cls.__name__, field_name, meta, event=event)
         annotation, is_optional = _unwrap_optional(field_info.annotation)
         fields = _apply_struct_type_override(
             _struct_fields(
@@ -484,7 +509,7 @@ def _derive_properties(cls: type["OntologyObject"]) -> tuple[list[PropertyDef], 
             )
         )
 
-    if len(primary_keys) != 1:
+    if not event and len(primary_keys) != 1:
         raise ValidationFailed(
             f"{cls.__name__}: expected exactly one prop(primary_key=True) "
             f"field, found {len(primary_keys)}: {primary_keys}",
@@ -492,11 +517,12 @@ def _derive_properties(cls: type["OntologyObject"]) -> tuple[list[PropertyDef], 
         )
     if needs_rebuild:
         cls.model_rebuild(force=True)
-    return props, primary_keys[0]
+    return props, primary_keys[0] if primary_keys else ""
 
 
 _T = TypeVar("_T", bound=OntologyObject)
 _P = TypeVar("_P", bound=ActionParams)
+_E = TypeVar("_E", bound=Event)
 _FP = TypeVar("_FP", bound=FunctionParams)
 _R = TypeVar("_R")
 _H = TypeVar("_H", bound=Callable[..., Any])
@@ -928,6 +954,42 @@ class Ontology:
 
         return decorator
 
+    def event(
+        self,
+        *,
+        description: str | None = None,
+        api_name: str | None = None,
+        accept: EventLint | Sequence[EventLint] = (),
+    ) -> Callable[[type[_E]], type[_E]]:
+        """Register a typed business fact with property-derived payload fields."""
+
+        def decorator(cls: type[_E]) -> type[_E]:
+            self._check_not_frozen(f"event type {cls.__name__!r}")
+            if not issubclass(cls, Event):
+                raise ValidationFailed(
+                    f"{cls.__name__!r} must subclass Event to use @ontology.event(...)",
+                    code="ONTOLOGY_INVALID",
+                )
+            if _class_stamp(cls)[1] is not None:
+                raise ValidationFailed(
+                    f"{cls.__name__!r} is already registered as an event "
+                    "(a class may be decorated once)",
+                    code="ONTOLOGY_INVALID",
+                )
+            name = api_name if api_name is not None else cls.__name__
+            properties, _ = _derive_properties(cls, event=True)
+            self.registry.register_event_type(EventTypeDef(
+                api_name=name,
+                description=description,
+                properties=properties,
+                accept=_normalize_accept(accept),
+            ))
+            cls._ontary_api_name = name
+            cls._ontary_registry = self.registry
+            return cls
+
+        return decorator
+
     def _registered_api_name(self, cls: type[OntologyObject]) -> str:
         for name, registered_cls in self._classes.items():
             if registered_cls is cls:
@@ -1030,6 +1092,7 @@ class Ontology:
         description: str | None = None,
         api_name: str | None = None,
         capabilities: Sequence[CapabilityHandle[builtins.object]] = (),
+        emits: Sequence[type[Event]] = (),
         accept: ActionLint | Sequence[ActionLint] | None = None,
     ) -> Callable[
         [Callable[[ActionContext, _P], dict[str, Any]]],
@@ -1082,6 +1145,22 @@ class Ontology:
             capability_names = self._capability_api_names(
                 capabilities, declared_on=f"action {name!r}"
             )
+            event_names: list[str] = []
+            for event_cls in emits:
+                event_name, event_registry = _class_stamp(event_cls)
+                if (
+                    not issubclass(event_cls, Event)
+                    or event_name is None
+                    or event_registry is not self.registry
+                    or event_name not in self.registry.event_types
+                ):
+                    raise ValidationFailed(
+                        f"{event_cls.__name__!r} is not a registered event on this Ontology "
+                        f"-- cannot use it in action {name!r} emits",
+                        code="ONTOLOGY_INVALID",
+                    )
+                if event_name not in event_names:
+                    event_names.append(event_name)
             action_def = ActionTypeDef(
                 api_name=name,
                 display_name=display_name if display_name is not None else name,
@@ -1092,6 +1171,7 @@ class Ontology:
                 else f"Executes {name}.",
                 parameters=parameters,
                 capabilities=capability_names,
+                emits=event_names,
                 accept=_normalize_accept(accept),
             )
             mismatch = target_param_mismatch(action_def)

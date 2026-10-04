@@ -8,7 +8,7 @@ engine is domain-agnostic; the ticket domain below is just an example.
 Python 3.12+ · pydantic-only core · `mypy --strict` · offline `make verify`.
 
 Release metadata: version
-**0.18.0**, store schema **v13**. Releases are annotated tags (`v0.18.0`).
+**0.18.0**, store schema **v14**. Releases are annotated tags (`v0.18.0`).
 
 Documentation: **https://ryoochi0112.github.io/ontary/** (English / 日本語).
 

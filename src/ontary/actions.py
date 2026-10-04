@@ -23,7 +23,7 @@ from pydantic import BaseModel, ValidationError
 
 from ontary._runtime import default_clock, default_id_factory
 from ontary._typed_api import api_name_for, declared_snapshot, resolve_capability
-from ontary.audit import CapabilityAccessRecord, _audit_error_code
+from ontary.audit import CapabilityAccessRecord, EmittedEvent, _audit_error_code
 from ontary.errors import (
     ConflictError,
     InternalError,
@@ -32,8 +32,8 @@ from ontary.errors import (
     PreconditionFailed,
     ValidationFailed,
 )
-from ontary.meta import ActionParameterDef, ActionTypeDef, OntologyRegistry
-from ontary.model import CapabilityHandle, LinkHandle, OntologyObject, hydrate
+from ontary.meta import ActionParameterDef, ActionTypeDef, EventTypeDef, OntologyRegistry
+from ontary.model import CapabilityHandle, Event, LinkHandle, OntologyObject, _class_stamp, hydrate
 from ontary.scope import ScopePolicy, resolve_owning_scope
 from ontary.security import Consumer, covers_scope
 from ontary.store import AuditEntry, Source, Store, StoredObject
@@ -61,6 +61,18 @@ def _source(action_name: str) -> Source:
     return Source(source_system=f"action:{action_name}")
 
 
+def _event_payload_to_storage(event: Event, event_def: EventTypeDef) -> dict[str, Any]:
+    """Encode one typed event payload in the same form stored on its audit entry."""
+    payload: dict[str, Any] = {}
+    for prop in event_def.properties:
+        value = getattr(event, prop.name)
+        if prop.type == "struct" and prop.fields is not None:
+            value = struct_value(value, prop.fields)
+        value = choice_value(value, prop.choices)
+        payload[prop.name] = _to_storage_scalar(value, prop.type, fields=prop.fields)
+    return payload
+
+
 class ActionContext:
     """Per-call handle a typed action handler receives instead of closing
     over the store (spec §6/AC3).
@@ -84,6 +96,9 @@ class ActionContext:
         "_capability_accesses",
         "_loaded",
         "_now",
+        "_action_def",
+        "_resolved_target_id",
+        "_emitted_events",
     )
 
     def __init__(
@@ -98,12 +113,18 @@ class ActionContext:
         capability_providers: Mapping[CapabilityHandle[Any], object] | None = None,
         capability_accesses: list[CapabilityAccessRecord] | None = None,
         now: datetime | None = None,
+        action_def: ActionTypeDef | None = None,
+        resolved_target_id: str | None = None,
+        emitted_events: list[EmittedEvent] | None = None,
     ) -> None:
         self._store = store
         self._now = now if now is not None else default_clock()
         self._source = source
         self._consumer = consumer
         self._registry = registry
+        self._action_def = action_def
+        self._resolved_target_id = resolved_target_id
+        self._emitted_events = emitted_events if emitted_events is not None else []
         self._id_factory = id_factory if id_factory is not None else default_id_factory
         self._declared_capabilities = declared_capabilities
         self._capability_providers = dict(capability_providers or {})
@@ -124,6 +145,84 @@ class ActionContext:
         """The invocation's single instant; equals the audit ts and every
         valid_from this action writes."""
         return self._now
+
+    def emit(self, event: Event, *, about: OntologyObject | None = None) -> None:
+        """Record a declared business fact inside this action's transaction.
+
+        The subject defaults to the resolved action target. An explicit
+        subject must be a target-type object handed out by this context.
+        Facts keep emission order on the ok audit entry; its timestamp and
+        invocation id apply to every fact. A failed invocation stores none.
+        """
+        registry = self._registry_or_raise("emit")
+        event_name, event_registry = _class_stamp(type(event))
+        if event_name is None:
+            raise ValidationFailed(
+                f"{type(event).__name__!r} is not decorated with @ontology.event(...) "
+                "-- it has no registered api_name",
+                code="UNKNOWN_NAME",
+            )
+        if event_registry is not registry:
+            raise ValidationFailed(
+                f"{type(event).__name__!r} (api_name {event_name!r}) was registered on a "
+                "different Ontology -- it is not part of this action's ontology",
+                code="UNKNOWN_NAME",
+            )
+        event_def = registry.get_event_type(event_name)
+        action_def = self._action_def
+        if action_def is None:
+            raise InternalError(
+                "ActionContext.emit requires the executor's action definition",
+                code="INTERNAL_ERROR",
+            )
+        if event_name not in action_def.emits:
+            raise ValidationFailed(
+                f"ActionContext.emit: action {action_def.api_name!r} did not declare "
+                f"event {event_name!r} in emits",
+                code="UNDECLARED_EVENT",
+            )
+        about_type, about_id = self._event_subject(action_def, about)
+        self._emitted_events.append(EmittedEvent(
+            event_type=event_name, about_type=about_type, about_id=about_id,
+            payload=_event_payload_to_storage(event, event_def),
+        ))
+
+    def _event_subject(
+        self, action_def: ActionTypeDef, about: OntologyObject | None,
+    ) -> tuple[str, str]:
+        about_type = action_def.target_type
+        if about is None:
+            about_id = self._resolved_target_id
+            if about_id is None:
+                raise ValidationFailed(
+                    f"ActionContext.emit: action {action_def.api_name!r} has no resolved "
+                    "target id -- pass about= an object from this action context",
+                    code="EVENT_SUBJECT_INVALID",
+                )
+        else:
+            entry = self._loaded.get(id(about))
+            if entry is None or entry[0] is not about:
+                raise ValidationFailed(
+                    f"ActionContext.emit: this {type(about).__name__} was not loaded "
+                    "by this action context -- get it with ctx.get(...) or "
+                    "ctx.create(...) first",
+                    code="EVENT_SUBJECT_INVALID",
+                )
+            if entry[1] != about_type:
+                raise ValidationFailed(
+                    f"ActionContext.emit: subject type {entry[1]!r} does not match "
+                    f"action {action_def.api_name!r} target type {about_type!r}",
+                    code="EVENT_SUBJECT_INVALID",
+                )
+            primary_key = self._registry_or_raise("emit").get_object_type(about_type).primary_key
+            about_id = str(getattr(about, primary_key))
+        if self._store.read_last(about_type, about_id) is None:
+            raise ValidationFailed(
+                f"ActionContext.emit: subject {about_type} {about_id!r} "
+                "has no stored row at emit time",
+                code="EVENT_SUBJECT_INVALID",
+            )
+        return about_type, about_id
 
     def capability(self, handle: CapabilityHandle[P]) -> P:
         """The bound provider for `handle`, typed as the handle's protocol
@@ -797,6 +896,7 @@ class ActionExecutor:
         writes the handler already made. The caller (`execute`) owns the
         rollback error-audit."""
         with self._store.transaction():
+            emitted_events: list[EmittedEvent] = []
             with self._store.capture_action_writes(
                 at=iso_instant(instant)
             ) as writes:
@@ -816,6 +916,9 @@ class ActionExecutor:
                         capability_providers=providers,
                         capability_accesses=capability_accesses,
                         now=instant,
+                        action_def=action_def,
+                        resolved_target_id=self._resolve_target_id(action_def, params_dict),
+                        emitted_events=emitted_events,
                     )
                     result = fn(ctx, params_obj)
                 else:
@@ -833,6 +936,7 @@ class ActionExecutor:
                 # `execute`), the same one `ctx.now()` and every written
                 # valid_from carry -- not a second clock read.
                 writes=list(writes),
+                events=list(emitted_events),
                 capability_accesses=capability_accesses,
                 unscoped_params=unscoped_params,
             )
