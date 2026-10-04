@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from enum import Enum
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -21,6 +21,10 @@ from ontary.typesys import PropertyType, choice_value, struct_value, validate_sc
 
 __all__ = [
     "PropertyType",
+    "PropertyLint",
+    "ObjectLint",
+    "ActionLint",
+    "FunctionLint",
     "Cardinality",
     "Sensitivity",
     "PropertyDef",
@@ -41,6 +45,23 @@ __all__ = [
 # domain's own hierarchy) — `None` means unscoped. The engine treats this as
 # an opaque string; the scope-level hierarchy itself is declared per-ontology.
 ScopeLevel = str | None
+
+PropertyLint = Literal["STORED_DERIVABLE", "FREE_TEXT_STATUS"]
+ObjectLint = Literal["FORBIDDEN_TYPE_NAME", "AUDIT_TYPE"]
+ActionLint = Literal["CRUD_ACTION_NAME", "MICRO_ACTION"]
+FunctionLint = Literal["CRUD_ACTION_NAME"]
+
+
+def _validated_accept(
+    declaration: str, accept: tuple[str, ...], allowed: tuple[str, ...]
+) -> tuple[str, ...]:
+    for code in accept:
+        if code not in allowed:
+            raise ValidationFailed(
+                f"{declaration}: cannot accept {code!r}; accepted codes: {', '.join(allowed)}",
+                code="ONTOLOGY_INVALID",
+            )
+    return tuple(dict.fromkeys(accept))
 
 
 class Cardinality(str, Enum):
@@ -221,6 +242,7 @@ def _fields_declaration_violation(
 
 
 class PropertyDef(BaseModel):
+    accept: tuple[str, ...] = ()
     name: str
     type: PropertyType
     choices: tuple[str, ...] | None = None
@@ -229,6 +251,13 @@ class PropertyDef(BaseModel):
     required: bool = True
     sensitivity: Sensitivity = Field(default_factory=Sensitivity)
     scope_level: ScopeLevel = None
+
+    @model_validator(mode="after")
+    def _valid_accept(self) -> PropertyDef:
+        self.accept = _validated_accept(
+            f"PropertyDef {self.name!r}", self.accept, get_args(PropertyLint)
+        )
+        return self
 
     @model_validator(mode="before")
     @classmethod
@@ -284,6 +313,8 @@ class PropertyDef(BaseModel):
 
 
 class ObjectTypeDef(BaseModel):
+    accept: tuple[str, ...] = ()
+    snapshot: bool = False
     api_name: str
     display_name: str
     description: str
@@ -298,6 +329,13 @@ class ObjectTypeDef(BaseModel):
     # record doesn't carry it; `False` (default) means fully source-backed.
     # Undeclared == source-backed, matching the reference pattern.
     owned: bool | dict[str, Any] = False
+
+    @model_validator(mode="after")
+    def _valid_accept(self) -> ObjectTypeDef:
+        self.accept = _validated_accept(
+            f"ObjectTypeDef {self.api_name!r}", self.accept, get_args(ObjectLint)
+        )
+        return self
 
     @model_validator(mode="after")
     def _primary_key_exists(self) -> "ObjectTypeDef":
@@ -492,6 +530,7 @@ class CapabilityDef(BaseModel):
 
 
 class ActionTypeDef(BaseModel):
+    accept: tuple[str, ...] = ()
     api_name: str
     display_name: str
     target_type: str
@@ -499,6 +538,13 @@ class ActionTypeDef(BaseModel):
     description: str
     parameters: list[ActionParameterDef] = []
     capabilities: list[str] = []
+
+    @model_validator(mode="after")
+    def _valid_accept(self) -> ActionTypeDef:
+        self.accept = _validated_accept(
+            f"ActionTypeDef {self.api_name!r}", self.accept, get_args(ActionLint)
+        )
+        return self
 
 
 def target_param_mismatch(action: ActionTypeDef) -> tuple[int, str] | None:
@@ -533,6 +579,7 @@ def target_param_mismatch(action: ActionTypeDef) -> tuple[int, str] | None:
 
 
 class FunctionDef(BaseModel):
+    accept: tuple[str, ...] = ()
     api_name: str
     description: str
     input_description: str
@@ -543,6 +590,13 @@ class FunctionDef(BaseModel):
     #: "use the default", which is `True` exactly when the function declares
     #: capabilities -- see `audited`.
     audit: bool | None = None
+
+    @model_validator(mode="after")
+    def _valid_accept(self) -> FunctionDef:
+        self.accept = _validated_accept(
+            f"FunctionDef {self.api_name!r}", self.accept, get_args(FunctionLint)
+        )
+        return self
 
     @model_validator(mode="after")
     def _valid_parameters(self) -> FunctionDef:

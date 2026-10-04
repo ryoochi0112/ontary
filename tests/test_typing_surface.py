@@ -1,7 +1,7 @@
 """Typing-surface pin for typed authoring (spec `typed-authoring` AC5/AC11):
 `typing.assert_type` checks over the MIGRATED `examples/tickets` models,
 proving mypy --strict infers the exact typed-client return types with
-ZERO casts and ZERO type-ignores anywhere in this file. Each `assert_type`
+exact types at the call site; intentional invalid calls use type-ignores. Each `assert_type`
 call is paired with a runtime assertion so the same call is proven to
 actually work against a fixture-seeded store, not just type-check.
 
@@ -659,3 +659,31 @@ def test_misspelled_authoring_literals_are_type_errors() -> None:
         @ontology.object(layer="L0", scope="unscpoed")  # type: ignore[arg-type]
         class Typo(OntologyObject):
             id: str = prop(primary_key=True)
+
+
+def test_lint_accept_typing_surface() -> None:
+    ontology = Ontology(name="lint-types", scope_levels=["org"])
+    prop(accept="STORED_DERIVABLE")
+    prop(accept=["STORED_DERIVABLE", "FREE_TEXT_STATUS"])
+    prop(accept=None)
+
+    @ontology.object(layer="L0", accept=["AUDIT_TYPE", "FORBIDDEN_TYPE_NAME"], snapshot=True)
+    class Example(OntologyObject):
+        id: str = prop(primary_key=True)
+
+    class Params(ActionParams):
+        pass
+
+    ontology.object(layer="L0", accept="AUDIT_TYPE")
+    ontology.action(Params, target=Example, roles=[], accept="MICRO_ACTION")
+    ontology.action(Params, target=Example, roles=[], accept=["MICRO_ACTION", "CRUD_ACTION_NAME"])
+    ontology.function(accept="CRUD_ACTION_NAME")
+    ontology.function(accept=["CRUD_ACTION_NAME"])
+    ontology.function(FunctionParams, accept="CRUD_ACTION_NAME")
+    ontology.function(FunctionParams, accept=["CRUD_ACTION_NAME"])
+
+    prop(accept="CRUD_ACTION_NAME")  # type: ignore[arg-type]
+    ontology.object(layer="L0", accept="MICRO_ACTION")  # type: ignore[arg-type]
+    ontology.action(Params, target=Example, roles=[], accept="AUDIT_TYPE")  # type: ignore[arg-type]
+    ontology.function(accept="FREE_TEXT_STATUS")  # type: ignore[arg-type]
+    ontology.function(FunctionParams, accept="FREE_TEXT_STATUS")  # type: ignore[arg-type]
