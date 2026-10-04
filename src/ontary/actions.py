@@ -32,7 +32,7 @@ from ontary.errors import (
     PreconditionFailed,
     ValidationFailed,
 )
-from ontary.meta import ActionParameterDef, ActionTypeDef, OntologyRegistry
+from ontary.meta import ActionParameterDef, ActionTypeDef, EventTypeDef, OntologyRegistry
 from ontary.model import CapabilityHandle, Event, LinkHandle, OntologyObject, _class_stamp, hydrate
 from ontary.scope import ScopePolicy, resolve_owning_scope
 from ontary.security import Consumer, covers_scope
@@ -59,6 +59,18 @@ class ActionError(PreconditionFailed):
 
 def _source(action_name: str) -> Source:
     return Source(source_system=f"action:{action_name}")
+
+
+def _event_payload_to_storage(event: Event, event_def: EventTypeDef) -> dict[str, Any]:
+    """Encode one typed event payload in the same form stored on its audit entry."""
+    payload: dict[str, Any] = {}
+    for prop in event_def.properties:
+        value = getattr(event, prop.name)
+        if prop.type == "struct" and prop.fields is not None:
+            value = struct_value(value, prop.fields)
+        value = choice_value(value, prop.choices)
+        payload[prop.name] = _to_storage_scalar(value, prop.type, fields=prop.fields)
+    return payload
 
 
 class ActionContext:
@@ -170,15 +182,9 @@ class ActionContext:
                 code="UNDECLARED_EVENT",
             )
         about_type, about_id = self._event_subject(action_def, about)
-        payload: dict[str, Any] = {}
-        for prop in event_def.properties:
-            value = getattr(event, prop.name)
-            if prop.type == "struct" and prop.fields is not None:
-                value = struct_value(value, prop.fields)
-            value = choice_value(value, prop.choices)
-            payload[prop.name] = _to_storage_scalar(value, prop.type, fields=prop.fields)
         self._emitted_events.append(EmittedEvent(
-            event_type=event_name, about_type=about_type, about_id=about_id, payload=payload,
+            event_type=event_name, about_type=about_type, about_id=about_id,
+            payload=_event_payload_to_storage(event, event_def),
         ))
 
     def _event_subject(
