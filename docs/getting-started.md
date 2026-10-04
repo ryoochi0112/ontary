@@ -253,6 +253,7 @@ server = build_mcp_server(ontology, store, agent)
 
 For deep architectural concepts and security rules, see the following topics:
 
+* Continue with the [leave-request approval tutorial](tutorial-leave-requests.md).
 * Learn design rules in [Ontology Design](ontology-design.md). Store facts once and declare security with `ScopePolicy`, `Sensitivity`, and min-N.
 * Review all classes and types in the [API Reference](api-reference.md).
 * Read about storage options in [Storage](storage.md).
