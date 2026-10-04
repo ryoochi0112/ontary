@@ -136,25 +136,21 @@ def _client() -> tuple[OntologyClient, dict[str, str]]:
 
 
 def _client_with_extra_queue_a_tickets() -> tuple[OntologyClient, ObjectStore, dict[str, str]]:
-    """Same queue_a-scoped client as `_client()`, plus two more queue_a
-    `Ticket`s sharing a distinct, NON-scope `status` ("urgent") -- carried
-    debt from T3's review: `where={"queue_id": queue_a_id}` against a
-    consumer who is ALREADY queue_a-scoped is a no-op filter (every visible
-    Ticket already has that `queue_id`), so it can never catch a `where=`
-    dropped from the typed `aggregate`/`aggregate_by` delegation in
-    `client.py` -- the same blind spot pre-existed on typed `aggregate`.
-    Filtering on `status` (not a scope-routing property) instead means the
-    typed and string forms can only agree if `where=` is actually threaded
-    through."""
+    """Add two pending queue_a Tickets to the existing fixture rows.
+
+    Pending ages are 18, 36, 20, and 30 hours. Filtering on this non-scope
+    property narrows the visible queue_a rows, so dropping where= from typed
+    aggregate delegation still changes the result.
+    """
     ontology, store = build_ontology()
     ids = load_fixtures(store)
     src = Source(source_system="test")
     store.insert(
         "Ticket",
         {
-            "subject": "Urgent A",
+            "subject": "Pending A",
             "age_hours": 20.0,
-            "status": "urgent",
+            "status": "pending",
             "queue_id": ids["queue_a_id"],
         },
         src,
@@ -162,9 +158,9 @@ def _client_with_extra_queue_a_tickets() -> tuple[OntologyClient, ObjectStore, d
     store.insert(
         "Ticket",
         {
-            "subject": "Urgent B",
+            "subject": "Pending B",
             "age_hours": 30.0,
-            "status": "urgent",
+            "status": "pending",
             "queue_id": ids["queue_a_id"],
         },
         src,
@@ -333,11 +329,12 @@ def test_typed_aggregate_matches_string_form() -> None:
     # docstring), so it is LOAD-BEARING: dropping it from the typed
     # delegation changes the result instead of leaving the suite green.
     client, _store, ids = _client_with_extra_queue_a_tickets()
-    typed_result = client.aggregate(Ticket, "age_hours", where={"status": "urgent"})
+    typed_result = client.aggregate(Ticket, "age_hours", where={"status": "pending"})
     assert_type(typed_result, float)
-    string_result = client.aggregate("Ticket", "age_hours", where={"status": "urgent"})
+    string_result = client.aggregate("Ticket", "age_hours", where={"status": "pending"})
     assert typed_result == string_result
-    assert typed_result == 25.0  # mean(20.0, 30.0) -- proves the filter narrowed the set
+    assert typed_result == 26.0  # mean(18.0, 36.0, 20.0, 30.0)
+    assert typed_result != client.aggregate(Ticket, "age_hours")
 
     ticket_stats = client.call_function("ticketStats", {"queue_id": ids["queue_a_id"]})
     assert isinstance(ticket_stats, float)
@@ -347,34 +344,35 @@ def test_typed_aggregate_by_matches_string_form() -> None:
     # Same load-bearing `where=` as above (see that test's comment).
     client, _store, _ids = _client_with_extra_queue_a_tickets()
     typed_result = client.aggregate_by(
-        Ticket, "age_hours", "status", where={"status": "urgent"}
+        Ticket, "age_hours", "status", where={"status": "pending"}
     )
     assert_type(typed_result, dict[str, float])
     string_result = client.aggregate_by(
-        "Ticket", "age_hours", "status", where={"status": "urgent"}
+        "Ticket", "age_hours", "status", where={"status": "pending"}
     )
     assert typed_result == string_result
-    assert typed_result == {"urgent": 25.0}  # pins the where= narrowing the group set
+    assert typed_result == {"pending": 26.0}  # pins the where= narrowing the group set
 
 
 def test_aggregate_count_without_value_field_infers_int() -> None:
     client, _store, _ids = _client_with_extra_queue_a_tickets()
-    typed_result = client.aggregate(Ticket, where={"status": "urgent"}, func="count")
+    typed_result = client.aggregate(Ticket, where={"status": "pending"}, func="count")
     assert_type(typed_result, int)
-    assert typed_result == 2
-    string_result = client.aggregate("Ticket", where={"status": "urgent"}, func="count")
+    assert typed_result == 4
+    assert typed_result != client.aggregate(Ticket, func="count")
+    string_result = client.aggregate("Ticket", where={"status": "pending"}, func="count")
     assert_type(string_result, int)
-    assert string_result == 2
+    assert string_result == 4
     typed_groups = client.aggregate_by(
-        Ticket, None, "status", where={"status": "urgent"}, func="count"
+        Ticket, None, "status", where={"status": "pending"}, func="count"
     )
     assert_type(typed_groups, dict[str, int])
-    assert typed_groups == {"urgent": 2}
+    assert typed_groups == {"pending": 4}
     string_groups = client.aggregate_by(
-        "Ticket", None, "status", where={"status": "urgent"}, func="count"
+        "Ticket", None, "status", where={"status": "pending"}, func="count"
     )
     assert_type(string_groups, dict[str, int])
-    assert string_groups == {"urgent": 2}
+    assert string_groups == {"pending": 4}
 
 
 def test_aggregate_without_value_field_is_rejected_for_float_funcs() -> None:

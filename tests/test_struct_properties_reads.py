@@ -6,7 +6,7 @@ import json
 import os
 import uuid
 from datetime import date, datetime, timezone
-from typing import Any, assert_type
+from typing import Any, Literal, assert_type
 
 import pytest
 from conftest import raises_code
@@ -48,7 +48,7 @@ ontology = Ontology("struct-reads", scope_levels=["org"], min_n=1)
 class Order(OntologyObject):
     id: str = prop(primary_key=True)
     amount: Money
-    status: str
+    status: Literal["open", "closed"]
     metadata: dict[str, int]
 
 
@@ -56,7 +56,7 @@ class Order(OntologyObject):
 class PrivateOrder(OntologyObject):
     id: str = prop(primary_key=True)
     amount: Money | None = prop(sensitivity=Sensitivity(human_visible=False))
-    status: str
+    status: Literal["open", "closed"]
 
 
 @pytest.fixture
@@ -245,7 +245,7 @@ def test_descriptor_only_diagnose_checks_stored_struct(store: InMemoryStore) -> 
             properties=[
                 PropertyDef(name="id", type="str"),
                 PropertyDef(name="amount", type="struct", fields=fields),
-                PropertyDef(name="status", type="str"),
+                PropertyDef(name="status", type="str", choices=("open", "closed")),
                 PropertyDef(name="metadata", type="json"),
             ],
             primary_key="id",

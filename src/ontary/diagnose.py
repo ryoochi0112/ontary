@@ -65,6 +65,8 @@ GUIDE_ANCHORS: dict[str, tuple[str, ...]] = {
     "MICRO_ACTION": ("action-sprawl",),
     "CRUD_ACTION_NAME": ("action-sprawl", "retirement-and-removal"),
     "FORBIDDEN_TYPE_NAME": ("the-time-machine",),
+    "FREE_TEXT_STATUS": ("choice-properties",),
+    "AUDIT_TYPE": ("the-golden-hammer",),
     "UNSCOPED_SENSITIVE": ("security-design",),
     "MIN_N_UNSET": ("security-design",),
 }
@@ -697,6 +699,56 @@ def _forbidden_type_name_findings(definition: "OntologyDef") -> tuple[Finding, .
     return tuple(findings)
 
 
+
+def _free_text_status_findings(definition: "OntologyDef") -> tuple[Finding, ...]:
+    """Warn when a string status has no declared allowed values."""
+    findings: list[Finding] = []
+    for api_name in sorted(definition.registry.object_types):
+        obj = definition.registry.object_types[api_name]
+        for prop in sorted(obj.properties, key=lambda item: item.name):
+            if (
+                "FREE_TEXT_STATUS" in prop.accept
+                or prop.type != "str"
+                or prop.choices is not None
+                or not (prop.name == "status" or prop.name.endswith("_status"))
+            ):
+                continue
+            findings.append(
+                _warn(
+                    "FREE_TEXT_STATUS",
+                    f"object {api_name}, property {prop.name}",
+                    "a status stored as free text accepts any value",
+                    f"annotate {api_name}.{prop.name} with a StrEnum or Literal "
+                    "so every write path enforces the allowed values; "
+                    'if free text is intentional, add accept="FREE_TEXT_STATUS" to the property',
+                    GUIDE_URL + "#choice-properties",
+                )
+            )
+    return tuple(findings)
+
+
+def _audit_type_findings(definition: "OntologyDef") -> tuple[Finding, ...]:
+    """Warn on types named like the engine's existing action audit."""
+    findings: list[Finding] = []
+    for api_name in sorted(definition.registry.object_types):
+        obj = definition.registry.object_types[api_name]
+        if "AUDIT_TYPE" in obj.accept or not api_name.endswith(
+            ("AuditLog", "AuditEntry", "AuditTrail", "AuditRecord", "AuditEvent")
+        ):
+            continue
+        findings.append(
+            _warn(
+                "AUDIT_TYPE",
+                f"object {api_name}",
+                "the type looks like a duplicate of the engine's action audit",
+                f"remove {api_name} because the engine already records every action "
+                'as AuditEntry; if it represents a domain fact, add accept="AUDIT_TYPE"',
+                GUIDE_URL + "#the-golden-hammer",
+            )
+        )
+    return tuple(findings)
+
+
 def _micro_action_findings(definition: "OntologyDef") -> tuple[Finding, ...]:
     """Warn on the declared shape of a likely one-property write action.
 
@@ -804,6 +856,8 @@ RULES: tuple[DiagnosticRule, ...] = (
     _crud_action_name_findings,
     _forbidden_type_name_findings,
     _micro_action_findings,
+    _free_text_status_findings,
+    _audit_type_findings,
     _unscoped_sensitive_findings,
     _min_n_unset_findings,
 )

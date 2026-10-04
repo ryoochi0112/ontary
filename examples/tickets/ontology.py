@@ -27,6 +27,8 @@ auto-bind `EscalateTicket`'s handler with zero manual wiring (spec AC6).
 
 from __future__ import annotations
 
+from typing import Literal
+
 from ontary import (
     ActionContext,
     ActionError,
@@ -89,7 +91,7 @@ class Ticket(OntologyObject):
     id: str = prop(primary_key=True)
     subject: str
     age_hours: float
-    status: str | None = None
+    status: Literal["open", "pending", "closed"] | None = None
     queue_id: str | None = prop(default=None, scope_level="queue")
     escalated: bool | None = prop(default=None)
     channel: str | None = prop(default=None, choices=["email", "chat", "phone"])

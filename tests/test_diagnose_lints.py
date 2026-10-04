@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Any
+import warnings
+from enum import StrEnum
+from typing import Any, Literal
 
 import pytest
 
@@ -10,6 +12,7 @@ import ontary.diagnose as diagnose_module
 from ontary import (
     ActionParams,
     Cardinality,
+    ObjectStore,
     Ontology,
     OntologyObject,
     SelfScope,
@@ -81,7 +84,7 @@ def _ontology_with_action_name(api_name: str, *, accept: ActionLint | None = Non
     @ontology.object(layer="L0", api_name="Ticket", scope=[SelfScope(level="org")])
     class Ticket(OntologyObject):
         id: str = prop(primary_key=True)
-        status: str = prop()
+        status: Literal["open", "closed"] = prop()
 
     class Params(ActionParams):
         ticket_id: str = target(Ticket)
@@ -174,7 +177,7 @@ def _ontology_with_micro_action(
     @ontology.object(layer="L0", api_name="Ticket", scope=[SelfScope(level="org")])
     class Ticket(OntologyObject):
         id: str = prop(primary_key=True)
-        status: str = prop()
+        status: Literal["open", "closed"] = prop()
 
     class Params(ActionParams):
         ticket_id: str = target(Ticket)
@@ -322,6 +325,8 @@ def test_combined_ontology_reports_three_lints_in_one_sweep() -> None:
         ("MICRO_ACTION", "_micro_action_findings"),
         ("UNSCOPED_SENSITIVE", "_unscoped_sensitive_findings"),
         ("MIN_N_UNSET", "_min_n_unset_findings"),
+        ("FREE_TEXT_STATUS", "_free_text_status_findings"),
+        ("AUDIT_TYPE", "_audit_type_findings"),
     ],
 )
 def test_each_lint_is_pinned_in_rules_tuple(code: str, rule_name: str) -> None:
@@ -581,3 +586,144 @@ def test_action_accepts_are_independent(accept: ActionLint, remaining: str) -> N
 
 def test_micro_accept_removes_finding() -> None:
     assert _ontology_with_micro_action("status", accept="MICRO_ACTION").diagnose() == []
+
+
+class _Status(StrEnum):
+    OPEN = "open"
+    CLOSED = "closed"
+
+
+def _status_ontology(
+    name: str = "status", *, optional: bool = False,
+    accept: PropertyLint | None = None,
+) -> Ontology:
+    ontology = _scoped_ontology("status")
+
+    @ontology.object(layer="L0", scope="unscoped")
+    class Ticket(OntologyObject):
+        id: str = prop(primary_key=True)
+        status: str = prop(accept=accept)
+
+    obj = ontology.registry.object_types["Ticket"]
+    obj.properties[1] = obj.properties[1].model_copy(
+        update={"name": name, "required": not optional}
+    )
+    return ontology
+
+
+@pytest.mark.parametrize("name", ["status", "ticket_status"])
+@pytest.mark.parametrize("optional", [False, True])
+def test_free_text_status_positive(name: str, optional: bool) -> None:
+    findings = _status_ontology(name, optional=optional).diagnose()
+    assert [f.code for f in findings] == ["FREE_TEXT_STATUS"]
+    assert findings[0].location == f"object Ticket, property {name}"
+
+
+@pytest.mark.parametrize("name", ["us_state", "statuses", "status_note"])
+def test_free_text_status_name_negative(name: str) -> None:
+    assert _status_ontology(name).diagnose() == []
+
+
+def test_free_text_status_non_string_negative() -> None:
+    ontology = _status_ontology()
+    ontology.registry.object_types["Ticket"].properties[1].type = "int"
+    assert ontology.diagnose() == []
+
+
+def test_free_text_status_choices_negative() -> None:
+    ontology = _scoped_ontology("choices")
+
+    @ontology.object(layer="L0", scope="unscoped")
+    class Ticket(OntologyObject):
+        id: str = prop(primary_key=True)
+        status: _Status
+        optional_status: _Status | None = None
+        literal_status: Literal["open", "closed"]
+        optional_literal_status: Literal["open", "closed"] | None = None
+        explicit_status: str = prop(choices=["open", "closed"])
+
+    assert ontology.diagnose() == []
+
+
+def test_free_text_status_accept_is_property_local() -> None:
+    ontology = _status_ontology(accept="FREE_TEXT_STATUS")
+    assert ontology.diagnose() == []
+    obj = ontology.registry.object_types["Ticket"]
+    obj.properties.append(obj.properties[1].model_copy(
+        update={"name": "other_status", "accept": ()}
+    ))
+    assert [f.location for f in ontology.diagnose()] == [
+        "object Ticket, property other_status"
+    ]
+
+
+def test_free_text_status_golden_finding_is_byte_exact() -> None:
+    assert _status_ontology().diagnose()[0].model_dump() == {
+        "code": "FREE_TEXT_STATUS",
+        "severity": "warn",
+        "location": "object Ticket, property status",
+        "message": "a status stored as free text accepts any value",
+        "fix_hint": (
+            "annotate Ticket.status with a StrEnum or Literal so every write path "
+            "enforces the allowed values; if free text is intentional, "
+            'add accept="FREE_TEXT_STATUS" to the property'
+        ),
+        "guide": diagnose_module.GUIDE_URL + "#choice-properties",
+    }
+
+
+def _audit_ontology(api_name: str, *, accept: ObjectLint | None = None) -> Ontology:
+    ontology = _scoped_ontology("audit")
+
+    @ontology.object(layer="L0", scope="unscoped", api_name=api_name, accept=accept)
+    class Record(OntologyObject):
+        id: str = prop(primary_key=True)
+
+    return ontology
+
+
+@pytest.mark.parametrize("suffix", ["AuditLog", "AuditEntry", "AuditTrail", "AuditRecord", "AuditEvent"])
+@pytest.mark.parametrize("prefix", ["", "Ticket"])
+def test_audit_type_positive(prefix: str, suffix: str) -> None:
+    findings = _audit_ontology(prefix + suffix).diagnose()
+    assert [f.code for f in findings] == ["AUDIT_TYPE"]
+    assert findings[0].location == f"object {prefix}{suffix}"
+
+
+@pytest.mark.parametrize("api_name", ["Audit", "AuditPlan", "Auditor", "AuditLogPlan", "TicketAuditLogPlan"])
+def test_audit_type_negative(api_name: str) -> None:
+    assert _audit_ontology(api_name).diagnose() == []
+
+
+def test_audit_type_accept_is_object_local() -> None:
+    ontology = _audit_ontology("TicketAuditLog", accept="AUDIT_TYPE")
+    assert ontology.diagnose() == []
+    @ontology.object(layer="L0", scope="unscoped")
+    class AuditEntry(OntologyObject):
+        id: str = prop(primary_key=True)
+
+    assert [f.location for f in ontology.diagnose()] == ["object AuditEntry"]
+
+
+def test_audit_type_golden_finding_is_byte_exact() -> None:
+    assert _audit_ontology("TicketAuditLog").diagnose()[0].model_dump() == {
+        "code": "AUDIT_TYPE",
+        "severity": "warn",
+        "location": "object TicketAuditLog",
+        "message": "the type looks like a duplicate of the engine's action audit",
+        "fix_hint": (
+            "remove TicketAuditLog because the engine already records every action "
+            'as AuditEntry; if it represents a domain fact, add accept="AUDIT_TYPE"'
+        ),
+        "guide": diagnose_module.GUIDE_URL + "#the-golden-hammer",
+    }
+
+
+def test_warn_only_validate_and_bind_emit_no_python_warnings() -> None:
+    ontology = _status_ontology()
+    assert [f.severity for f in ontology.diagnose()] == ["warn"]
+    with warnings.catch_warnings(record=True) as captured:
+        warnings.simplefilter("always")
+        ontology.validate()
+        ontology.bind(ObjectStore(ontology.registry))
+    assert captured == []

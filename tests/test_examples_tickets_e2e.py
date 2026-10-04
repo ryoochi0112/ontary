@@ -785,3 +785,33 @@ def test_diagnose_returns_typed_findings_for_lint_dirty_scratch_ontology() -> No
     min_n = next(finding for finding in findings if finding.code == "MIN_N_UNSET")
     assert isinstance(min_n, Finding)
     assert min_n.severity == "info"
+
+
+def test_tickets_example_has_choices_and_no_findings_or_accept() -> None:
+    ontology, _store = build_ontology()
+    assert ontology.diagnose() == []
+    source = Path(__file__).resolve().parents[1] / "examples/tickets/ontology.py"
+    assert "accept=" not in source.read_text()
+    status = next(
+        p for p in ontology.registry.object_types["Ticket"].properties if p.name == "status"
+    )
+    assert status.choices == ("open", "pending", "closed")
+    assert status.required is False
+    assert status.transitions is None
+    assert "status" not in ontology.registry.object_types["Ticket"].owned
+
+
+def test_tickets_ingest_refuses_status_outside_choices() -> None:
+    ontology, store = build_ontology()
+    ids = load_fixtures(store)
+    loader = OntologyClient(
+        ontology, store,
+        Consumer(actor_id="loader", role="Manager", scope_level="queue",
+                 scope_id=ids["queue_a_id"], kind="human"),
+    )
+    record = {**_TICKETS_OPEN[0], "id": "invalid-status", "status": "unknown",
+              "queue_id": ids["queue_a_id"]}
+    report = loader.ingest("Ticket", [record], _INGEST_SOURCE, on_error="report")
+    assert not report.ok
+    assert [error.code for error in report.errors] == ["INVALID_RECORD"]
+    assert store.read_current("Ticket", "invalid-status") is None
