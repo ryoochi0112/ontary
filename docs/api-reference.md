@@ -131,7 +131,7 @@ integration.
 ### `ontary.testing`
 
 Public SDK-user test helpers are `make_store`, `consumer`, `raises_code`,
-`FixedClock`, and `SequentialIds`. `make_store(ontology)`
+`FixedClock`, `SequentialIds`, `Scenario`, and `scenario`. `make_store(ontology)`
 creates a fresh `InMemoryStore`; `consumer(...)` builds a valid `Consumer`; and
 `raises_code(code)` asserts a raised error by its machine-readable code — any
 `OntaryError`, including `ontary.ingest.IngestError`, as well as structurally
@@ -140,6 +140,13 @@ compatible author-defined coded exceptions that expose a stable string `.code`.
 the same timezone-aware datetime on every call and rejects a naive start.
 `SequentialIds(prefix)` returns deterministic IDs `prefix-1`, `prefix-2`, and
 so on.
+
+`scenario(ontology, *, store=None, clock=None, id_factory=None, capabilities=None)`
+returns a `Scenario` for eager, chainable tests: `given` seeds typed objects,
+`given_link` seeds links, `when(params, by=consumer)` executes a governed action,
+and `then_result` or `then_error` checks its outcome. `then_error` also checks
+that current objects and links are unchanged. Defaults bind a fresh store,
+`FixedClock` at `2026-01-01T00:00:00Z`, and `SequentialIds("id")` before seeding.
 
 ---
 

@@ -128,7 +128,7 @@ Python 3.12+。コアパッケージの依存は `pydantic` のみ。エクス�
 ### `ontary.testing`
 
 SDK 利用者向けのテストヘルパーは `make_store`、`consumer`、`raises_code`、
-`FixedClock`、`SequentialIds` です。`make_store(ontology)` は空の
+`FixedClock`、`SequentialIds`、`Scenario`、`scenario` です。`make_store(ontology)` は空の
 `InMemoryStore` を新しく作り、`consumer(...)` は有効な `Consumer` を組み立て、
 `raises_code(code)` はメッセージではなく機械可読なコードでエラーを検証します
 （`ontary.ingest.IngestError` を含む任意の `OntaryError` に加え、安定した文字列
@@ -136,6 +136,13 @@ SDK 利用者向けのテストヘルパーは `make_store`、`consumer`、`rais
 `FixedClock(start)` はタイムゾーン付きの同じ
 日時を毎回返し、naive な start は拒否します。`SequentialIds(prefix)` は
 `prefix-1`、`prefix-2`、…という決定的な ID を返します。
+
+`scenario(ontology, *, store=None, clock=None, id_factory=None, capabilities=None)`
+は即時実行・チェーン可能な `Scenario` を返します。`given` は型付きオブジェクト、
+`given_link` はリンクを準備し、`when(params, by=consumer)` は権限管理下でアクションを
+実行します。`then_result` と `then_error` は結果を検証し、`then_error` は現在の
+オブジェクトとリンクが変わっていないことも検証します。既定では準備前に空のストア、
+`2026-01-01T00:00:00Z` の `FixedClock`、`SequentialIds("id")` をバインドします。
 
 ---
 

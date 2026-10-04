@@ -296,6 +296,8 @@ DEMOTED_NAMES_BY_MODULE = {
     "ontary.testing": {
         "FixedClock",
         "SequentialIds",
+        "Scenario",
+        "scenario",
         "consumer",
         "make_store",
         "raises_code",
@@ -461,6 +463,8 @@ def test_cookbook_recipes_execute_verbatim(recipe: str) -> None:
             assert {alias.name for alias in node.names} <= {
                 "FixedClock",
                 "SequentialIds",
+                "Scenario",
+                "scenario",
                 "consumer",
                 "make_store",
                 "raises_code",

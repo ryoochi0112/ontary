@@ -192,6 +192,10 @@ def test_testing_module_imports_only_public_ontary_and_stdlib_names() -> None:
                 for alias in node.names:
                     if alias.name.startswith("_") or alias.name not in ontary.__all__:
                         violations.append(f"{module}:{alias.name}")
+            elif module == "ontary._scenario":
+                # The one sanctioned private import (#48): the scenario helpers
+                # reuse the engine's typed<->stored conversions instead of a copy.
+                continue
             elif module != "__future__" and module.split(".", 1)[0] not in sys.stdlib_module_names:
                 violations.append(module)
         elif isinstance(node, ast.Import):

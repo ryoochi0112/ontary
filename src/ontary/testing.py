@@ -1,8 +1,9 @@
 """Small, deterministic helpers for testing an ontology application.
 
-The helpers deliberately compose the public ``ontary`` API.  They are useful in
-SDK-user test suites without requiring imports from the engine's implementation
-modules or any test-framework-specific fixture machinery.
+The helpers compose the public ``ontary`` API, except the private scenario
+module, which reuses engine conversions for typed and stored values. SDK-user
+test suites need no engine implementation imports or test-framework-specific
+fixture machinery.
 """
 
 from __future__ import annotations
@@ -17,13 +18,16 @@ from ontary import (
     InMemoryStore,
     Ontology,
 )
+from ontary._scenario import Scenario, scenario
 
 __all__ = [
     "FixedClock",
+    "Scenario",
     "SequentialIds",
     "consumer",
     "make_store",
     "raises_code",
+    "scenario",
 ]
 
 
