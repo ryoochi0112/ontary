@@ -531,8 +531,11 @@ def test_cookbook_recipes_execute_verbatim(recipe: str) -> None:
             raise AssertionError(
                 f"recipe {recipe!r} imports engine name(s) from {node.module!r}"
             )
-    namespace: dict[str, object] = {}
-    exec(compile(code, f"examples/tickets/README.md#{recipe}", "exec"), namespace)
+    namespace: dict[str, object] = {"__name__": f"cookbook_{recipe}"}
+    exec(
+        compile(code, f"examples/tickets/README.md#{recipe}", "exec", dont_inherit=True),
+        namespace,
+    )
 
 
 def test_readme_is_within_line_budget() -> None:

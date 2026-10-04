@@ -98,10 +98,10 @@ def ticket_count(query: BoundQuery, params: TicketCountParams) -> int:
 ontology.validate()
 
 for f in ontology.diagnose():
-    print(f.severity, f.code, f.location, f.fix_hint)
+    print(f.severity, f.code, f.location, f.fix_hint, f.guide)
 ```
 
-診断は推奨チェックを実行します。`STORED_DERIVABLE` や `CRUD_ACTION_NAME` などの診断ルールは警告を返します。これらの警告で実行が停止することはありません。
+診断は推奨チェックを実行します。`STORED_DERIVABLE` や `CRUD_ACTION_NAME` などの診断ルールは警告を返します。これらの警告で実行が停止することはありません。各結果には、説明する設計ガイドのセクションへのリンク `f.guide` が付きます。意図した結果は、宣言側で `accept=` を使って受け入れられます。たとえばプロパティに `accept="STORED_DERIVABLE"` を付けます。CI では `ontary validate --strict` がゲートです。警告が残っていれば終了コード 1 で終了します。
 
 保存済みの行があるオントロジーを編集したら、ストアを渡してください。`ontology.diagnose(store=store)` はもう読み込めない行を報告し、`ontology.validate(store=store)` はそれらを `INVALID_RECORD` として拒否します。
 
@@ -223,7 +223,7 @@ def ticket_count(query: BoundQuery, params: TicketCountParams) -> int:
 ontology.validate()
 
 for f in ontology.diagnose():
-    print(f.severity, f.code, f.location, f.fix_hint)
+    print(f.severity, f.code, f.location, f.fix_hint, f.guide)
 
 store = ObjectStore(ontology.registry)
 source = Source(source_system="demo")

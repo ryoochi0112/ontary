@@ -98,10 +98,10 @@ The `validate` method freezes the ontology definition. Any subsequent attempts t
 ontology.validate()
 
 for f in ontology.diagnose():
-    print(f.severity, f.code, f.location, f.fix_hint)
+    print(f.severity, f.code, f.location, f.fix_hint, f.guide)
 ```
 
-Diagnostics run advisory checks. Heuristics like `STORED_DERIVABLE` or `CRUD_ACTION_NAME` return warnings. These warnings do not stop execution.
+Diagnostics run advisory checks. Heuristics like `STORED_DERIVABLE` or `CRUD_ACTION_NAME` return warnings. These warnings do not stop execution. Each finding carries `f.guide`, a link to the design-guide section that explains it. If a finding is intentional, accept it at the declaration with `accept=`, for example `accept="STORED_DERIVABLE"` on a property. In CI, `ontary validate --strict` is the gate: it exits with code 1 on any remaining warning.
 
 After you edit an ontology that already has stored rows, pass the store: `ontology.diagnose(store=store)` reports rows that would no longer load, and `ontology.validate(store=store)` refuses them with `INVALID_RECORD`.
 
@@ -223,7 +223,7 @@ def ticket_count(query: BoundQuery, params: TicketCountParams) -> int:
 ontology.validate()
 
 for f in ontology.diagnose():
-    print(f.severity, f.code, f.location, f.fix_hint)
+    print(f.severity, f.code, f.location, f.fix_hint, f.guide)
 
 store = ObjectStore(ontology.registry)
 source = Source(source_system="demo")

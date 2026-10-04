@@ -61,7 +61,7 @@ ontology = Ontology(name="scoped-invoices", scope_levels=["org"])
 class Invoice(OntologyObject):
     id: str = prop(primary_key=True)
     org_id: str = prop(scope_level="org")
-    total_amount: int
+    amount: int
 
 
 ontology.validate()
@@ -69,7 +69,7 @@ assert isinstance(ontology.definition.policy, ScopePolicy)
 store = ObjectStore(ontology.registry)
 store.insert(
     "Invoice",
-    {"id": "invoice-1", "org_id": "org-a", "total_amount": 125},
+    {"id": "invoice-1", "org_id": "org-a", "amount": 125},
     Source(source_system="cookbook"),
 )
 
@@ -97,10 +97,14 @@ assert org_b_client.list(Invoice, limit=None) == []
 
 Diagnostics are intentionally advisory. When `ontology.diagnose()` reports
 name heuristics, they use `severity="warn"`, so a legitimate stored fact called
-`total_amount` can fire `STORED_DERIVABLE`, and a legitimate business action
+`total_amount` can fire `STORED_DERIVABLE` (the recipe above names it `amount`), and a legitimate business action
 called `CreateInvoice` can fire `CRUD_ACTION_NAME` because `Create*` resembles
-CRUD. Read the fix hint and keep the declaration when its domain meaning is
-correct; warnings are not automatic validation failures.
+CRUD. Read the fix hint. When the declaration's domain meaning is correct, accept
+the finding where you declare it with `accept=`, for example
+`prop(accept="STORED_DERIVABLE")` or
+`@ontology.action(..., accept="CRUD_ACTION_NAME")`. Warnings are not automatic
+validation failures; `ontary validate --strict` is what turns a remaining warning
+into a failing exit code.
 
 ### 2. Serve MCP in development
 
@@ -110,6 +114,8 @@ optional MCP dependency.
 
 <!-- cookbook-serve-dev-runnable:start -->
 ```python
+from typing import Literal
+
 from ontary import Ontology, OntologyObject, prop
 
 ontology = Ontology(name="dev-server", scope_levels=["org"])
@@ -118,7 +124,7 @@ ontology = Ontology(name="dev-server", scope_levels=["org"])
 @ontology.object(layer="L0", scope="unscoped", owned=True)
 class HealthCheck(OntologyObject):
     id: str = prop(primary_key=True)
-    status: str
+    status: Literal["ok", "degraded", "down"]
 
 
 ontology.validate()

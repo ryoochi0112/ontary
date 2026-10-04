@@ -7,6 +7,8 @@ before they declare it with `Ontology` and `OntologyObject`, or generate the
 lower-level `ObjectTypeDef`, `PropertyDef`, `LinkTypeDef`, `ActionTypeDef`, and
 `FunctionDef` descriptors. It is a design guide, not a second API reference: use it
 to choose boundaries, ownership, relationships, behavior, names, and security.
+`ontary validate` reports the mistakes in this guide that a tool can detect, and each
+finding links back to its section (see [the CLI reference](cli.md)).
 
 It is an original, ontary-native distillation of Palantir Foundry's
 [Best practices](https://www.palantir.com/docs/foundry/ontology/ontology-best-practices/),
@@ -101,7 +103,8 @@ from Ticket facts rather than persisting competing totals.
 
 A declared point-in-time snapshot is the one intentional exception. If the domain
 must preserve what a score or decision was at a named instant, model a snapshot
-object explicitly, including its subject and observation time. Do not call an
+object explicitly, including its subject and observation time, and declare it with
+`snapshot=True` on `@ontology.object`. Do not call an
 ordinary cache, report result, or duplicated current value a snapshot. Routine
 history needs no clone: stored rows already carry `valid_from` and `valid_to`.
 
@@ -427,6 +430,12 @@ across clones; "current state" becomes a convention instead of a query.
 not a modeling problem. If a point-in-time value must be first-class, declare it
 explicitly as a snapshot type (e.g. `EngagementScoreSnapshot`) — the only sanctioned
 duplicate of a derivable fact. History is row history, never a `V2` type.
+
+```python
+@ontology.object(layer="L0", snapshot=True)
+class EngagementScoreSnapshot(OntologyObject):
+    id: str = prop(primary_key=True)
+```
 
 *Source: Palantir, "Ontology design: Anti-patterns".*
 
