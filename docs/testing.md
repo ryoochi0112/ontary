@@ -107,7 +107,7 @@ def test_escalate_errors():
 
 ## Fixed time and IDs
 
-Actions often generate identifiers and timestamps during execution. We can mock these values to ensure deterministic test runs. Passing a fixed clock and id factory to the bind call overrides default dynamic behaviors.
+Actions generate identifiers and timestamps while they run. Pass a fixed clock and an id factory to `bind` to make both deterministic. The clock is installed on the store, so it also stamps `bulk_upsert`, `bulk_link`, and direct store writes.
 
 ```python
 def test_fixed_time_and_ids():
@@ -119,6 +119,32 @@ def test_fixed_time_and_ids():
     store = make_store(ontology)
     runtime = ontology.bind(store, clock=clock, id_factory=id_factory)
     assert runtime is not None
+```
+
+Bind before you seed. Data written under another clock can make a later update or retire raise `CLOCK_REGRESSION`. This example seeds with `bulk_upsert` after binding, executes an action, and checks that `valid_from` and the audit `ts` equal the fixed instant.
+
+```python
+def test_whole_test_is_deterministic():
+    from ontary.ingest import bulk_upsert
+
+    t = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    store = make_store(ontology)
+    runtime = ontology.bind(store, clock=FixedClock(t), id_factory=SequentialIds("t"))
+    source = Source(source_system="demo")
+    report = bulk_upsert(
+        store, ontology.registry, "Ticket",
+        [{"id": "t-0", "subject": "Invoice mismatch", "queue_id": "queue-a"}],
+        source,
+    )
+    assert report.errors == []
+
+    agent = consumer(role="Agent", scope_level="queue", scope_id="queue-a")
+    runtime.for_consumer(agent).execute(EscalateTicket(ticket_id="t-0"))
+
+    stored = store.read_current("Ticket", "t-0")
+    assert stored is not None
+    assert stored.lineage.valid_from == t.isoformat(timespec="microseconds")
+    assert store.audit_entries()[-1].ts == t
 ```
 
 ## Diagnostics as a test

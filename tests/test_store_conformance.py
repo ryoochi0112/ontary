@@ -67,7 +67,7 @@ from ontary.store import (
     StoredObject,
     WriteRecord,
 )
-from ontary.store._shared import canonical_id
+from ontary.store._shared import StoreClock, canonical_id
 from ontary.store.inmemory import InMemoryStore
 from ontary.testing import SequentialIds
 
@@ -1396,9 +1396,7 @@ def test_asof_link_read_includes_a_link_closed_in_the_objects_own_tick(
     # lower bound is satisfied whichever comparison the backend uses -- and
     # `inmemory._live_at` could trade `<=` for `<` with the whole suite green.
     frozen = "2030-06-01T00:00:00.000000+00:00"
-    monkeypatch.setattr(
-        sys.modules[type(store).__module__], "_utcnow_iso", lambda: frozen
-    )
+    monkeypatch.setattr(StoreClock, "now_iso", lambda self, capture: frozen)
     store.create_link("belongsToDepartment", team_id, department_id)
     store.retire_object("Team", team_id)
     store.close_link("belongsToDepartment", team_id, department_id)
@@ -1463,9 +1461,7 @@ def test_asof_link_read_compares_mixed_width_timestamps_consistently(
     # `asof`, so every backend must return it.
     opened = "2030-06-01T00:00:00+00:00"
     asof = "2030-06-01T00:00:00.000001+00:00"
-    monkeypatch.setattr(
-        sys.modules[type(store).__module__], "_utcnow_iso", lambda: opened
-    )
+    monkeypatch.setattr(StoreClock, "now_iso", lambda self, capture: opened)
     store.create_link("belongsToDepartment", team_id, department_id)
 
     assert store.links_from_asof("belongsToDepartment", team_id, asof) == [
@@ -1495,9 +1491,7 @@ def test_asof_link_read_excludes_a_link_closed_at_a_narrower_spelling(
     store.create_link("belongsToDepartment", team_id, department_id)
     closed = "2030-06-01T00:00:00+00:00"
     asof = "2030-06-01T00:00:00.000001+00:00"
-    monkeypatch.setattr(
-        sys.modules[type(store).__module__], "_utcnow_iso", lambda: closed
-    )
+    monkeypatch.setattr(StoreClock, "now_iso", lambda self, capture: closed)
     store.close_link("belongsToDepartment", team_id, department_id)
 
     assert store.links_from_asof("belongsToDepartment", team_id, asof) == []
@@ -1535,9 +1529,7 @@ def _seed_fan_out(
     store.insert("Department", {"id": department_id, "name": "Ops"}, src)
 
     now = [_FAN_OUT_ASOF]
-    monkeypatch.setattr(
-        sys.modules[type(store).__module__], "_utcnow_iso", lambda: now[0]
-    )
+    monkeypatch.setattr(StoreClock, "now_iso", lambda self, capture: now[0])
 
     def set_clock(value: str) -> None:
         now[0] = value
@@ -1700,9 +1692,7 @@ def test_link_reads_order_mixed_width_valid_from_in_byte_order(
     # id order and locale order would both put `t-a` first.
     stamps = {"t-z": "2030-06-01T00:00:00+00:00", "t-a": "2030-06-01T00:00:00.000000+00:00"}
     now = [""]
-    monkeypatch.setattr(
-        sys.modules[type(store).__module__], "_utcnow_iso", lambda: now[0]
-    )
+    monkeypatch.setattr(StoreClock, "now_iso", lambda self, capture: now[0])
     for team_id in ("t-a", "t-z"):
         now[0] = stamps[team_id]
         store.create_link("hasTeam", department_id, team_id)
@@ -1750,9 +1740,7 @@ def test_link_reads_break_a_valid_from_tie_in_byte_order(
     store.insert("Department", {"id": department_id, "name": "Ops"}, src)
 
     frozen = "2030-06-01T00:00:00.000000+00:00"
-    monkeypatch.setattr(
-        sys.modules[type(store).__module__], "_utcnow_iso", lambda: frozen
-    )
+    monkeypatch.setattr(StoreClock, "now_iso", lambda self, capture: frozen)
     # Created in the order the assertion does NOT expect, so a backend
     # answering in insertion order fails rather than passing by accident.
     for team_id in ("t-a", "TA"):
@@ -3801,3 +3789,235 @@ def test_non_str_pk_values_keep_their_behaviour(store_factory: StoreFactory) -> 
     with raises_code(ValidationFailed, "INVALID_RECORD"):
         store.insert("Team", {"id": 1, "name": "int-pk"}, source)
     assert store.read_current("Team", "1") is None
+
+
+# -- injectable store clock (#46) --------------------------------------------
+
+
+class _SettableClock:
+    """A mutable test clock: `value` can be moved backwards between writes."""
+
+    def __init__(self, value: datetime) -> None:
+        self.value = value
+
+    def __call__(self) -> datetime:
+        return self.value
+
+
+_T0 = datetime(2026, 1, 2, 3, 4, 5, 678901, tzinfo=timezone.utc)
+_T0_ISO = "2026-01-02T03:04:05.678901+00:00"
+_T1 = datetime(2026, 1, 2, 3, 4, 6, 0, tzinfo=timezone.utc)
+_T1_ISO = "2026-01-02T03:04:06.000000+00:00"
+_EARLIER = datetime(2026, 1, 2, 3, 4, 4, 0, tzinfo=timezone.utc)
+_CAPTURE_AT = "2030-05-06T07:08:09.123456+00:00"
+_TEAM_SRC = Source(source_system="clock-test")
+
+
+def _link_stamps(
+    store: Store, link_type: str, from_id: str, to_id: str
+) -> list[tuple[str, str | None]]:
+    """(valid_from, valid_to) of every retained row of one link."""
+    if isinstance(store, ObjectStore):
+        rows = store._conn.execute(
+            """
+            SELECT valid_from, valid_to FROM links
+            WHERE link_type = ? AND from_id = ? AND to_id = ? AND tenant = ?
+            ORDER BY rowid ASC
+            """,
+            (link_type, from_id, to_id, store._tenant),
+        ).fetchall()
+        return [(row["valid_from"], row["valid_to"]) for row in rows]
+
+    if isinstance(store, InMemoryStore):
+        return [
+            (row["valid_from"], row["valid_to"])
+            for row in store._links
+            if row["link_type"] == link_type
+            and row["from_id"] == from_id
+            and row["to_id"] == to_id
+            and row["tenant"] == store._tenant
+        ]
+
+    from ontary.store.postgres import PostgresStore
+
+    assert isinstance(store, PostgresStore)
+    with store._conn.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT valid_from, valid_to FROM links
+            WHERE link_type = %s AND from_id = %s AND to_id = %s AND tenant = %s
+            ORDER BY valid_from ASC
+            """,
+            (link_type, from_id, to_id, store._tenant),
+        )
+        return [(vf, vt) for vf, vt in cursor.fetchall()]
+
+
+def test_bound_clock_stamps_insert_update_retire_exactly(store: Store) -> None:
+    clock = _SettableClock(_T0)
+    assert store.bind_clock(clock) is clock
+
+    store.insert("Team", {"id": "t1", "name": "a"}, _TEAM_SRC)
+    current = store.read_current("Team", "t1")
+    assert current is not None
+    assert current.lineage.valid_from == _T0_ISO
+    assert current.lineage.valid_to is None
+
+    clock.value = _T1
+    store.update("Team", "t1", {"name": "b"}, _TEAM_SRC)
+    current = store.read_current("Team", "t1")
+    assert current is not None
+    assert current.lineage.valid_from == _T1_ISO
+    assert [vt for _, vt in _history_rows(store, "Team", "t1")] == [_T1_ISO, None]
+
+    retired = store.retire_object("Team", "t1")
+    assert retired.lineage.valid_from == _T1_ISO
+    assert retired.lineage.valid_to == _T1_ISO
+    assert store.read_current("Team", "t1") is None
+
+
+def test_bound_clock_stamps_create_and_close_link_exactly(store: Store) -> None:
+    clock = _SettableClock(_T0)
+    store.bind_clock(clock)
+    store.insert("Team", {"id": "t1", "name": "a"}, _TEAM_SRC)
+    store.insert("Department", {"id": "d1", "name": "d"}, _TEAM_SRC)
+
+    store.create_link("belongsToDepartment", "t1", "d1")
+    assert _link_stamps(store, "belongsToDepartment", "t1", "d1") == [(_T0_ISO, None)]
+
+    clock.value = _T1
+    assert store.close_link("belongsToDepartment", "t1", "d1") is True
+    assert _link_stamps(store, "belongsToDepartment", "t1", "d1") == [(_T0_ISO, _T1_ISO)]
+
+
+def test_capture_at_overrides_store_clock_for_every_write(authority_store: Store) -> None:
+    authority_store.bind_clock(_SettableClock(_T0))
+    authority_store.insert("Ticket", {"id": "ticket-1", "status": "open"}, _TEAM_SRC)
+
+    with authority_store.capture_action_writes(at=_CAPTURE_AT):
+        authority_store.insert("Escalation", {"id": "esc-1", "reason": "r"}, _TEAM_SRC)
+        authority_store.update("Escalation", "esc-1", {"reason": "r2"}, _TEAM_SRC)
+        authority_store.create_link("ownedLink", "esc-1", "ticket-1")
+        authority_store.close_link("ownedLink", "esc-1", "ticket-1")
+        retired = authority_store.retire_object("Escalation", "esc-1")
+
+    assert retired.lineage.valid_to == _CAPTURE_AT
+    assert [vt for _, vt in _history_rows(authority_store, "Escalation", "esc-1")] == [
+        _CAPTURE_AT,
+        _CAPTURE_AT,
+    ]
+    assert _link_stamps(authority_store, "ownedLink", "esc-1", "ticket-1") == [
+        (_CAPTURE_AT, _CAPTURE_AT)
+    ]
+
+    # outside the capture the store clock is back in charge
+    authority_store.insert("Escalation", {"id": "esc-2", "reason": "r"}, _TEAM_SRC)
+    esc2 = authority_store.read_current("Escalation", "esc-2")
+    assert esc2 is not None
+    assert esc2.lineage.valid_from == _T0_ISO
+
+
+def test_update_under_earlier_clock_is_refused_and_leaves_row(store: Store) -> None:
+    clock = _SettableClock(_T1)
+    store.bind_clock(clock)
+    store.insert("Team", {"id": "t1", "name": "a"}, _TEAM_SRC)
+
+    clock.value = _EARLIER
+    with raises_code(PreconditionFailed, "CLOCK_REGRESSION"):
+        store.update("Team", "t1", {"name": "b"}, _TEAM_SRC)
+
+    current = store.read_current("Team", "t1")
+    assert current is not None
+    assert current.payload["name"] == "a"
+    assert current.lineage.valid_from == _T1_ISO
+    assert current.lineage.valid_to is None
+    assert len(_history_rows(store, "Team", "t1")) == 1
+
+
+def test_retire_under_earlier_clock_is_refused_and_leaves_row(store: Store) -> None:
+    clock = _SettableClock(_T1)
+    store.bind_clock(clock)
+    store.insert("Team", {"id": "t1", "name": "a"}, _TEAM_SRC)
+
+    clock.value = _EARLIER
+    with raises_code(PreconditionFailed, "CLOCK_REGRESSION"):
+        store.retire_object("Team", "t1")
+
+    current = store.read_current("Team", "t1")
+    assert current is not None
+    assert current.lineage.valid_to is None
+    assert _history_rows(store, "Team", "t1")[0][1] is None
+
+
+def test_close_link_under_earlier_clock_is_refused_and_leaves_link(store: Store) -> None:
+    clock = _SettableClock(_T1)
+    store.bind_clock(clock)
+    store.insert("Team", {"id": "t1", "name": "a"}, _TEAM_SRC)
+    store.insert("Department", {"id": "d1", "name": "d"}, _TEAM_SRC)
+    store.create_link("belongsToDepartment", "t1", "d1")
+
+    clock.value = _EARLIER
+    with raises_code(PreconditionFailed, "CLOCK_REGRESSION"):
+        store.close_link("belongsToDepartment", "t1", "d1")
+
+    assert _link_stamps(store, "belongsToDepartment", "t1", "d1") == [(_T1_ISO, None)]
+    assert store.links_from("belongsToDepartment", "t1") == ["d1"]
+
+
+def test_close_link_with_no_live_link_still_answers_not_found_under_any_clock(
+    store: Store,
+) -> None:
+    store.bind_clock(_SettableClock(_T1))
+    store.insert("Team", {"id": "t1", "name": "a"}, _TEAM_SRC)
+    store.insert("Department", {"id": "d1", "name": "d"}, _TEAM_SRC)
+    with raises_code(ValidationFailed, "LINK_NOT_FOUND"):
+        store.close_link("belongsToDepartment", "t1", "d1")
+
+
+def test_equal_instant_write_succeeds(store: Store) -> None:
+    store.bind_clock(_SettableClock(_T0))
+    store.insert("Team", {"id": "t1", "name": "a"}, _TEAM_SRC)
+    store.insert("Department", {"id": "d1", "name": "d"}, _TEAM_SRC)
+    store.create_link("belongsToDepartment", "t1", "d1")
+
+    store.update("Team", "t1", {"name": "b"}, _TEAM_SRC)
+    assert store.close_link("belongsToDepartment", "t1", "d1") is True
+    retired = store.retire_object("Team", "t1")
+
+    assert retired.lineage.valid_from == _T0_ISO
+    assert retired.lineage.valid_to == _T0_ISO
+    assert _link_stamps(store, "belongsToDepartment", "t1", "d1") == [(_T0_ISO, _T0_ISO)]
+
+
+def test_naive_clock_is_refused_and_nothing_is_written(store: Store) -> None:
+    store.insert("Team", {"id": "t1", "name": "a"}, _TEAM_SRC)
+    store.insert("Department", {"id": "d1", "name": "d"}, _TEAM_SRC)
+    before = store.read_current("Team", "t1")
+    store.bind_clock(lambda: datetime(2026, 1, 2, 3, 4, 5))
+
+    with raises_code(ValidationFailed, "CLOCK_NOT_TIMEZONE_AWARE"):
+        store.insert("Team", {"id": "t2", "name": "x"}, _TEAM_SRC)
+    with raises_code(ValidationFailed, "CLOCK_NOT_TIMEZONE_AWARE"):
+        store.update("Team", "t1", {"name": "b"}, _TEAM_SRC)
+    with raises_code(ValidationFailed, "CLOCK_NOT_TIMEZONE_AWARE"):
+        store.retire_object("Team", "t1")
+    with raises_code(ValidationFailed, "CLOCK_NOT_TIMEZONE_AWARE"):
+        store.create_link("belongsToDepartment", "t1", "d1")
+
+    assert store.read_current("Team", "t2") is None
+    assert store.read_current("Team", "t1") == before
+    assert len(_history_rows(store, "Team", "t1")) == 1
+    assert store.links_from("belongsToDepartment", "t1") == []
+
+
+def test_bind_clock_conflict_and_idempotence(store: Store) -> None:
+    first = _SettableClock(_T0)
+    assert store.bind_clock(first) is first
+    assert store.bind_clock(first) is first
+    assert store.bind_clock(None) is first
+    with raises_code(PreconditionFailed, "CLOCK_CONFLICT"):
+        store.bind_clock(_SettableClock(_T1))
+    store.insert("Team", {"id": "t1", "name": "a"}, _TEAM_SRC)
+    current = store.read_current("Team", "t1")
+    assert current is not None
+    assert current.lineage.valid_from == _T0_ISO

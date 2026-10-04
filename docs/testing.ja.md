@@ -107,7 +107,7 @@ def test_escalate_errors():
 
 ## 固定日時と固定ID
 
-アクションの実行中に、IDやタイムスタンプが生成されることがよくあります。テストの決定論的な実行を保証するために、これらの値をモック化できます。`bind`呼び出しに固定クロックとIDファクトリを渡すと、動的な既定の動作を上書きできます。
+アクションは、実行中にIDやタイムスタンプを生成します。`bind`に固定クロックとIDファクトリを渡すと、どちらも決定論的になります。クロックはストアに設定されるため、`bulk_upsert`、`bulk_link`、ストアへの直接書き込みにも適用されます。
 
 ```python
 def test_fixed_time_and_ids():
@@ -119,6 +119,32 @@ def test_fixed_time_and_ids():
     store = make_store(ontology)
     runtime = ontology.bind(store, clock=clock, id_factory=id_factory)
     assert runtime is not None
+```
+
+シードの前にバインドしてください。別のクロックで書き込んだデータがあると、後の更新や retire で`CLOCK_REGRESSION`が発生することがあります。次の例は、バインド後に`bulk_upsert`でシードし、アクションを実行します。そして`valid_from`と監査の`ts`が固定時刻と等しいことを確認します。
+
+```python
+def test_whole_test_is_deterministic():
+    from ontary.ingest import bulk_upsert
+
+    t = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    store = make_store(ontology)
+    runtime = ontology.bind(store, clock=FixedClock(t), id_factory=SequentialIds("t"))
+    source = Source(source_system="demo")
+    report = bulk_upsert(
+        store, ontology.registry, "Ticket",
+        [{"id": "t-0", "subject": "Invoice mismatch", "queue_id": "queue-a"}],
+        source,
+    )
+    assert report.errors == []
+
+    agent = consumer(role="Agent", scope_level="queue", scope_id="queue-a")
+    runtime.for_consumer(agent).execute(EscalateTicket(ticket_id="t-0"))
+
+    stored = store.read_current("Ticket", "t-0")
+    assert stored is not None
+    assert stored.lineage.valid_from == t.isoformat(timespec="microseconds")
+    assert store.audit_entries()[-1].ts == t
 ```
 
 ## テストとしての診断機能

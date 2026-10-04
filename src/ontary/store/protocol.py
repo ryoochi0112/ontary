@@ -6,7 +6,9 @@ refactor). This is the storage seam the engine is written against.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from contextlib import AbstractContextManager
+from datetime import datetime
 from typing import Any, Protocol, runtime_checkable
 
 from ontary.audit import AuditEntry, WriteRecord
@@ -222,9 +224,31 @@ class Store(Protocol):
         open on this store."""
         ...
 
-    def capture_action_writes(self) -> AbstractContextManager[list[WriteRecord]]:
+    def capture_action_writes(
+        self, *, at: str | None = None
+    ) -> AbstractContextManager[list[WriteRecord]]:
         """Context manager that, while active, enforces authority
         declarations on action writes and records each allowed create,
         update, retire, link, or unlink as a `WriteRecord` in the yielded
-        list."""
+        list.
+
+        `at`, when given, is the one instant (canonical UTC ISO string)
+        every write inside the capture is stamped with, overriding the
+        store clock."""
+        ...
+
+    def bind_clock(
+        self, clock: Callable[[], datetime] | None
+    ) -> Callable[[], datetime]:
+        """Engine-internal. Install the clock this store stamps
+        `valid_from`/`valid_to` with, and return the effective clock.
+
+        A store has one clock. Rules: no clock installed and `clock` given
+        installs it; the same clock again is a no-op; `None` installs
+        nothing and returns the installed clock (or the runtime default if
+        none); a different clock than the installed one raises
+        `PreconditionFailed` with `CLOCK_CONFLICT`. A clock returning a naive
+        datetime is refused at write time (`CLOCK_NOT_TIMEZONE_AWARE`), and a
+        write that would close a row at an instant before its `valid_from` is
+        refused (`CLOCK_REGRESSION`)."""
         ...

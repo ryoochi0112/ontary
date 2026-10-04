@@ -40,8 +40,9 @@ from __future__ import annotations
 
 import json
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from datetime import datetime
 from typing import Any
 
 from ontary.audit import (
@@ -52,6 +53,7 @@ from ontary.errors import ConflictError
 from ontary.meta import Cardinality, OntologyRegistry
 from ontary.store import _sql
 from ontary.store._shared import (
+    StoreClock,
     WriteCapture,
     canonical_id,
     check_link_endpoints,
@@ -62,6 +64,7 @@ from ontary.store._shared import (
     check_update_authority,
     decode_audit_entry,
     encode_audit_entry,
+    ensure_not_before,
     live_link_not_found,
     merge_update,
     object_already_exists,
@@ -78,7 +81,6 @@ from ontary.store.values import (
     PagedRow,
     Source,
     StoredObject,
-    _utcnow_iso,
 )
 
 __all__ = ["POSTGRES_EXTRA_HINT", "PostgresStore"]
@@ -207,6 +209,7 @@ class PostgresStore:
         self._conn = psycopg.connect(dsn, autocommit=False)
         self._txn_depth = 0
         self._write_capture = WriteCapture()
+        self._clock_state = StoreClock()
         self._init_schema()
         # Session-scoped, not per-transaction: not every read this backend makes
         # opens one, and an unset variable means the policies match nothing --
@@ -324,9 +327,16 @@ class PostgresStore:
     def in_transaction(self) -> bool:
         return self._txn_depth > 0
 
+    def bind_clock(
+        self, clock: Callable[[], datetime] | None
+    ) -> Callable[[], datetime]:
+        return self._clock_state.bind(clock)
+
     @contextmanager
-    def capture_action_writes(self) -> Iterator[list[WriteRecord]]:
-        with self._write_capture.capture() as records:
+    def capture_action_writes(
+        self, *, at: str | None = None
+    ) -> Iterator[list[WriteRecord]]:
+        with self._write_capture.capture(at=at) as records:
             yield records
 
     def _record_write(self, record: WriteRecord) -> None:
@@ -345,7 +355,7 @@ class PostgresStore:
         # `json.dumps`), or a value that is storable in tests becomes unstorable
         # in production.
         encoded = json.dumps(payload)
-        now = _utcnow_iso()
+        now = self._clock_state.now_iso(self._write_capture)
         with self.transaction() as conn:
             if self.read_current(obj_type, obj_id) is not None:
                 raise object_already_exists(obj_type, obj_id)
@@ -391,7 +401,11 @@ class PostgresStore:
                 obj_def, obj_type, obj_id, current, payload_changes, capturing=capturing
             )
             encoded = json.dumps(merged)
-            now = _utcnow_iso()
+            now = self._clock_state.now_iso(self._write_capture)
+            assert current is not None
+            ensure_not_before(
+                current.lineage.valid_from, now, what=f"{obj_type} {obj_id}"
+            )
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -430,7 +444,7 @@ class PostgresStore:
             object_type,
             capturing=self._write_capture.active,
         )
-        now = _utcnow_iso()
+        now = self._clock_state.now_iso(self._write_capture)
         with self.transaction() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -458,6 +472,9 @@ class PostgresStore:
                         obj_id,
                         has_history=cur.fetchone() is not None,
                     )
+                ensure_not_before(
+                    current[4], now, what=f"{object_type} {obj_id}"
+                )
                 cur.execute(
                     """
                     UPDATE objects SET valid_to = %s
@@ -602,6 +619,7 @@ class PostgresStore:
             # is written, so no write record is captured either.
             return
 
+        now = self._clock_state.now_iso(self._write_capture)
         with self.transaction() as conn:
             with conn.cursor() as cur:
                 if link_def.cardinality in (
@@ -642,7 +660,7 @@ class PostgresStore:
                         (link_type, from_id, to_id, valid_from, valid_to, tenant)
                     VALUES (%s, %s, %s, %s, NULL, %s)
                     """,
-                    (link_type, from_id, to_id, _utcnow_iso(), self._tenant),
+                    (link_type, from_id, to_id, now, self._tenant),
                 )
         self._record_write(
             WriteRecord(op="link", link_type=link_type, from_id=from_id, to_id=to_id)
@@ -655,18 +673,32 @@ class PostgresStore:
             link_type,
             capturing=self._write_capture.active,
         )
+        now = self._clock_state.now_iso(self._write_capture)
         with self.transaction() as conn:
             with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT valid_from FROM links
+                    WHERE link_type = %s AND from_id = %s AND to_id = %s
+                      AND valid_to IS NULL AND tenant = %s
+                    """,
+                    (link_type, from_id, to_id, self._tenant),
+                )
+                live = cur.fetchall()
+                if not live:
+                    raise live_link_not_found(link_type, from_id, to_id)
+                for (live_from,) in live:
+                    ensure_not_before(
+                        live_from, now, what=f"{link_type} {from_id}->{to_id}"
+                    )
                 cur.execute(
                     """
                     UPDATE links SET valid_to = %s
                     WHERE link_type = %s AND from_id = %s AND to_id = %s
                       AND valid_to IS NULL AND tenant = %s
                     """,
-                    (_utcnow_iso(), link_type, from_id, to_id, self._tenant),
+                    (now, link_type, from_id, to_id, self._tenant),
                 )
-                if cur.rowcount == 0:
-                    raise live_link_not_found(link_type, from_id, to_id)
         self._record_write(
             WriteRecord(
                 op="unlink", link_type=link_type, from_id=from_id, to_id=to_id

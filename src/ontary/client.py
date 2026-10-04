@@ -57,7 +57,7 @@ from collections.abc import Callable, Mapping
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal, TypeVar, overload
 
-from ontary._runtime import default_clock, default_id_factory
+from ontary._runtime import default_id_factory
 from ontary._typed_api import _TypedReadMixin, list_objects
 from ontary.actions import ActionError, ActionExecutor, TypedHandler
 from ontary.audit import AuditEntry, CapabilityAccessRecord, _audit_error_code
@@ -184,7 +184,7 @@ class OntologyRuntime:
             handlers = definition.action_handlers
         self._definition = definition
         self._store = store
-        self._clock = clock if clock is not None else default_clock
+        self._clock = store.bind_clock(clock)
         self._id_factory = id_factory if id_factory is not None else default_id_factory
         self._capability_providers = _checked_provider_map(
             capabilities, definition.registry, "capability"

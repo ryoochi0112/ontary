@@ -445,6 +445,27 @@ client  = runtime.for_consumer(consumer)                            # リクエ�
 UUID 形式の ID です。どちらも共有ランタイムに保存され、すべての
 `for_consumer()` ビューに引き継がれます。
 
+`clock=c` を付けてバインドすると、`c` がストアに設定されます。以降、そのストアへの
+すべての書き込みが `c` を使います。対象は、アクションの書き込み、
+`ontary.ingest.bulk_upsert` / `bulk_link`、ストアの直接呼び出しです。
+`valid_from` / `valid_to` はこのクロックから決まります。
+
+- **1 回の呼び出しにつき 1 つの時刻。** アクションはクロックをちょうど 1 回読みます。
+  その時刻が、`ctx.now()` の戻り値、アクションが書き込むすべての行とリンクの
+  `valid_from` / `valid_to`（`retire` が閉じるリンクを含む）、その呼び出しのすべての
+  監査エントリ（ok、denied、error）の `ts` になります。
+- **`CLOCK_CONFLICT`。** 同じストアを別のクロックオブジェクトでバインドすると、
+  `PreconditionFailed` が発生します。同じクロックオブジェクト、または `clock=` なしなら
+  問題ありません。`clock=` なしでバインドしたランタイムは、ストアに設定済みのクロックを使います。
+- **`CLOCK_REGRESSION`。** 閉じる行やリンクの `valid_from` より前の時刻での書き込みは、
+  `PreconditionFailed` になります。アクション内ではアクション全体がロールバックされ、
+  error 監査エントリがコードを記録します。同じ時刻は許可されます。
+- **`CLOCK_NOT_TIMEZONE_AWARE`。** naive な `datetime` を返すクロックは
+  `ValidationFailed` になり、何も保存されません。
+
+先にバインドしてから、シードしてください。別のクロックでシードしたデータがあると、
+過去に設定したクロックでの最初の更新や retire で `CLOCK_REGRESSION` が発生することがあります。
+
 ### `OntologyRuntime(ontology, store, handlers=None, *, clock=None, id_factory=None, capabilities=None)`
 
 1 つの `(ontology, store)` ペアに対する、コンシューマー非依存の共有機構 — クエリ層、
@@ -785,6 +806,7 @@ ctx.save(order)                   # `status` だけを書く
 | --- | --- |
 | `.capability(handle) -> P` | 宣言済み Capability の取得 |
 | `.consumer` | 呼び出し元の `Consumer` |
+| `.now() -> datetime` | 呼び出しの唯一の時刻（`Ontology.bind` を参照）。`datetime.now()` や時刻用 Capability の代わりに使います |
 
 `get` と `all` は信頼されたハンドラ向けの読み取りです。生データを返し、redaction と scope の制限を適用しません。
 consumer 向けの guarded query ではありません。scope や sensitivity で列挙を絞ると、id allocator から既存行が隠れます。
@@ -976,12 +998,14 @@ store ではなく `execute()` に属するのと同じく、client surface に�
 ものです。
 
 ```python
-Clock = ontology.capability(ClockProto, name="clock")
+Mailer = ontology.capability(MailerProto, name="mailer")
 
-@ontology.action(P, target=T, roles=["Agent"], capabilities=[Clock])
+@ontology.action(P, target=T, roles=["Agent"], capabilities=[Mailer])
 def handler(ctx, params):
-    now = ctx.capability(Clock).now()
+    ctx.capability(Mailer).send(...)
 ```
+
+現在時刻には Capability ではなく `ctx.now()` を使います。
 
 未宣言の Capability を要求すると `UNDECLARED_CAPABILITY`、宣言済みでもプロバイダが
 バインドされていなければ `CAPABILITY_NOT_PROVIDED` になります。
@@ -1501,6 +1525,8 @@ MCP サーバーでは、この実行時ではなくトランスポートによ�
 | Code | Meaning |
 | --- | --- |
 | `CAPABILITY_NOT_PROVIDED` | A declared capability had no provider bound for this call. |
+| `CLOCK_CONFLICT` | A store already has a different clock installed; a store has one clock. Bind with the same clock object, or with no clock to use the one already installed. |
+| `CLOCK_REGRESSION` | The store clock reads earlier than the valid_from of the version a write would close; the clock went backwards. Fix the clock (it must never run behind the data it wrote) and retry. |
 | `FUNCTION_ERROR` | Registering/calling a Function failed: undeclared api_name, duplicate registration, or no handler bound. |
 | `PRECONDITION_FAILED` | An action's precondition failed; the message names it. The conventional code for `ActionError` (kind precondition); an author may attach their own stable code instead (AC7), e.g. `raise ActionError("...", code="GAP_NOT_ACKNOWLEDGED")`. It is also used with overridden codes for unregistered/unhandled actions (`UNKNOWN_ACTION`) and parameter-validation failures (`INVALID_PARAMS`) -- see the `code=` overrides at those raise sites. |
 | `TRANSITION_NOT_ALLOWED` | A governed property changed to a state not allowed by its declared transition graph; action starts must be initial states. |
@@ -1509,6 +1535,7 @@ MCP サーバーでは、この実行時ではなくトランスポートによ�
 
 | Code | Meaning |
 | --- | --- |
+| `CLOCK_NOT_TIMEZONE_AWARE` | A clock returned a naive datetime; an instant must be timezone-aware. Return datetime values with a tzinfo, such as datetime.now(timezone.utc). |
 | `AFTER_WITHOUT_LIMIT` | `GuardedQuery.get_objects`'s (or `OntologyClient.list`'s) `after` was given without `limit` (pagination-hardening T2 review P1) -- the unpaginated `Store.read_all` path has no page to resume, so ignoring `after` would let a caller that lost track of its limit silently re-read every visible row and duplicate work; a caller that genuinely wants everything passes no `after` at all. |
 | `INVALID_BATCH` | `Store.read_page`'s `batch` was < 1 (SQLite's LIMIT -1 means unlimited and InMemoryStore's negative slice drops rows -- both the opposite of a bounded read). |
 | `INVALID_CURSOR` | Raised when `Store.read_page`'s `after_key` is malformed OR simply unknown. `after_key` is UNTRUSTED input: it reaches the store from an MCP client via a later page-filling loop, round-tripped from a previous page's cursor without any guarantee the caller did not tamper with it. As amended 2026-07-25 (T2 review, spec §5), it is a random per-row PAGE TOKEN (`objects.page_token`, uuid4 hex), not a decimal row id. Resolving token to row id through the unique index is the ONLY way to turn a cursor into row identity, so every string never issued for a real row (malformed, tampered, or made up) raises this same error on both backends. There is no distinct well-formed but out-of-range case from the old integer design's `OverflowError`/silent-empty-page divergence. A token issued for a row since superseded by `update` still resolves because lookup uses `row_id` independently of `valid_to`, so an in-flight cursor remains a valid resume point (spec §8). |
@@ -1547,7 +1574,7 @@ MCP サーバーでは、この実行時ではなくトランスポートによ�
 | `MIN_N_VIOLATION` | An aggregate would be computed over fewer than min_n distinct contributors. |
 | `VISIBILITY_DENIED` | A single-object read/write targeted an object outside the consumer's scope. |
 
-*全 52 コード / 7 種別。*
+*全 55 コード / 7 種別。*
 
 ---
 

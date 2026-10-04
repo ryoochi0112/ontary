@@ -453,6 +453,27 @@ client  = runtime.for_consumer(consumer)                            # cheap, per
 defaults to UUID-shaped IDs. Both seams are stored on the shared runtime and
 are inherited by every `for_consumer()` view.
 
+Binding with `clock=c` installs `c` on the store. From then on every write to
+that store uses it: action writes, `ontary.ingest.bulk_upsert` / `bulk_link`,
+and direct store calls. `valid_from` / `valid_to` come from it.
+
+- **One instant per invocation.** An action reads the clock exactly once. That
+  instant is what `ctx.now()` returns, the `valid_from` / `valid_to` of every
+  row and link the action writes (including links `retire` closes), and the
+  `ts` of every audit entry of the invocation (ok, denied, error).
+- **`CLOCK_CONFLICT`.** Binding the same store with a different clock object
+  raises `PreconditionFailed`. The same clock object, or no `clock=`, is fine;
+  a runtime bound without `clock=` uses the store's installed clock.
+- **`CLOCK_REGRESSION`.** A write whose instant is earlier than the
+  `valid_from` of the row or link it closes raises `PreconditionFailed`. Inside
+  an action the whole action rolls back and an error audit entry records the
+  code. An equal instant is allowed.
+- **`CLOCK_NOT_TIMEZONE_AWARE`.** A clock that returns a naive `datetime` raises
+  `ValidationFailed`; nothing is stored.
+
+Bind first, then seed: data seeded under another clock can make the first
+update or retire under a clock set in the past raise `CLOCK_REGRESSION`.
+
 ### `OntologyRuntime(ontology, store, handlers=None, *, clock=None, id_factory=None, capabilities=None)`
 
 Shared, consumer-free machinery for one `(ontology, store)` pair — query layer,
@@ -800,6 +821,7 @@ ctx.save(order)                   # writes only `status`
 | --- | --- |
 | `.capability(handle) -> P` | Fetch a declared capability |
 | `.consumer` | The calling `Consumer` |
+| `.now() -> datetime` | The invocation's single instant (see `Ontology.bind`). Use it instead of `datetime.now()` or a clock capability |
 
 `get` and `all` are trusted handler reads. They return raw, unredacted, and
 unscoped objects. They are intentionally not guarded consumer queries. Filtering
@@ -1000,12 +1022,14 @@ at bind time. Undeclared use is refused, and every use is audited. A capability 
 a thing a handler reads or calls.
 
 ```python
-Clock = ontology.capability(ClockProto, name="clock")
+Mailer = ontology.capability(MailerProto, name="mailer")
 
-@ontology.action(P, target=T, roles=["Agent"], capabilities=[Clock])
+@ontology.action(P, target=T, roles=["Agent"], capabilities=[Mailer])
 def handler(ctx, params):
-    now = ctx.capability(Clock).now()
+    ctx.capability(Mailer).send(...)
 ```
+
+For the current time use `ctx.now()`, not a capability.
 
 Requesting an undeclared capability raises `UNDECLARED_CAPABILITY`; a declared one
 with no provider bound raises `CAPABILITY_NOT_PROVIDED`.
@@ -1527,6 +1551,8 @@ table below is generated from it.
 | Code | Meaning |
 | --- | --- |
 | `CAPABILITY_NOT_PROVIDED` | A declared capability had no provider bound for this call. |
+| `CLOCK_CONFLICT` | A store already has a different clock installed; a store has one clock. Bind with the same clock object, or with no clock to use the one already installed. |
+| `CLOCK_REGRESSION` | The store clock reads earlier than the valid_from of the version a write would close; the clock went backwards. Fix the clock (it must never run behind the data it wrote) and retry. |
 | `FUNCTION_ERROR` | Registering/calling a Function failed: undeclared api_name, duplicate registration, or no handler bound. |
 | `PRECONDITION_FAILED` | An action's precondition failed; the message names it. The conventional code for `ActionError` (kind precondition); an author may attach their own stable code instead (AC7), e.g. `raise ActionError("...", code="GAP_NOT_ACKNOWLEDGED")`. It is also used with overridden codes for unregistered/unhandled actions (`UNKNOWN_ACTION`) and parameter-validation failures (`INVALID_PARAMS`) -- see the `code=` overrides at those raise sites. |
 | `TRANSITION_NOT_ALLOWED` | A governed property changed to a state not allowed by its declared transition graph; action starts must be initial states. |
@@ -1535,6 +1561,7 @@ table below is generated from it.
 
 | Code | Meaning |
 | --- | --- |
+| `CLOCK_NOT_TIMEZONE_AWARE` | A clock returned a naive datetime; an instant must be timezone-aware. Return datetime values with a tzinfo, such as datetime.now(timezone.utc). |
 | `AFTER_WITHOUT_LIMIT` | `GuardedQuery.get_objects`'s (or `OntologyClient.list`'s) `after` was given without `limit` (pagination-hardening T2 review P1) -- the unpaginated `Store.read_all` path has no page to resume, so ignoring `after` would let a caller that lost track of its limit silently re-read every visible row and duplicate work; a caller that genuinely wants everything passes no `after` at all. |
 | `INVALID_BATCH` | `Store.read_page`'s `batch` was < 1 (SQLite's LIMIT -1 means unlimited and InMemoryStore's negative slice drops rows -- both the opposite of a bounded read). |
 | `INVALID_CURSOR` | Raised when `Store.read_page`'s `after_key` is malformed OR simply unknown. `after_key` is UNTRUSTED input: it reaches the store from an MCP client via a later page-filling loop, round-tripped from a previous page's cursor without any guarantee the caller did not tamper with it. As amended 2026-07-25 (T2 review, spec §5), it is a random per-row PAGE TOKEN (`objects.page_token`, uuid4 hex), not a decimal row id. Resolving token to row id through the unique index is the ONLY way to turn a cursor into row identity, so every string never issued for a real row (malformed, tampered, or made up) raises this same error on both backends. There is no distinct well-formed but out-of-range case from the old integer design's `OverflowError`/silent-empty-page divergence. A token issued for a row since superseded by `update` still resolves because lookup uses `row_id` independently of `valid_to`, so an in-flight cursor remains a valid resume point (spec §8). |
@@ -1573,7 +1600,7 @@ table below is generated from it.
 | `MIN_N_VIOLATION` | An aggregate would be computed over fewer than min_n distinct contributors. |
 | `VISIBILITY_DENIED` | A single-object read/write targeted an object outside the consumer's scope. |
 
-*52 codes across 7 kinds.*
+*55 codes across 7 kinds.*
 
 ---
 

@@ -123,6 +123,9 @@ ADDED_SINCE_080_ERROR_CODES = frozenset(
         "OBJECT_NOT_LOADED",
         "TRANSITION_NOT_ALLOWED",
         "RULE_VIOLATED",
+        "CLOCK_CONFLICT",
+        "CLOCK_REGRESSION",
+        "CLOCK_NOT_TIMEZONE_AWARE",
     }
 )
 NEW_ENGLISH_DOCS = tuple(

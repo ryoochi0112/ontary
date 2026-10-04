@@ -37,6 +37,7 @@ from ontary.model import CapabilityHandle, LinkHandle, OntologyObject, hydrate
 from ontary.scope import ScopePolicy, resolve_owning_scope
 from ontary.security import Consumer, covers_scope
 from ontary.store import AuditEntry, Source, Store, StoredObject
+from ontary.store._shared import iso_instant
 from ontary.typesys import _to_storage_scalar, choice_value, struct_value, validate_scalar
 
 TypedHandler = Callable[["ActionContext", BaseModel], dict[str, Any]]
@@ -82,6 +83,7 @@ class ActionContext:
         "_capability_providers",
         "_capability_accesses",
         "_loaded",
+        "_now",
     )
 
     def __init__(
@@ -95,8 +97,10 @@ class ActionContext:
         declared_capabilities: frozenset[str] = frozenset(),
         capability_providers: Mapping[CapabilityHandle[Any], object] | None = None,
         capability_accesses: list[CapabilityAccessRecord] | None = None,
+        now: datetime | None = None,
     ) -> None:
         self._store = store
+        self._now = now if now is not None else default_clock()
         self._source = source
         self._consumer = consumer
         self._registry = registry
@@ -115,6 +119,11 @@ class ActionContext:
     @property
     def consumer(self) -> Consumer:
         return self._consumer
+
+    def now(self) -> datetime:
+        """The invocation's single instant; equals the audit ts and every
+        valid_from this action writes."""
+        return self._now
 
     def capability(self, handle: CapabilityHandle[P]) -> P:
         """The bound provider for `handle`, typed as the handle's protocol
@@ -507,6 +516,7 @@ class ActionExecutor:
         *,
         invocation_id: str | None,
         outcome: str,
+        ts: datetime,
         **extra: Any,
     ) -> AuditEntry:
         """THE one literal `AuditEntry(...)` construction in the executor
@@ -516,11 +526,10 @@ class ActionExecutor:
         guard has one site to verify instead of seven). `target_id` is
         resolved here from the declared target parameter, so a denied or
         error entry names the requested target exactly as the ok entry does
-        (#49). `extra` carries the per-site fields (`ts`, `writes`,
+        (#49). `ts` is the invocation's single instant. `extra` carries the per-site fields (`writes`,
         `capability_accesses`, `unscoped_params`, `error_code`)."""
-        if "ts" not in extra:
-            extra["ts"] = self._clock()
         return AuditEntry(
+            ts=ts,
             invocation_id=invocation_id,
             actor=consumer.actor_id,
             role=consumer.role,
@@ -562,6 +571,7 @@ class ActionExecutor:
         params_dict: dict[str, Any],
         params_cls: type[BaseModel] | None,
         invocation_id: str,
+        instant: datetime,
         unscoped_params: list[str],
     ) -> BaseModel | None:
         """Typed-invocation path (spec §6/AC5): a params class turns the
@@ -583,6 +593,7 @@ class ActionExecutor:
                 params_dict,
                 f"{action_name!r}: params failed validation: {exc}",
                 invocation_id,
+                instant,
                 unscoped_params=unscoped_params,
             )
 
@@ -593,6 +604,7 @@ class ActionExecutor:
         action_def: ActionTypeDef,
         params_dict: dict[str, Any],
         invocation_id: str,
+        instant: datetime,
         capability_providers: Mapping[CapabilityHandle[Any], object] | None,
         unscoped_params: list[str],
     ) -> dict[CapabilityHandle[Any], object]:
@@ -612,6 +624,7 @@ class ActionExecutor:
                         action_def,
                         params_dict,
                         invocation_id=invocation_id,
+                        ts=instant,
                         outcome="error",
                         unscoped_params=unscoped_params,
                         error_code="CAPABILITY_NOT_PROVIDED",
@@ -659,6 +672,12 @@ class ActionExecutor:
         # which is deliberately not audited and so has nothing to correlate.
         invocation_id = self._id_factory()
 
+        # The invocation's single clock read: stamps every audit entry below,
+        # the write capture (every valid_from/valid_to) and `ctx.now()`. A
+        # naive value is refused here, before anything is audited or written.
+        instant = self._clock()
+        iso_instant(instant)
+
         action_def, fn, params_cls = self._resolve_handler(action_name)
 
         params_dict = self._params_to_dict(action_def, params)
@@ -671,18 +690,21 @@ class ActionExecutor:
                 params_dict,
                 f"role {consumer.role!r} may not execute {action_name!r}",
                 invocation_id,
+                instant,
                 code="PERMISSION_DENIED",
             )
 
         self._validate_typed_datetime_params(
-            consumer, action_name, action_def, params, params_dict, invocation_id
+            consumer, action_name, action_def, params, params_dict, invocation_id, instant
         )
-        self._validate_params(consumer, action_name, action_def, params_dict, invocation_id)
+        self._validate_params(
+            consumer, action_name, action_def, params_dict, invocation_id, instant
+        )
         self._validate_params_json_safe(
-            consumer, action_name, action_def, params_dict, invocation_id
+            consumer, action_name, action_def, params_dict, invocation_id, instant
         )
         unscoped_params = self._enforce_scope(
-            consumer, action_name, action_def, params_dict, invocation_id
+            consumer, action_name, action_def, params_dict, invocation_id, instant
         )
 
         params_obj = self._coerce_typed_params(
@@ -693,6 +715,7 @@ class ActionExecutor:
             params_dict,
             params_cls,
             invocation_id,
+            instant,
             unscoped_params,
         )
 
@@ -702,6 +725,7 @@ class ActionExecutor:
             action_def,
             params_dict,
             invocation_id,
+            instant,
             capability_providers,
             unscoped_params,
         )
@@ -719,6 +743,7 @@ class ActionExecutor:
                 providers,
                 capability_accesses,
                 invocation_id,
+                instant,
                 unscoped_params,
             )
         except Exception as exc:
@@ -741,6 +766,7 @@ class ActionExecutor:
                     action_def,
                     params_dict,
                     invocation_id=invocation_id,
+                    ts=instant,
                     outcome=outcome,
                     capability_accesses=capability_accesses,
                     unscoped_params=unscoped_params,
@@ -763,6 +789,7 @@ class ActionExecutor:
         providers: Mapping[CapabilityHandle[Any], object],
         capability_accesses: list[CapabilityAccessRecord],
         invocation_id: str,
+        instant: datetime,
         unscoped_params: list[str],
     ) -> dict[str, Any]:
         """The engine-owned transaction: handler call under write capture
@@ -776,7 +803,9 @@ class ActionExecutor:
         writes the handler already made. The caller (`execute`) owns the
         rollback error-audit."""
         with self._store.transaction():
-            with self._store.capture_action_writes() as writes:
+            with self._store.capture_action_writes(
+                at=iso_instant(instant)
+            ) as writes:
                 if params_cls is not None:
                     if params_obj is None:
                         raise InternalError(
@@ -792,23 +821,23 @@ class ActionExecutor:
                         declared_capabilities=frozenset(action_def.capabilities),
                         capability_providers=providers,
                         capability_accesses=capability_accesses,
+                        now=instant,
                     )
                     result = fn(ctx, params_obj)
                 else:
                     result = fn(consumer, params_dict)
                 result = self._validate_result_json_safe(action_name, result)
-            emitted_at = self._clock()
             pending_entry = self._audit_entry(
                 consumer,
                 action_name,
                 action_def,
                 params_dict,
                 invocation_id=invocation_id,
+                ts=instant,
                 outcome="ok",
-                # Read once, after the handler returned and the write capture
-                # closed, so the entry's `ts` is the instant the action's work
-                # finished rather than a second clock read further down.
-                ts=emitted_at,
+                # The invocation's single instant (read at the start of
+                # `execute`), the same one `ctx.now()` and every written
+                # valid_from carry -- not a second clock read.
                 writes=list(writes),
                 capability_accesses=capability_accesses,
                 unscoped_params=unscoped_params,
@@ -824,6 +853,7 @@ class ActionExecutor:
         params: dict[str, Any],
         message: str,
         invocation_id: str | None,
+        instant: datetime,
         *,
         code: str,
         unscoped_params: list[str] | None = None,
@@ -839,6 +869,7 @@ class ActionExecutor:
                 action_def,
                 params,
                 invocation_id=invocation_id,
+                ts=instant,
                 outcome="denied",
                 unscoped_params=list(unscoped_params or []),
                 error_code=code,
@@ -854,6 +885,7 @@ class ActionExecutor:
         params: dict[str, Any],
         message: str,
         invocation_id: str | None,
+        instant: datetime,
         *,
         unscoped_params: list[str] | None = None,
     ) -> NoReturn:
@@ -867,6 +899,7 @@ class ActionExecutor:
                 action_def,
                 params,
                 invocation_id=invocation_id,
+                ts=instant,
                 outcome="error",
                 unscoped_params=list(unscoped_params or []),
                 error_code="INVALID_PARAMS",
@@ -937,6 +970,7 @@ class ActionExecutor:
         params: dict[str, Any] | BaseModel,
         params_dict: dict[str, Any],
         invocation_id: str,
+        instant: datetime,
     ) -> None:
         """Typed form only: `model_dump(mode="json")` renders a NAIVE
         `datetime` as a naive string, which the string rule accepts. The
@@ -966,6 +1000,7 @@ class ActionExecutor:
                             params_dict,
                             f"{action_name!r}: {param.name}.{field.name}: {mismatch}",
                             invocation_id,
+                            instant,
                         )
             if param.type != "datetime":
                 continue
@@ -981,6 +1016,7 @@ class ActionExecutor:
                     params_dict,
                     f"{action_name!r}: parameter {param.name!r} {mismatch}",
                     invocation_id,
+                    instant,
                 )
 
     def _validate_params(
@@ -990,6 +1026,7 @@ class ActionExecutor:
         action_def: ActionTypeDef,
         params: dict[str, Any],
         invocation_id: str | None,
+        instant: datetime,
     ) -> None:
         declared = {p.name: p for p in action_def.parameters}
         for param_name in params:
@@ -1001,6 +1038,7 @@ class ActionExecutor:
                     params,
                     f"{action_name!r}: unknown parameter {param_name!r}",
                     invocation_id,
+                    instant,
                 )
         for param in action_def.parameters:
             if param.required and param.name not in params:
@@ -1011,6 +1049,7 @@ class ActionExecutor:
                     params,
                     f"{action_name!r}: missing required parameter {param.name!r}",
                     invocation_id,
+                    instant,
                 )
             if param.name not in params:
                 continue
@@ -1031,6 +1070,7 @@ class ActionExecutor:
                     params,
                     f"{action_name!r}: {location}",
                     invocation_id,
+                    instant,
                 )
 
     def _validate_params_json_safe(
@@ -1040,6 +1080,7 @@ class ActionExecutor:
         action_def: ActionTypeDef,
         params: dict[str, Any],
         invocation_id: str | None,
+        instant: datetime,
     ) -> None:
         """AC12: refuse (as `INVALID_PARAMS`, audited) params that cannot be
         faithfully round-tripped through JSON -- the audit log persists
@@ -1056,6 +1097,7 @@ class ActionExecutor:
                 params,
                 f"{action_name!r}: parameters are not JSON-serializable",
                 invocation_id,
+                instant,
             )
             return
         if round_tripped != params:
@@ -1067,6 +1109,7 @@ class ActionExecutor:
                 f"{action_name!r}: parameters do not round-trip through "
                 "JSON unchanged",
                 invocation_id,
+                instant,
             )
 
     @staticmethod
@@ -1145,6 +1188,7 @@ class ActionExecutor:
         action_def: ActionTypeDef,
         params: dict[str, Any],
         invocation_id: str | None,
+        instant: datetime,
     ) -> list[str]:
         """Deny-by-default scope enforcement, driven by each declared
         `ActionParameterDef.scope_semantics` / `.refers_to` rather than any
@@ -1195,6 +1239,7 @@ class ActionExecutor:
                     f"{action_name!r}: parameter {param.name!r} must be a str "
                     f"to enforce scope, got {type(obj_id).__name__}",
                     invocation_id,
+                    instant,
                     code="SCOPE_DENIED",
                     unscoped_params=unscoped_params,
                 )
@@ -1237,6 +1282,7 @@ class ActionExecutor:
                     f"{consumer.scope_id!r} does not cover {param.refers_to} "
                     f"{obj_id!r}",
                     invocation_id,
+                    instant,
                     code="SCOPE_DENIED",
                     unscoped_params=unscoped_params,
                 )

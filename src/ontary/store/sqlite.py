@@ -18,8 +18,9 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from datetime import datetime
 from typing import Any
 
 from ontary.audit import (
@@ -30,6 +31,7 @@ from ontary.errors import ConflictError
 from ontary.meta import Cardinality, OntologyRegistry
 from ontary.store import _sql
 from ontary.store._shared import (
+    StoreClock,
     WriteCapture,
     canonical_id,
     check_link_endpoints,
@@ -40,6 +42,7 @@ from ontary.store._shared import (
     check_update_authority,
     decode_audit_entry,
     encode_audit_entry,
+    ensure_not_before,
     live_link_not_found,
     merge_update,
     object_already_exists,
@@ -56,7 +59,6 @@ from ontary.store.values import (
     PagedRow,
     Source,
     StoredObject,
-    _utcnow_iso,
 )
 
 
@@ -109,6 +111,7 @@ class ObjectStore(SqliteSchemaGate):
         self._conn.row_factory = sqlite3.Row
         self._txn_depth = 0
         self._write_capture = WriteCapture()
+        self._clock_state = StoreClock()
         self._init_schema()
 
     @contextmanager
@@ -182,8 +185,15 @@ class ObjectStore(SqliteSchemaGate):
         open on this store."""
         return self._txn_depth > 0
 
+    def bind_clock(
+        self, clock: Callable[[], datetime] | None
+    ) -> Callable[[], datetime]:
+        return self._clock_state.bind(clock)
+
     @contextmanager
-    def capture_action_writes(self) -> Iterator[list[WriteRecord]]:
+    def capture_action_writes(
+        self, *, at: str | None = None
+    ) -> Iterator[list[WriteRecord]]:
         """Context manager that, while active, enforces authority
         declarations on action writes and records each allowed create,
         update, retire, link, or unlink as a `WriteRecord` in the yielded
@@ -194,7 +204,7 @@ class ObjectStore(SqliteSchemaGate):
         defended; see module docstring). Nesting is a programming error
         (the executor owns one capture context per action call).
         """
-        with self._write_capture.capture() as records:
+        with self._write_capture.capture(at=at) as records:
             yield records
 
     def _record_write(self, record: WriteRecord) -> None:
@@ -208,7 +218,7 @@ class ObjectStore(SqliteSchemaGate):
         )
         payload, obj_id = prepared.payload, prepared.obj_id_raw
 
-        now = _utcnow_iso()
+        now = self._clock_state.now_iso(self._write_capture)
         with self.transaction() as conn:
             if self.read_current(obj_type, prepared.obj_id) is not None:
                 raise object_already_exists(obj_type, prepared.obj_id)
@@ -254,7 +264,11 @@ class ObjectStore(SqliteSchemaGate):
             merged = merge_update(
                 obj_def, obj_type, obj_id, current, payload_changes, capturing=capturing
             )
-            now = _utcnow_iso()
+            now = self._clock_state.now_iso(self._write_capture)
+            assert current is not None
+            ensure_not_before(
+                current.lineage.valid_from, now, what=f"{obj_type} {obj_id}"
+            )
             conn.execute(
                 """
                 UPDATE objects
@@ -293,7 +307,7 @@ class ObjectStore(SqliteSchemaGate):
             object_type,
             capturing=self._write_capture.active,
         )
-        now = _utcnow_iso()
+        now = self._clock_state.now_iso(self._write_capture)
         with self.transaction() as conn:
             current = conn.execute(
                 """
@@ -320,6 +334,9 @@ class ObjectStore(SqliteSchemaGate):
                 raise retire_object_refusal(
                     object_type, obj_id, has_history=has_history
                 )
+            ensure_not_before(
+                current["valid_from"], now, what=f"{object_type} {obj_id}"
+            )
             conn.execute(
                 """
                 UPDATE objects SET valid_to = ?
@@ -527,7 +544,7 @@ class ObjectStore(SqliteSchemaGate):
                     code="CARDINALITY_VIOLATION",
                 )
 
-        now = _utcnow_iso()
+        now = self._clock_state.now_iso(self._write_capture)
         with self.transaction() as conn:
             conn.execute(
                 """
@@ -548,17 +565,30 @@ class ObjectStore(SqliteSchemaGate):
             link_type,
             capturing=self._write_capture.active,
         )
+        now = self._clock_state.now_iso(self._write_capture)
         with self.transaction() as conn:
-            cursor = conn.execute(
+            live = conn.execute(
+                """
+                SELECT valid_from FROM links
+                WHERE link_type = ? AND from_id = ? AND to_id = ?
+                  AND valid_to IS NULL AND tenant = ?
+                """,
+                (link_type, from_id, to_id, self._tenant),
+            ).fetchall()
+            if not live:
+                raise live_link_not_found(link_type, from_id, to_id)
+            for row in live:
+                ensure_not_before(
+                    row["valid_from"], now, what=f"{link_type} {from_id}->{to_id}"
+                )
+            conn.execute(
                 """
                 UPDATE links SET valid_to = ?
                 WHERE link_type = ? AND from_id = ? AND to_id = ?
                   AND valid_to IS NULL AND tenant = ?
                 """,
-                (_utcnow_iso(), link_type, from_id, to_id, self._tenant),
+                (now, link_type, from_id, to_id, self._tenant),
             )
-            if cursor.rowcount == 0:
-                raise live_link_not_found(link_type, from_id, to_id)
         self._record_write(
             WriteRecord(
                 op="unlink", link_type=link_type, from_id=from_id, to_id=to_id

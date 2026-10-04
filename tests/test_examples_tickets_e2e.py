@@ -233,8 +233,15 @@ def test_testing_harness_drives_the_escalation_through_the_public_helpers() -> N
     `PreconditionFailed` IS an `OntaryError`, carrying the stable code)."""
     ontology, _ = build_ontology()
     store = make_store(ontology)
-    ids = load_fixtures(store)
     instant = datetime(2026, 8, 31, 9, 30, tzinfo=timezone.utc)
+    # Bind first: the fixtures are then stamped by the same clock, so the
+    # action's instant is not earlier than the rows it updates (#46).
+    runtime = ontology.bind(
+        store,
+        clock=FixedClock(instant),
+        id_factory=SequentialIds("tickets-e2e"),
+    )
+    ids = load_fixtures(store)
 
     operator = consumer(
         actor_id="manager-effects",
@@ -242,11 +249,7 @@ def test_testing_harness_drives_the_escalation_through_the_public_helpers() -> N
         scope_level="queue",
         scope_id=ids["queue_a_id"],
     )
-    client = ontology.bind(
-        store,
-        clock=FixedClock(instant),
-        id_factory=SequentialIds("tickets-e2e"),
-    ).for_consumer(operator)
+    client = runtime.for_consumer(operator)
 
     with raises_code("PRECONDITION_FAILED"):
         client.execute(

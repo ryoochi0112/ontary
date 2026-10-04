@@ -22,8 +22,9 @@ from __future__ import annotations
 import json
 import threading
 import uuid
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
+from datetime import datetime
 from typing import Any, Literal, TypedDict
 
 from ontary.audit import (
@@ -33,6 +34,7 @@ from ontary.audit import (
 from ontary.errors import ConflictError
 from ontary.meta import Cardinality, OntologyRegistry
 from ontary.store._shared import (
+    StoreClock,
     WriteCapture,
     canonical_id,
     check_link_endpoints,
@@ -43,6 +45,7 @@ from ontary.store._shared import (
     check_update_authority,
     decode_audit_entry,
     encode_audit_entry,
+    ensure_not_before,
     live_link_not_found,
     merge_update,
     object_already_exists,
@@ -59,7 +62,6 @@ from ontary.store.values import (
     PagedRow,
     Source,
     StoredObject,
-    _utcnow_iso,
 )
 
 
@@ -157,6 +159,7 @@ class InMemoryStore:
         self._transaction_lock = threading.RLock()
         self._transaction_state = threading.local()
         self._write_capture = WriteCapture()
+        self._clock_state = StoreClock()
         # Mirrors `ObjectStore`'s `objects.row_id INTEGER PRIMARY KEY
         # AUTOINCREMENT`: a monotonic, per-row identity distinct from the
         # payload primary key (`Lineage.object_id`), whose uniqueness among
@@ -219,9 +222,16 @@ class InMemoryStore:
     def in_transaction(self) -> bool:
         return getattr(self._transaction_state, "depth", 0) > 0
 
+    def bind_clock(
+        self, clock: Callable[[], datetime] | None
+    ) -> Callable[[], datetime]:
+        return self._clock_state.bind(clock)
+
     @contextmanager
-    def capture_action_writes(self) -> Iterator[list[WriteRecord]]:
-        with self._write_capture.capture() as records:
+    def capture_action_writes(
+        self, *, at: str | None = None
+    ) -> Iterator[list[WriteRecord]]:
+        with self._write_capture.capture(at=at) as records:
             yield records
 
     def _record_write(self, record: WriteRecord) -> None:
@@ -240,7 +250,7 @@ class InMemoryStore:
         )
         payload, obj_id = prepared.payload, prepared.obj_id
 
-        now = _utcnow_iso()
+        now = self._clock_state.now_iso(self._write_capture)
         with self.transaction():
             if self.read_current(obj_type, obj_id) is not None:
                 raise object_already_exists(obj_type, obj_id)
@@ -283,7 +293,11 @@ class InMemoryStore:
             merged = merge_update(
                 obj_def, obj_type, obj_id, current, payload_changes, capturing=capturing
             )
-            now = _utcnow_iso()
+            now = self._clock_state.now_iso(self._write_capture)
+            assert current is not None
+            ensure_not_before(
+                current.lineage.valid_from, now, what=f"{obj_type} {obj_id}"
+            )
             for i, row in enumerate(self._objects):
                 if (
                     row["object_type"] == obj_type
@@ -316,7 +330,7 @@ class InMemoryStore:
             object_type,
             capturing=self._write_capture.active,
         )
-        now = _utcnow_iso()
+        now = self._clock_state.now_iso(self._write_capture)
         with self.transaction():
             current_rows = [
                 (index, row)
@@ -335,6 +349,10 @@ class InMemoryStore:
                 )
                 raise retire_object_refusal(
                     object_type, obj_id, has_history=has_history
+                )
+            for _, row in current_rows:
+                ensure_not_before(
+                    row["valid_from"], now, what=f"{object_type} {obj_id}"
                 )
             for index, row in current_rows:
                 self._objects[index] = {**row, "valid_to": now}
@@ -533,7 +551,7 @@ class InMemoryStore:
                     code="CARDINALITY_VIOLATION",
                 )
 
-        now = _utcnow_iso()
+        now = self._clock_state.now_iso(self._write_capture)
         with self.transaction():
             self._links.append(
                 {
@@ -556,7 +574,7 @@ class InMemoryStore:
             link_type,
             capturing=self._write_capture.active,
         )
-        now = _utcnow_iso()
+        now = self._clock_state.now_iso(self._write_capture)
         with self.transaction():
             matching = [
                 (index, row)
@@ -569,6 +587,10 @@ class InMemoryStore:
             ]
             if not matching:
                 raise live_link_not_found(link_type, from_id, to_id)
+            for _, row in matching:
+                ensure_not_before(
+                    row["valid_from"], now, what=f"{link_type} {from_id}->{to_id}"
+                )
             for index, row in matching:
                 self._links[index] = {**row, "valid_to": now}
         self._record_write(
