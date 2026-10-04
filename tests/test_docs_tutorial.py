@@ -7,8 +7,8 @@ from pathlib import Path
 import pytest
 
 PAGE = Path(__file__).resolve().parent.parent / "docs/tutorial-leave-requests.md"
-EXPECTED_STAGES = 2
-EXPECTED_PYTHON_FENCES = 7
+EXPECTED_STAGES = 5
+EXPECTED_PYTHON_FENCES = 17
 EXPECTED_TESTS = 0
 MAX_LINES = 550
 BANNED_TERMS = (

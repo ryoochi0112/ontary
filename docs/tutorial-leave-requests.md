@@ -17,8 +17,7 @@ Validation and binding freeze declarations, so they belong in the scratch file.
 
 ## 1. Declare employees and leave requests
 
-Object types describe the employees and requests, with a choice property for
-request status. Start the model with an ontology and its imports:
+Object types describe employees and requests. A choice property limits status:
 
 ```python
 from datetime import date, datetime
@@ -31,8 +30,7 @@ from ontary import (
 ontology = Ontology("leave-requests", scope_levels=["team"])
 ```
 
-An employee has a team and an annual leave allowance in working days.
-The primary key gives each employee a stable identifier.
+An employee has a stable primary key, a team, and an allowance in working days.
 
 ```python
 @ontology.object(layer="L0", scope="unscoped")
@@ -43,10 +41,7 @@ class Employee(OntologyObject):
     allowance_days: int
 ```
 
-A request records a start date, the number of working days requested,
-its status, and when it was submitted.
-`Literal` declares the allowed status values, so writes cannot store arbitrary
-status text. Allowed moves between these values come in a later stage.
+A request records dates, working days, and status. `Literal` limits status values.
 `owned=True` lets actions create and change requests.
 
 ```python
@@ -59,9 +54,8 @@ class LeaveRequest(OntologyObject):
     submitted_at: datetime
 ```
 
-Each request belongs to one employee. Store that relationship as a link;
-the employee's team and allowance stay on the employee.
-Actions own this link because submitting a request creates the relationship.
+Each request links to one employee, who holds the team and allowance facts.
+Actions own the link because submitting a request creates it.
 
 ```python
 request_employee = ontology.link(
@@ -70,28 +64,31 @@ request_employee = ontology.link(
 )
 ```
 
-Both types explicitly use `scope="unscoped"` for now.
-Every consumer can read them. A later stage declares team visibility.
+Both types use `scope="unscoped"`, so every consumer can read them for now.
+Use `fresh()` in each **Try it** to bind a store, seed Amina, and create clients.
+The helper runs only when called. `consumer()` is from `ontary.testing`:
 
-Validate the declarations, bind a store, and read an employee in **Try it**:
+```python
+from ontary import ObjectStore, OntologyClient, Source
+from ontary.testing import consumer
+
+def fresh() -> tuple[OntologyClient, OntologyClient]:
+    ontology.validate()
+    store = ObjectStore(ontology.registry)
+    runtime = ontology.bind(store)
+    store.insert("Employee", {
+        "id": "e-1", "name": "Amina", "team_id": "team-a", "allowance_days": 25,
+    }, Source(source_system="staff"))
+    employee = consumer(actor_id="e-1", role="Employee", scope_level="team", scope_id="team-a")
+    manager = consumer(actor_id="m-1", role="Manager", scope_level="team", scope_id="team-a")
+    return runtime.for_consumer(employee), runtime.for_consumer(manager)
+```
+
+Read the employee in **Try it**:
 
 ```python
 # Try it
-from ontary import Consumer, ObjectStore, Source
-
-ontology.validate()
-store = ObjectStore(ontology.registry)
-runtime = ontology.bind(store)
-store.insert(
-    "Employee",
-    {"id": "e-1", "name": "Amina", "team_id": "team-a", "allowance_days": 25},
-    Source(source_system="staff"),
-)
-employee = Consumer(
-    actor_id="e-1", role="Employee", scope_level="team",
-    scope_id="team-a", kind="human",
-)
-client = runtime.for_consumer(employee)
+client, manager = fresh()
 stored_employee = client.get(Employee, "e-1")
 assert stored_employee is not None
 print(stored_employee.name, stored_employee.allowance_days)
@@ -103,16 +100,14 @@ Amina 25
 ## 2. Submit a request — your first action
 
 An action expresses the business operation of submitting a request.
-Add this block to `leave_requests.py` after the link.
-`SubmitRequest` defines typed inputs, and `ref(Employee)` declares which
-employee the input names.
+Add this block after the link. `SubmitRequest` types the inputs.
+`ref(Employee)` declares which employee the input names.
 
 ```python
 class SubmitRequest(ActionParams):
     employee_id: str = ref(Employee)
     start_date: date
     days: int
-
 
 @ontology.action(SubmitRequest, target=LeaveRequest, roles=["Employee"])
 def submit(ctx: ActionContext, params: SubmitRequest) -> dict[str, str]:
@@ -127,31 +122,15 @@ def submit(ctx: ActionContext, params: SubmitRequest) -> dict[str, str]:
     return {"request_id": request.id}
 ```
 
-The typed `ActionContext` supplies reads and writes for the invocation.
-`ctx.now()` supplies its timestamp, and `ctx.create()` generates the request id.
-The action creates the request and its employee link together.
+`ActionContext` supplies reads and writes. `ctx.now()` supplies the timestamp.
+`ctx.create()` generates the id. The request and employee link commit together.
 `roles=["Employee"]` declares who can submit.
 
-Replace the scratch body with this **Try it** to submit two working days of leave
-and read the stored request:
+In **Try it**, submit two working days and read the request:
 
 ```python
 # Try it
-from ontary import Consumer, ObjectStore, Source
-
-ontology.validate()
-store = ObjectStore(ontology.registry)
-runtime = ontology.bind(store)
-store.insert(
-    "Employee",
-    {"id": "e-1", "name": "Amina", "team_id": "team-a", "allowance_days": 25},
-    Source(source_system="staff"),
-)
-employee = Consumer(
-    actor_id="e-1", role="Employee", scope_level="team",
-    scope_id="team-a", kind="human",
-)
-client = runtime.for_consumer(employee)
+client, manager = fresh()
 result = client.execute(SubmitRequest(
     employee_id="e-1", start_date=date(2026, 11, 2), days=2,
 ))
@@ -161,4 +140,221 @@ print(request.status, request.start_date, request.days)
 ```
 ```text
 submitted 2026-11-02 2
+```
+
+## 3. Only allowed moves: approve, reject, cancel
+
+A transition graph declares allowed status moves. **Replace the `LeaveRequest` block**:
+
+```python
+from ontary.meta import TransitionDef
+
+@ontology.object(layer="L0", owned=True, scope="unscoped")
+class LeaveRequest(OntologyObject):
+    id: str = prop(primary_key=True)
+    start_date: date
+    days: int
+    status: Literal["submitted", "approved", "rejected", "cancelled"] = prop(
+        transitions=TransitionDef(
+            initial=("submitted",),
+            moves={
+                "submitted": ("approved", "rejected", "cancelled"),
+                "approved": ("cancelled",),
+                "rejected": (), "cancelled": (),
+            },
+        ),
+    )
+    submitted_at: datetime
+```
+
+A new request starts as submitted. A manager can approve or reject it.
+An employee can cancel a submitted or approved request.
+Rejected and cancelled requests have no further moves.
+Add a rule requiring at least one day. It reads only the request:
+
+```python
+@ontology.rule(LeaveRequest, "positive_days", message="request at least one day")
+def positive_days(request: LeaveRequest) -> bool:
+    return request.days >= 1
+```
+
+Add the decision actions after `submit`. Each action owns one complete move.
+`target(LeaveRequest)` declares the request whose status changes.
+
+```python
+from ontary import target
+
+class ApproveRequest(ActionParams):
+    request_id: str = target(LeaveRequest)
+
+class RejectRequest(ActionParams):
+    request_id: str = target(LeaveRequest)
+
+@ontology.action(ApproveRequest, target=LeaveRequest, roles=["Manager"])
+def approve(ctx: ActionContext, params: ApproveRequest) -> dict[str, str]:
+    request = ctx.get(LeaveRequest, params.request_id)
+    if request is None:
+        raise ActionError("request does not exist", code="PRECONDITION_FAILED")
+    request.status = "approved"
+    ctx.save(request)
+    return {"request_id": request.id}
+
+@ontology.action(RejectRequest, target=LeaveRequest, roles=["Manager"])
+def reject(ctx: ActionContext, params: RejectRequest) -> dict[str, str]:
+    request = ctx.get(LeaveRequest, params.request_id)
+    if request is None:
+        raise ActionError("request does not exist", code="PRECONDITION_FAILED")
+    request.status = "rejected"
+    ctx.save(request)
+    return {"request_id": request.id}
+```
+
+Add cancellation in its own block:
+
+```python
+class CancelRequest(ActionParams):
+    request_id: str = target(LeaveRequest)
+
+@ontology.action(CancelRequest, target=LeaveRequest, roles=["Employee"])
+def cancel(ctx: ActionContext, params: CancelRequest) -> dict[str, str]:
+    request = ctx.get(LeaveRequest, params.request_id)
+    if request is None:
+        raise ActionError("request does not exist", code="PRECONDITION_FAILED")
+    request.status = "cancelled"
+    ctx.save(request)
+    return {"request_id": request.id}
+```
+
+In **Try it**, approve a request, then attempt to reject it; submit zero days
+to see a rule refusal. The engine checks both on writes and rolls back refusals.
+
+```python
+# Try it
+from ontary import OntaryError
+
+client, manager = fresh()
+result = client.execute(SubmitRequest(employee_id="e-1", start_date=date(2026, 11, 2), days=2))
+manager.execute(ApproveRequest(request_id=result["request_id"]))
+try:
+    manager.execute(RejectRequest(request_id=result["request_id"]))
+except OntaryError as error:
+    assert error.code == "TRANSITION_NOT_ALLOWED"
+    print(error.code)
+else:
+    raise AssertionError("rejecting an approved request must fail")
+try:
+    client.execute(SubmitRequest(employee_id="e-1", start_date=date(2026, 11, 2), days=0))
+except OntaryError as error:
+    assert error.code == "RULE_VIOLATED"
+    print(error.code)
+else:
+    raise AssertionError("requesting zero days must fail")
+```
+```text
+TRANSITION_NOT_ALLOWED
+RULE_VIOLATED
+```
+
+## 4. Remaining days — derive, don't store
+
+A Function derives remaining days from the employee's allowance and approved
+requests. Add this block after the actions:
+
+```python
+from ontary import BoundQuery, FunctionParams
+
+class RemainingDays(FunctionParams):
+    employee_id: str = ref(Employee)
+
+@ontology.function(RemainingDays)
+def remaining_days(query: BoundQuery, params: RemainingDays) -> int:
+    employee = query.get(Employee, params.employee_id)
+    if employee is None:
+        raise ActionError("employee is not visible", code="PRECONDITION_FAILED")
+    requests = query.traverse(request_employee, employee.id, reverse=True)
+    used = sum(request.days for request in requests if request.status == "approved")
+    return employee.allowance_days - used
+```
+
+`FunctionParams` types the inputs; `BoundQuery` reads visible rows via the link.
+No property stores the result, so cancellation changes the next answer.
+
+In **Try it**, approval reduces remaining days by two:
+
+```python
+# Try it
+client, manager = fresh()
+result = client.execute(SubmitRequest(employee_id="e-1", start_date=date(2026, 11, 2), days=2))
+params = RemainingDays(employee_id="e-1")
+before = client.call_function(params)
+manager.execute(ApproveRequest(request_id=result["request_id"]))
+after = client.call_function(params)
+assert (before, after) == (25, 23)
+print("before:", before, "after:", after)
+```
+```text
+before: 25 after: 23
+```
+
+## 5. Tell the rest of the system: the RequestDecided event
+
+An event records the decision so other parts of the system can read it.
+**Replace the decision actions block** from stage 3 with this block.
+
+```python
+from ontary import Event, target
+
+@ontology.event(description="A manager decided a leave request.")
+class RequestDecided(Event):
+    decision: Literal["approved", "rejected"]
+
+class ApproveRequest(ActionParams):
+    request_id: str = target(LeaveRequest)
+
+class RejectRequest(ActionParams):
+    request_id: str = target(LeaveRequest)
+
+@ontology.action(
+    ApproveRequest, target=LeaveRequest, roles=["Manager"], emits=[RequestDecided],
+)
+def approve(ctx: ActionContext, params: ApproveRequest) -> dict[str, str]:
+    request = ctx.get(LeaveRequest, params.request_id)
+    if request is None:
+        raise ActionError("request does not exist", code="PRECONDITION_FAILED")
+    request.status = "approved"
+    ctx.save(request)
+    ctx.emit(RequestDecided(decision="approved"))
+    return {"request_id": request.id}
+
+@ontology.action(
+    RejectRequest, target=LeaveRequest, roles=["Manager"], emits=[RequestDecided],
+)
+def reject(ctx: ActionContext, params: RejectRequest) -> dict[str, str]:
+    request = ctx.get(LeaveRequest, params.request_id)
+    if request is None:
+        raise ActionError("request does not exist", code="PRECONDITION_FAILED")
+    request.status = "rejected"
+    ctx.save(request)
+    ctx.emit(RequestDecided(decision="rejected"))
+    return {"request_id": request.id}
+```
+
+`emits` declares which event an action may record.
+`ctx.emit()` records it about the action's target request.
+Readers see events for visible requests.
+
+In **Try it**, approve the request and read its event back:
+
+```python
+# Try it
+client, manager = fresh()
+result = client.execute(SubmitRequest(employee_id="e-1", start_date=date(2026, 11, 2), days=2))
+manager.execute(ApproveRequest(request_id=result["request_id"]))
+records = client.events(RequestDecided, about=(LeaveRequest, result["request_id"]))
+assert len(records) == 1
+assert records[0].payload.decision == "approved"
+print(records[0].event_type, records[0].payload.decision)
+```
+```text
+RequestDecided approved
 ```
