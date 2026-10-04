@@ -1073,7 +1073,7 @@ def ticket_stats(query: BoundQuery, params: TicketStatsParams) -> float:
 client.call_function(TicketStatsParams(queue_id="q1"))
 ```
 
-Function の宣言には 3 つの形式があります。型付き Function では `FunctionParams` の
+Function の宣言には 2 つの形式があります。型付き Function では `FunctionParams` の
 サブクラスを宣言します。上の例のようにインスタンスを渡すか、関数名と dict を渡せます
 （例: `client.call_function("ticketStats", {"queue_id": "q1"})`）。dict は検証されます。
 ハンドラには `TicketStatsParams` のインスタンスが渡されます。
@@ -1088,16 +1088,10 @@ client.call_function("health")
 client.call_function("health", {})
 ```
 
-params クラスを指定しない場合、引数が既定値なしの `query` 1 つだけのハンドラが入力なしの形式です。
-`(query, params: dict)` など、それ以外のハンドラはすべて旧 dict 形式です。
-0.19.0 では引き続き使用でき、宣言時に `DeprecationWarning` が出ます。0.20.0 で削除します。
+params クラスを指定しない場合、ハンドラは既定値なしの `query` をちょうど 1 つだけ受け取る必要があります。
+それ以外のハンドラは、宣言時に `ValidationFailed` と `code="ONTOLOGY_INVALID"` で拒否されます。
+`(query, params: dict)` などの dict 形式のハンドラは 0.20.0 で削除しました。
 代わりに `FunctionParams` サブクラスを宣言してください。
-
-```python
-@ontology.function(api_name="legacyTicketStats")
-def legacy_ticket_stats(query: BoundQuery, params: dict) -> float:
-    return query.aggregate("Ticket", "age_hours", where={"queue_id": params["queue_id"]})
-```
 
 未知のフィールド、必須フィールドの不足、不正な型、宣言した選択肢にない値は、ハンドラの実行前に
 `ValidationFailed` と `code="INVALID_PARAMS"` を送出します。入力がない Function に空でない params を
@@ -1105,8 +1099,9 @@ def legacy_ticket_stats(query: BoundQuery, params: dict) -> float:
 
 `FunctionDef.parameters` と MCP の `list_functions` は、型付き入力を `name`、`type`、`choices`、
 `fields`、`required`、`refers_to` を持つパラメータとして公開します。これは `scope_semantics` を
-除いた Action パラメータと同じ形式です。入力がない Function では `[]`、旧形式の dict ハンドラでは
-パラメータの形状が不明なため `null` になります。
+除いた Action パラメータと同じ形式です。入力がない Function では `[]` になります。
+`client.call_function` は、関数名でも `FunctionParams` のインスタンスでもない引数を
+`ValidationFailed` と `code="INVALID_PARAMS"` で拒否します。
 
 ### `BoundQuery`
 

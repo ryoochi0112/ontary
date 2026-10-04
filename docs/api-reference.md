@@ -1087,7 +1087,7 @@ def ticket_stats(query: BoundQuery, params: TicketStatsParams) -> float:
 client.call_function(TicketStatsParams(queue_id="q1"))
 ```
 
-There are three declaration forms. A typed function declares a `FunctionParams`
+There are two declaration forms. A typed function declares a `FunctionParams`
 subclass; callers may pass an instance as above or pass its values in a dict with
 the function name, such as `client.call_function("ticketStats", {"queue_id": "q1"})`.
 The dict is validated and the handler receives a `TicketStatsParams` instance.
@@ -1102,17 +1102,10 @@ client.call_function("health")
 client.call_function("health", {})
 ```
 
-Without a params class, a handler is the no-input form only when it takes
-exactly one parameter, `query`, with no default and nothing else. Any other handler, such as
-`(query, params: dict)`, is the legacy dict form. It remains
-available in 0.19.0 and emits a `DeprecationWarning` at declaration; it is
-removed in 0.20.0. Declare a `FunctionParams` subclass instead.
-
-```python
-@ontology.function(api_name="legacyTicketStats")
-def legacy_ticket_stats(query: BoundQuery, params: dict) -> float:
-    return query.aggregate("Ticket", "age_hours", where={"queue_id": params["queue_id"]})
-```
+Without a params class, the handler must take exactly one parameter, `query`, with no
+default. Any other handler is refused at declaration with `ValidationFailed` and
+`code="ONTOLOGY_INVALID"`. Dict-form handlers such as `(query, params: dict)` were
+removed in 0.20.0; declare a `FunctionParams` subclass instead.
 
 Unknown fields, missing required fields, invalid types, and values outside
 declared choices raise `ValidationFailed` with `code="INVALID_PARAMS"` before the
@@ -1121,8 +1114,9 @@ handler runs. A no-input function also rejects non-empty params with that code.
 `FunctionDef.parameters` and MCP `list_functions` expose typed inputs as
 parameters with `name`, `type`, `choices`, `fields`, `required`, and `refers_to`,
 matching the action parameter shape without `scope_semantics`. The value is
-`[]` for a no-input function and `null` for a legacy dict-form function, whose
-parameter shape is unknown.
+`[]` for a no-input function.
+`client.call_function` refuses an argument that is neither a function name nor a
+`FunctionParams` instance with `ValidationFailed` and `code="INVALID_PARAMS"`.
 
 ### `BoundQuery`
 
