@@ -11,7 +11,8 @@ from typing import Any, TypeVar
 from ontary._typed_api import api_name_for, declared_snapshot
 from ontary.authoring import Ontology
 from ontary.client import OntologyRuntime
-from ontary.model import ActionParams, CapabilityHandle, LinkHandle, OntologyObject
+from ontary.errors import ValidationFailed
+from ontary.model import ActionParams, CapabilityHandle, LinkHandle, OntologyObject, hydrate
 from ontary.security import Consumer
 from ontary.store import Source, Store
 
@@ -143,6 +144,90 @@ class Scenario:
             self._outcome = Err(code, exc)
         else:
             self._outcome = Ok(result)
+        return self
+
+    def then(self, cls: type[_F], pk: str, **fields: Any) -> Scenario:
+        """Check named properties against the unredacted current stored row."""
+        api_name = api_name_for(cls, self._ontology.registry, owner="scenario")
+        declared = {
+            prop.name for prop in self._ontology.registry.get_object_type(api_name).properties
+        }
+        unknown = sorted(set(fields) - declared)
+        if unknown:
+            names = ", ".join(repr(name) for name in unknown)
+            declared_names = ", ".join(sorted(declared))
+            raise ValidationFailed(
+                f"Scenario.then({cls.__name__}): unknown propert"
+                f"{'y' if len(unknown) == 1 else 'ies'} {names}; "
+                f"declared: {declared_names}",
+                code="INVALID_RECORD",
+            )
+
+        if isinstance(self._outcome, Err):
+            raise AssertionError(
+                f"then: {self._step_description()} failed with {self._outcome.code}"
+            ) from self._outcome.exc
+
+        stored = self._store.read_current(api_name, pk)
+        if stored is None:
+            raise AssertionError(f"then: no current {cls.__name__} {pk!r}")
+        actual_object = hydrate(cls, stored, "human")
+        differences = [
+            f"{name}: expected {expected!r}, got {getattr(actual_object, name)!r}"
+            for name, expected in fields.items()
+            if getattr(actual_object, name) != expected
+        ]
+        if differences:
+            if self._step:
+                state = (
+                    f"after step {self._step} "
+                    f"({self._action} by {self._role})"
+                )
+            else:
+                state = "in seeded state"
+            raise AssertionError(
+                f"then: {cls.__name__} {pk!r} does not match {state}:\n  "
+                + "\n  ".join(differences)
+            )
+        return self
+
+    def then_absent(self, cls: type[_F], pk: str) -> Scenario:
+        """Check that an object has no current row, regardless of outcome."""
+        api_name = api_name_for(cls, self._ontology.registry, owner="scenario")
+        if self._store.read_current(api_name, pk) is not None:
+            raise AssertionError(f"then_absent: current {cls.__name__} {pk!r} exists")
+        return self
+
+    def then_link(
+        self, handle: LinkHandle[_F, _T], from_: _F | str, to: _T | str
+    ) -> Scenario:
+        """Check that a typed link is present in current store state."""
+        api_name_for(handle.from_cls, self._ontology.registry, owner="scenario")
+        api_name_for(handle.to_cls, self._ontology.registry, owner="scenario")
+        self._ontology.registry.get_link_type(handle.api_name)
+        from_id = self._endpoint_id(from_)
+        to_id = self._endpoint_id(to)
+        if to_id not in self._store.links_from(handle.api_name, from_id):
+            raise AssertionError(
+                f"then_link: expected {handle.api_name} link "
+                f"{from_id!r} -> {to_id!r} to exist"
+            )
+        return self
+
+    def then_no_link(
+        self, handle: LinkHandle[_F, _T], from_: _F | str, to: _T | str
+    ) -> Scenario:
+        """Check that a typed link is absent from current store state."""
+        api_name_for(handle.from_cls, self._ontology.registry, owner="scenario")
+        api_name_for(handle.to_cls, self._ontology.registry, owner="scenario")
+        self._ontology.registry.get_link_type(handle.api_name)
+        from_id = self._endpoint_id(from_)
+        to_id = self._endpoint_id(to)
+        if to_id in self._store.links_from(handle.api_name, from_id):
+            raise AssertionError(
+                f"then_no_link: unexpected {handle.api_name} link "
+                f"{from_id!r} -> {to_id!r}"
+            )
         return self
 
     def then_result(self, expected: Any) -> Scenario:
