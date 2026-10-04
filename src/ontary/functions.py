@@ -47,6 +47,7 @@ and this module below the same import cycle.
 from __future__ import annotations
 
 import builtins
+import inspect
 from collections.abc import Callable, Mapping
 from typing import Any, Literal, TypeVar, cast, overload
 
@@ -363,6 +364,29 @@ class BoundQuery(_TypedReadMixin):
 FunctionHandler = Callable[[BoundQuery, dict[str, Any]], Any]
 
 
+def _takes_query_only(fn: Callable[..., Any]) -> bool:
+    try:
+        signature = inspect.signature(fn)
+    except (TypeError, ValueError):
+        return False
+    parameters = list(signature.parameters.values())
+    return (
+        len(parameters) == 1
+        and parameters[0].kind in (
+            inspect.Parameter.POSITIONAL_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        )
+        and parameters[0].default is inspect.Parameter.empty
+    )
+
+
+def _dict_handler_refusal(api_name: str) -> str:
+    return (
+        f"function {api_name!r}: declare a FunctionParams class "
+        "(@ontology.function(MyParams)) or take only (query)"
+    )
+
+
 class FunctionRegistry:
     """Binds Python callables to declared `FunctionDef`s and invokes them.
 
@@ -380,7 +404,7 @@ class FunctionRegistry:
             tuple[
                 Callable[..., Any],
                 type[FunctionParams] | None,
-                Literal["typed", "none", "legacy"],
+                Literal["typed", "none"],
             ],
         ] = {}
 
@@ -390,7 +414,6 @@ class FunctionRegistry:
         fn: Callable[..., Any],
         *,
         params_cls: type[FunctionParams] | None = None,
-        mode: Literal["typed", "none", "legacy"] = "legacy",
     ) -> None:
         try:
             self._registry.get_function(api_name)
@@ -404,13 +427,20 @@ class FunctionRegistry:
                 f"handler already registered for function: {api_name!r}",
                 code="FUNCTION_ERROR",
             )
+        if params_cls is None and not _takes_query_only(fn):
+            raise ValidationFailed(
+                _dict_handler_refusal(api_name), code="ONTOLOGY_INVALID"
+            )
+        mode: Literal["typed", "none"] = "typed" if params_cls is not None else "none"
         self._handlers[api_name] = (fn, params_cls, mode)
 
-    def function(self, api_name: str) -> Callable[[FunctionHandler], FunctionHandler]:
+    def function(
+        self, api_name: str, params_cls: type[FunctionParams] | None = None
+    ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
         """Decorator form of `register`."""
 
-        def _decorate(fn: FunctionHandler) -> FunctionHandler:
-            self.register(api_name, fn)
+        def _decorate(fn: Callable[..., Any]) -> Callable[..., Any]:
+            self.register(api_name, fn, params_cls=params_cls)
             return fn
 
         return _decorate
@@ -426,7 +456,7 @@ class FunctionRegistry:
             )
         handler, params_cls, mode = registered
         function_def = self._registry.get_function(api_name)
-        coerced: dict[str, Any] | FunctionParams | None
+        coerced: FunctionParams | None
         if mode == "typed":
             assert params_cls is not None
             if isinstance(params, params_cls):
@@ -459,15 +489,13 @@ class FunctionRegistry:
                         f"function {api_name!r}: parameter {param.name!r} {mismatch}",
                         code="INVALID_PARAMS",
                     )
-        elif mode == "none":
+        else:
             if not isinstance(params, dict) or params:
                 raise ValidationFailed(
                     f"function {api_name!r} takes no params",
                     code="INVALID_PARAMS",
                 )
             coerced = None
-        else:
-            coerced = params
         # THE author-provenance mint. `register` already refused to bind
         # `handler` to anything but a declared `FunctionDef` on this
         # registry, so reaching this line means the engine is about to run

@@ -1,5 +1,4 @@
 import asyncio
-import warnings
 from datetime import datetime
 from typing import Any, Literal
 
@@ -48,7 +47,7 @@ def test_function_params_is_a_separate_strict_model() -> None:
         TicketStatsParams.model_validate({"queue_id": "q1", "unexpected": True})
 
 
-def test_function_def_distinguishes_legacy_and_no_inputs() -> None:
+def test_function_def_distinguishes_unspecified_and_no_inputs() -> None:
     assert _function_def().parameters is None
     assert _function_def([]).parameters == []
     assert _function_def([ActionParameterDef(name="queue_id", type="str")]).parameters == [
@@ -301,23 +300,14 @@ def test_prop_choices_are_checked_for_dict_and_instance_calls(make_consumer: Any
     assert seen[0].note is None
 
 
-def test_no_input_and_legacy_modes(make_consumer: Any) -> None:
+def test_no_input_mode(make_consumer: Any) -> None:
     ontology = _ontology()
 
     @ontology.function(api_name="empty")
     def empty(_query: BoundQuery) -> str:
         return "ok"
 
-    with pytest.warns(DeprecationWarning, match="legacy.*0.20.0") as caught:
-        @ontology.function(api_name="legacy")
-        def legacy(_query: BoundQuery, params: dict[str, Any]) -> Any:
-            return params["value"]
-
-    assert len(caught) == 1
-    assert caught[0].filename == __file__
-    assert "takes a params dict" in str(caught[0].message)
     assert ontology.registry.get_function("empty").parameters == []
-    assert ontology.registry.get_function("legacy").parameters is None
     ontology.validate()
     store = ObjectStore(ontology.registry)
     consumer = make_consumer(
@@ -327,15 +317,14 @@ def test_no_input_and_legacy_modes(make_consumer: Any) -> None:
     server = build_mcp_server(ontology, store, consumer)
     assert client.call_function("empty") == "ok"
     assert client.call_function("empty", {}) == "ok"
-    assert client.call_function("legacy", {"value": 3}) == 3
     functions_result = asyncio.run(server.call_tool("list_functions", {}))
     assert functions_result.structured_content is not None
-    legacy_payload = next(
+    empty_payload = next(
         fn
         for fn in functions_result.structured_content["functions"]
-        if fn["api_name"] == "legacy"
+        if fn["api_name"] == "empty"
     )
-    assert legacy_payload["parameters"] is None
+    assert empty_payload["parameters"] == []
     with raises_code(ValidationFailed, "INVALID_PARAMS") as exc_info:
         client.call_function("empty", {"value": 3})
     assert "empty" in str(exc_info.value)
@@ -348,36 +337,43 @@ def test_no_input_and_legacy_modes(make_consumer: Any) -> None:
         )
     assert "empty" in str(instance_error.value)
 
-    refused_ontology = _ontology()
-    with pytest.raises(
-        DeprecationWarning, match="refused.*takes a params dict.*0.20.0"
-    ):
-        with warnings.catch_warnings():
-            warnings.simplefilter("error", DeprecationWarning)
-
-            @refused_ontology.function(api_name="refused")
-            def refused(_query: BoundQuery, _params: dict[str, Any]) -> None:
-                pass
-
-    with raises_code(ValidationFailed, "UNKNOWN_NAME") as exc_info:
-        refused_ontology.registry.get_function("refused")
-    assert "refused" in str(exc_info.value)
-    assert "unregistered function" in str(exc_info.value)
-    assert refused_ontology._function_handlers == {}
 
 
-def test_single_argument_with_default_or_varargs_is_legacy() -> None:
+@pytest.mark.parametrize("shape", ["dict", "defaulted", "variadic", "keyword_only", "extra_keyword"])
+def test_function_refuses_handler_without_params_class(shape: str) -> None:
     ontology = _ontology()
 
-    with pytest.warns(DeprecationWarning, match="defaulted.*0.20.0"):
-        @ontology.function(api_name="defaulted")
-        def defaulted(_query: BoundQuery | None = None) -> None:
-            pass
+    def dict_handler(query: BoundQuery, params: dict[str, Any]) -> None:
+        pass
 
-    with pytest.warns(DeprecationWarning, match="variadic.*0.20.0"):
-        @ontology.function(api_name="variadic")
-        def variadic(_query: BoundQuery, *args: Any) -> None:
-            pass
+    def defaulted(query: BoundQuery | None = None) -> None:
+        pass
 
-    assert ontology.registry.get_function("defaulted").parameters is None
-    assert ontology.registry.get_function("variadic").parameters is None
+    def variadic(*args: Any) -> None:
+        pass
+
+    def keyword_only(*, query: BoundQuery) -> None:
+        pass
+
+    def extra_keyword(query: BoundQuery, *, extra: int) -> None:
+        pass
+
+    handler = {
+        "dict": dict_handler,
+        "defaulted": defaulted,
+        "variadic": variadic,
+        "keyword_only": keyword_only,
+        "extra_keyword": extra_keyword,
+    }[shape]
+    with raises_code(ValidationFailed, "ONTOLOGY_INVALID") as exc_info:
+        ontology.function(api_name=shape)(handler)
+    message = str(exc_info.value)
+    assert shape in message
+    assert "FunctionParams" in message
+    assert "@ontology.function(MyParams)" in message
+    assert "(query)" in message
+    with raises_code(ValidationFailed, "UNKNOWN_NAME") as missing:
+        ontology.registry.get_function(shape)
+    assert shape in str(missing.value)
+    assert "unregistered function" in str(missing.value)
+    assert ontology._function_handlers == {}

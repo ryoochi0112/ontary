@@ -39,6 +39,7 @@ from ontary.meta import (
     PropertyDef,
     Sensitivity,
 )
+from ontary.model import FunctionParams
 from ontary.ontology import OntologyDef
 from ontary.scope import DirectProperty, ScopePolicy, SelfScope, ViaLink
 from ontary.security import Consumer
@@ -156,6 +157,7 @@ def _library_registry(make_registry: RegistryFactory) -> OntologyRegistry:
                 api_name="countBooksOnShelf",
                 description="Count the (visible) books on a shelf",
                 input_description="shelf_id",
+                parameters=[ActionParameterDef(name="shelf_id", type="str")],
                 output_description="int count",
             ),
             FunctionDef(
@@ -208,10 +210,14 @@ def _return_nested_handler(
     return {"nested": {"a": [1, "b", None]}}
 
 
-def _count_books_on_shelf(query: BoundQuery, params: dict[str, Any]) -> int:
+class CountBooksParams(FunctionParams):
+    shelf_id: str
+
+
+def _count_books_on_shelf(query: BoundQuery, params: CountBooksParams) -> int:
     return len(
         query.list(
-            "Book", where={"shelf_id": params["shelf_id"]}, limit=None
+            "Book", where={"shelf_id": params.shelf_id}, limit=None
         )
     )
 
@@ -255,7 +261,7 @@ def _build_client(
 ) -> tuple[OntologyClient, ObjectStore]:
     registry = _library_registry(make_registry)
     functions = FunctionRegistry(registry)
-    functions.register("countBooksOnShelf", _count_books_on_shelf)
+    functions.register("countBooksOnShelf", _count_books_on_shelf, params_cls=CountBooksParams)
     ontology = OntologyDef(
         name="library",
         registry=registry,
@@ -597,12 +603,12 @@ def test_function_redaction_applies_through_bound_query(
 ) -> None:
     registry = _library_registry(make_registry)
 
-    def _internal_notes(query: BoundQuery, params: dict[str, Any]) -> list[Any]:
+    def _internal_notes(query: BoundQuery) -> list[Any]:
         books = query.list("Book", limit=None)
         return [b.payload.get("internal_note") for b in books]
 
     functions = FunctionRegistry(registry)
-    functions.register("countBooksOnShelf", _count_books_on_shelf)
+    functions.register("countBooksOnShelf", _count_books_on_shelf, params_cls=CountBooksParams)
     functions.register("internalNotes", _internal_notes)
     ontology = OntologyDef(
         name="library",
@@ -648,9 +654,9 @@ def test_double_register_function_errors(
 ) -> None:
     registry = _library_registry(make_registry)
     functions = FunctionRegistry(registry)
-    functions.register("countBooksOnShelf", _count_books_on_shelf)
+    functions.register("countBooksOnShelf", _count_books_on_shelf, params_cls=CountBooksParams)
     with raises_code(PreconditionFailed, "FUNCTION_ERROR"):
-        functions.register("countBooksOnShelf", _count_books_on_shelf)
+        functions.register("countBooksOnShelf", _count_books_on_shelf, params_cls=CountBooksParams)
 
 
 # -- two ontologies coexisting (spec §7) -------------------------------
@@ -718,7 +724,7 @@ def test_two_ontologies_coexist_without_cross_talk(
 
     kanban_registry = _kanban_registry(make_registry)
 
-    def _count_cards(query: BoundQuery, params: dict[str, Any]) -> int:
+    def _count_cards(query: BoundQuery) -> int:
         return len(query.list("Card", limit=None))
 
     kanban_functions = FunctionRegistry(kanban_registry)
