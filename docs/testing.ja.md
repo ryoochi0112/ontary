@@ -4,15 +4,7 @@
 
 ## 決定論的テストが必要な理由
 
-テストは実時間やランダムなIDに依存すべきではありません。`ontary.testing`モジュールは、決定論的なヘルパーを提供します。これらは公開された`ontary` APIのみで構成されています。実行にエンジンの内部機能やカスタムの`pytest`フィクスチャは不要です。
-
-## 各種ヘルパー
-
-このモジュールは、テスト環境の分離と制御に必要な関数とクラスを提供します。インメモリ・ストレージの新規生成、ユーザーやクロックのモック化、ID生成の制御ができます。これらの機能により、異なる環境でもアサーションを安定して実行できます。
-
-`make_store`ヘルパーは、レジストリ用の空のインメモリ・ストアを新規作成します。`consumer`ヘルパーは、一般的な権限とスコープレベルを持つモックユーザーを生成します。`raises_code`は、コードブロックが想定通りのエラーコードを返すことを検証します。
-
-`FixedClock`は、呼び出しのたびに同じタイムゾーン付き日時を返します。`SequentialIds`は、任意のプレフィックスを用いて予測可能なIDを生成します。どちらのヘルパーも、オントロジー・クライアントのバインド処理に直接適用できます。
+テストは実時間やランダムなIDに依存すべきではありません。`ontary.testing`モジュールは、given/when/then のシナリオビルダーと、その土台となる低レベルのヘルパーを提供します。エンジンの内部機能のインポートやカスタムの`pytest`フィクスチャは不要で、失敗は`AssertionError`になります。
 
 ## 初めてのテスト
 
@@ -25,7 +17,7 @@ from ontary import (
     Ontology, OntologyObject, SelfScope, Source, prop, target,
 )
 from ontary.testing import (
-    FixedClock, SequentialIds, consumer, make_store, raises_code,
+    FixedClock, SequentialIds, consumer, make_store, raises_code, scenario,
 )
 
 ontology = Ontology(name="tickets", scope_levels=["queue"])
@@ -64,10 +56,70 @@ def escalate(ctx: ActionContext, params: EscalateTicket) -> dict[str, str]:
 ontology.validate()
 ```
 
-エスカレーションの正常系を検証するため、最初のテスト関数を記述します。オントロジーを使用して、空のインメモリ・ストアを初期化します。テストデータを挿入したあと、定義したアクションを実行します。
+ここからシナリオビルダーで最初のテストを書きます。シナリオは、検証したい業務ルールをそのまま読める形にします。つまり、開始状態を与え（given）、アクターがアクションを実行し（when）、結果が成り立つ（then）ことを確かめます。すべてのシナリオは `then` で終わります。最後のステップが `when` のままだと何も検証しないため、`then`、`then_result`、`then_error`、`then_absent`、`then_link`、`then_no_link` のいずれかで締めてください。
+
+`scenario(ontology)` は、何かを準備する前に、新しい `InMemoryStore`、`2026-01-01T00:00:00Z` の `FixedClock`、`SequentialIds("id")` をバインドします。`given` は型付きオブジェクトを受け取り、`when` には `by=` のコンシューマーが必須です。
 
 ```python
 def test_escalate_success():
+    agent = consumer(role="Agent", scope_level="queue", scope_id="queue-a")
+    (scenario(ontology)
+        .given(
+            Queue(id="queue-a", name="Billing"),
+            Ticket(id="t-1", subject="Invoice mismatch", queue_id="queue-a"),
+        )
+        .when(EscalateTicket(ticket_id="t-1"), by=agent)
+        .then(Ticket, "t-1", escalated=True))
+```
+
+`then(cls, pk, **fields)` は、指定したプロパティだけを、保存されている現在の行と比較します。特定のコンシューマー向けのマスキングは行われません。マスキングを検証したいときは、そのコンシューマーとして `client.get` で読んでください。
+
+検証に失敗すると `AssertionError` になり、オブジェクト、ステップ、値が異なる各プロパティが示されます。
+
+```text
+then: Ticket 't-1' does not match after step 1 (EscalateTicket by Agent):
+  escalated: expected False, got True
+```
+
+`then_result(expected)` はアクションの戻り値を検証します。`then_absent(cls, pk)` は現在の行が存在しないこと、`then_link(handle, from_, to)` と `then_no_link(handle, from_, to)` はリンクの有無を検証し、`given_link(handle, from_, to)` はリンクを準備します。1つのシナリオに複数の `when` を置くことができ、`then` は最後のステップに適用されます。検証していない失敗ステップがあると、次の `when` でシナリオが止まります。
+
+## エラーコードの検証
+
+異常系は、メッセージではなく安定したエラーコードで検証します。`then_error(code)` は、直前のアクションがそのコードで失敗したことを確認します。さらに、失敗したステップが何も変更していないことも証明します。現在のオブジェクトとリンクが、ステップ前の状態と一致している必要があります。この確認を自分で書く必要はありません。
+
+```python
+def test_escalate_precondition_failed():
+    agent = consumer(role="Agent", scope_level="queue", scope_id="queue-a")
+    (scenario(ontology)
+        .given(Queue(id="queue-a", name="Billing"))
+        .when(EscalateTicket(ticket_id="missing"), by=agent)
+        .then_error("PRECONDITION_FAILED"))
+
+def test_viewer_cannot_escalate():
+    viewer = consumer(role="Viewer", scope_level="queue", scope_id="queue-a")
+    (scenario(ontology)
+        .given(
+            Queue(id="queue-a", name="Billing"),
+            Ticket(id="t-1", subject="Invoice mismatch", queue_id="queue-a"),
+        )
+        .when(EscalateTicket(ticket_id="t-1"), by=viewer)
+        .then_error("PERMISSION_DENIED"))
+```
+
+## 環境の上書き
+
+既定値を置き換えるには、`scenario()` に `store=`、`clock=`、`id_factory=`、`capabilities=` を渡します。たとえば、同じシナリオを SQLite や Postgres で動かせます。上書きするときは、空のストアを渡してください。別のクロックで書き込まれたデータを持つストアでは、`CLOCK_REGRESSION` や `CLOCK_CONFLICT` が発生することがあります。シナリオは準備の前にクロックをバインドするため、`given` の順序が原因でこのエラーになることはありません。
+
+## 土台となるヘルパー
+
+シナリオは小さなヘルパーの上に作られており、それらを直接使うこともできます。生のストア書き込みや一括取り込みなど、シナリオで表せない手順が必要なときに使ってください。
+
+`make_store(ontology)` は空の `InMemoryStore` を新しく作ります。`consumer(...)` はテスト向けの既定値で有効な `Consumer` を組み立てます。`raises_code(code)` は、ブロックがそのコードのエラーを発生させることを検証するコンテキストマネージャーで、メッセージは無視します。`FixedClock(start)` はタイムゾーン付きの同じ日時を毎回返し、`SequentialIds(prefix)` は `prefix-1`、`prefix-2`、…を返します。どちらも `ontology.bind(...)` に渡せます。
+
+同じエスカレーションを低レベルのヘルパーで書くと、次のようになります。
+
+```python
+def test_escalate_with_low_level_helpers():
     store = make_store(ontology)
     source = Source(source_system="demo")
     store.insert("Queue", {"id": "queue-a", "name": "Billing"}, source)
@@ -78,31 +130,9 @@ def test_escalate_success():
     client = ontology.bind(store).for_consumer(agent)
     client.execute(EscalateTicket(ticket_id=ticket_id))
     assert client.get(Ticket, ticket_id).escalated is True
-```
 
-## エラーコードの検証
-
-異常系のテストでは、特定のエラーコードを検証する必要があります。`raises_code`ヘルパーは、コードブロックが期待したエラーを発生させるか検証します。これにより、エラーメッセージの文言変更に影響されない、堅牢なテストを作成できます。
-
-```python
-def test_escalate_errors():
-    store = make_store(ontology)
-    source = Source(source_system="demo")
-    ticket_id = store.insert(
-        "Ticket", {"subject": "Invoice mismatch", "queue_id": "queue-a"}, source
-    )
-
-    agent = consumer(role="Agent", scope_level="queue", scope_id="queue-a")
-    client = ontology.bind(store).for_consumer(agent)
     with raises_code("PRECONDITION_FAILED"):
         client.execute(EscalateTicket(ticket_id="missing"))
-
-    viewer = consumer(role="Viewer", scope_level="queue", scope_id="queue-a")
-    viewer_client = ontology.bind(store).for_consumer(viewer)
-    with raises_code("PERMISSION_DENIED"):
-        viewer_client.execute(EscalateTicket(ticket_id=ticket_id))
-
-    assert viewer_client.get(Ticket, ticket_id).escalated is False
 ```
 
 ## 固定日時と固定ID

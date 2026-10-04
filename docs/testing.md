@@ -4,15 +4,7 @@
 
 ## Why deterministic tests
 
-Tests should not depend on wall-clock time or random ids. The `ontary.testing` module provides small, deterministic helpers that compose only the public `ontary` API. These utilities require no engine internals or custom pytest fixtures to run.
-
-## The helpers
-
-The module exposes key functions and classes to isolate and control your testing environment. You can instantiate fresh in-memory storage, mock user agents, mock the clock, and control id generation. These primitives ensure your assertions remain stable across different environments.
-
-The `make_store` helper creates a fresh empty in-memory store for the ontology's registry. The `consumer` helper generates a mock user with common defaults for permissions and scope level. The `raises_code` context manager asserts that a code block raises an expected stable exception code.
-
-The `FixedClock` helper returns the same timezone-aware datetime on every call. The `SequentialIds` utility generates predictable ids using a custom prefix. Both helpers plug directly into your ontology client binding.
+Tests should not depend on wall-clock time or random ids. The `ontary.testing` module provides small, deterministic helpers: a given/when/then scenario builder and the low-level helpers underneath it. They need no engine imports and no custom pytest fixtures; failures raise `AssertionError`.
 
 ## A first test
 
@@ -25,7 +17,7 @@ from ontary import (
     Ontology, OntologyObject, SelfScope, Source, prop, target,
 )
 from ontary.testing import (
-    FixedClock, SequentialIds, consumer, make_store, raises_code,
+    FixedClock, SequentialIds, consumer, make_store, raises_code, scenario,
 )
 
 ontology = Ontology(name="tickets", scope_levels=["queue"])
@@ -64,10 +56,70 @@ def escalate(ctx: ActionContext, params: EscalateTicket) -> dict[str, str]:
 ontology.validate()
 ```
 
-Now, we write our first test function to verify successful escalation. We initialize an empty in-memory store using our ontology. Then, we insert test data and execute our action.
+Now we write the first test with the scenario builder. A scenario reads like the business rule it checks: given a starting state, when an actor runs an action, then the outcome holds. Every scenario ends in a `then`. A scenario whose last step is a `when` checks nothing, so finish with `then`, `then_result`, `then_error`, `then_absent`, `then_link`, or `then_no_link`.
+
+`scenario(ontology)` binds a fresh `InMemoryStore`, a `FixedClock` at `2026-01-01T00:00:00Z`, and `SequentialIds("id")` before it seeds anything. `given` takes typed objects, and `when` needs an explicit `by=` consumer.
 
 ```python
 def test_escalate_success():
+    agent = consumer(role="Agent", scope_level="queue", scope_id="queue-a")
+    (scenario(ontology)
+        .given(
+            Queue(id="queue-a", name="Billing"),
+            Ticket(id="t-1", subject="Invoice mismatch", queue_id="queue-a"),
+        )
+        .when(EscalateTicket(ticket_id="t-1"), by=agent)
+        .then(Ticket, "t-1", escalated=True))
+```
+
+`then(cls, pk, **fields)` compares only the properties you name, against the stored current row. It is not redacted for any consumer. To test redaction, read with `client.get` as that consumer.
+
+A failing check raises `AssertionError` and names the object, the step, and each property that differs:
+
+```text
+then: Ticket 't-1' does not match after step 1 (EscalateTicket by Agent):
+  escalated: expected False, got True
+```
+
+`then_result(expected)` checks the action's return value. `then_absent(cls, pk)` checks that no current row exists, `then_link(handle, from_, to)` and `then_no_link(handle, from_, to)` check links, and `given_link(handle, from_, to)` seeds a link. A scenario may contain several `when` steps, and `then` applies to the last one. A failed step you did not check stops the scenario at the next `when`.
+
+## Asserting error codes
+
+Test failure paths by stable error code, not by message. `then_error(code)` checks that the last action failed with that code. It also proves the failed step changed nothing: current objects and links must equal the state before the step. You do not write that check yourself.
+
+```python
+def test_escalate_precondition_failed():
+    agent = consumer(role="Agent", scope_level="queue", scope_id="queue-a")
+    (scenario(ontology)
+        .given(Queue(id="queue-a", name="Billing"))
+        .when(EscalateTicket(ticket_id="missing"), by=agent)
+        .then_error("PRECONDITION_FAILED"))
+
+def test_viewer_cannot_escalate():
+    viewer = consumer(role="Viewer", scope_level="queue", scope_id="queue-a")
+    (scenario(ontology)
+        .given(
+            Queue(id="queue-a", name="Billing"),
+            Ticket(id="t-1", subject="Invoice mismatch", queue_id="queue-a"),
+        )
+        .when(EscalateTicket(ticket_id="t-1"), by=viewer)
+        .then_error("PERMISSION_DENIED"))
+```
+
+## Overriding the environment
+
+Pass `store=`, `clock=`, `id_factory=`, or `capabilities=` to `scenario()` to replace a default, for example to run the same scenario on SQLite or Postgres. Pass an empty store when overriding. A store that already holds data written under another clock can raise `CLOCK_REGRESSION` or `CLOCK_CONFLICT`. The scenario binds the clock before it seeds, so the order of `given` calls never causes that error.
+
+## The helpers underneath
+
+Scenarios are built on small helpers that you can also use directly. Use them when you need a step that a scenario does not express, such as a raw store write or a bulk ingest.
+
+`make_store(ontology)` creates a fresh empty `InMemoryStore`. `consumer(...)` builds a valid `Consumer` with test-friendly defaults. `raises_code(code)` is a context manager that asserts a block raises an error with that stable code and ignores the message. `FixedClock(start)` returns the same timezone-aware datetime on every call, and `SequentialIds(prefix)` returns `prefix-1`, `prefix-2`, and so on. Both plug into `ontology.bind(...)`.
+
+The same escalation, written with the low-level helpers:
+
+```python
+def test_escalate_with_low_level_helpers():
     store = make_store(ontology)
     source = Source(source_system="demo")
     store.insert("Queue", {"id": "queue-a", "name": "Billing"}, source)
@@ -78,31 +130,9 @@ def test_escalate_success():
     client = ontology.bind(store).for_consumer(agent)
     client.execute(EscalateTicket(ticket_id=ticket_id))
     assert client.get(Ticket, ticket_id).escalated is True
-```
 
-## Asserting error codes
-
-We must test failure paths by asserting specific stable error codes. The `raises_code` helper checks that a block raises the expected error. This guarantees stable tests that ignore changing prose messages.
-
-```python
-def test_escalate_errors():
-    store = make_store(ontology)
-    source = Source(source_system="demo")
-    ticket_id = store.insert(
-        "Ticket", {"subject": "Invoice mismatch", "queue_id": "queue-a"}, source
-    )
-
-    agent = consumer(role="Agent", scope_level="queue", scope_id="queue-a")
-    client = ontology.bind(store).for_consumer(agent)
     with raises_code("PRECONDITION_FAILED"):
         client.execute(EscalateTicket(ticket_id="missing"))
-
-    viewer = consumer(role="Viewer", scope_level="queue", scope_id="queue-a")
-    viewer_client = ontology.bind(store).for_consumer(viewer)
-    with raises_code("PERMISSION_DENIED"):
-        viewer_client.execute(EscalateTicket(ticket_id=ticket_id))
-
-    assert viewer_client.get(Ticket, ticket_id).escalated is False
 ```
 
 ## Fixed time and IDs

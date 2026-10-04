@@ -430,6 +430,7 @@ def test_readme_quickstart_executes_verbatim() -> None:
 COOKBOOK_RECIPES = (
     "scoped-type",
     "serve-dev",
+    "given-when-then",
 )
 
 

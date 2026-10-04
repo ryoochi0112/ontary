@@ -142,11 +142,25 @@ the same timezone-aware datetime on every call and rejects a naive start.
 so on.
 
 `scenario(ontology, *, store=None, clock=None, id_factory=None, capabilities=None)`
-returns a `Scenario` for eager, chainable tests: `given` seeds typed objects,
-`given_link` seeds links, `when(params, by=consumer)` executes a governed action,
-and `then_result` or `then_error` checks its outcome. `then_error` also checks
-that current objects and links are unchanged. Defaults bind a fresh store,
-`FixedClock` at `2026-01-01T00:00:00Z`, and `SequentialIds("id")` before seeding.
+returns a `Scenario` for eager, chainable tests. It binds the store, clock, and
+id factory once, before any seed write. Defaults are a fresh `InMemoryStore`,
+`FixedClock` at `2026-01-01T00:00:00Z`, and `SequentialIds("id")`. Pass an empty
+store when overriding. Every method returns the same `Scenario`:
+
+| Method | Meaning |
+|---|---|
+| `given(*objects)` | Seeds typed `OntologyObject` instances. Allowed only before the first `when`. A store refusal is re-raised as `AssertionError` naming the object and the error code. |
+| `given_link(handle, from_, to)` | Seeds a link through a typed `LinkHandle`. Endpoints are objects or id strings. Allowed only before the first `when`. |
+| `when(params, *, by)` | Runs one `ActionParams` through the governed runtime as consumer `by` (required). Raises `AssertionError` first if the previous step failed and no `then_error` checked it. |
+| `then(cls, pk, **fields)` | Requires the last step to have succeeded. Compares each named property with `==` against the unredacted current row. An undeclared field raises `INVALID_RECORD`. |
+| `then_result(expected)` | Requires success and that the return value equals `expected`. |
+| `then_error(code)` | Requires failure with `code`, and that current objects and links equal the state before the step. Only this check marks the failure as checked. |
+| `then_absent(cls, pk)` | Requires that no current row exists. Works after success or failure. |
+| `then_link(handle, from_, to)` | Requires that the link exists in the current state. |
+| `then_no_link(handle, from_, to)` | Requires that the link does not exist in the current state. |
+
+Failed checks raise `AssertionError`. Every scenario ends in a `then*` call; a
+scenario that ends in a `when` checks nothing.
 
 ---
 

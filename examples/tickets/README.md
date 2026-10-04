@@ -138,6 +138,95 @@ actions on scoped ontologies. If a scoped row is hidden while you exercise a
 local server, review the type's `ScopePolicy` declaration rather than weakening
 it — see [Scope policy](../../docs/api-reference.md#scope-policy).
 
+### 3. Test an action as given / when / then
+
+`ontary.testing.scenario` states a test in business terms: the starting state as
+typed objects, the action and who runs it, and the expected state. It binds a
+deterministic store, clock, and id factory before it seeds anything.
+
+<!-- cookbook-given-when-then-runnable:start -->
+```python
+from ontary import (
+    ActionContext,
+    ActionError,
+    ActionParams,
+    DirectProperty,
+    Ontology,
+    OntologyObject,
+    SelfScope,
+    prop,
+    target,
+)
+from ontary.testing import consumer, scenario
+
+ontology = Ontology(name="tickets-recipe", scope_levels=["queue"])
+
+
+@ontology.object(layer="L0", scope=[SelfScope(level="queue")])
+class Queue(OntologyObject):
+    id: str = prop(primary_key=True)
+    name: str
+
+
+@ontology.object(
+    layer="L0",
+    owned={"escalated": False},
+    scope=[DirectProperty(level="queue", property_name="queue_id")],
+)
+class Ticket(OntologyObject):
+    id: str = prop(primary_key=True)
+    subject: str
+    queue_id: str = prop(scope_level="queue")
+    escalated: bool | None = prop(default=False)
+
+
+class EscalateTicket(ActionParams):
+    ticket_id: str = target(Ticket)
+
+
+@ontology.action(
+    EscalateTicket,
+    target=Ticket,
+    roles=["Agent"],
+    display_name="Escalate ticket",
+    description="Mark a ticket urgent.",
+    api_name="EscalateTicket",
+)
+def escalate(ctx: ActionContext, params: EscalateTicket) -> dict[str, str]:
+    ticket = ctx.get(Ticket, params.ticket_id)
+    if ticket is None:
+        raise ActionError("ticket does not exist", code="PRECONDITION_FAILED")
+    ticket.escalated = True
+    ctx.save(ticket)
+    return {"ticket_id": params.ticket_id}
+
+
+ontology.validate()
+agent = consumer(role="Agent", scope_level="queue", scope_id="queue-a")
+viewer = consumer(role="Viewer", scope_level="queue", scope_id="queue-a")
+queue = Queue(id="queue-a", name="Billing")
+ticket = Ticket(id="t-1", subject="Invoice mismatch", queue_id="queue-a")
+
+(
+    scenario(ontology)
+    .given(queue, ticket)
+    .when(EscalateTicket(ticket_id="t-1"), by=agent)
+    .then_result({"ticket_id": "t-1"})
+    .then(Ticket, "t-1", escalated=True)
+)
+
+(
+    scenario(ontology)
+    .given(queue, ticket)
+    .when(EscalateTicket(ticket_id="t-1"), by=viewer)
+    .then_error("PERMISSION_DENIED")  # also proves the ticket is unchanged
+)
+```
+<!-- cookbook-given-when-then-runnable:end -->
+
+Every scenario ends in a `then*` call; a scenario that ends in a `when` checks
+nothing. See [`docs/testing.md`](../../docs/testing.md) for the full helper set.
+
 ## Test coverage
 
 - [`tests/test_examples_tickets_e2e.py`](../../tests/test_examples_tickets_e2e.py)
