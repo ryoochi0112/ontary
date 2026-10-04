@@ -2,6 +2,8 @@
 
 [English](ontology-design.md) · **日本語**
 
+*解説* — 構築の前に知っておきたい境界とセキュリティの考え方を説明するページで、コードは[はじめに](getting-started.ja.md)と [API リファレンス](api-reference.ja.md)で確認できます。
+
 `Ontology` と `OntologyObject` でオントロジーを宣言する前、あるいは下位の
 `ObjectTypeDef`、`PropertyDef`、`LinkTypeDef`、`ActionTypeDef`、`FunctionDef`
 といった記述子を生成する前に、オントロジーが何を意味すべきかを決める人と
