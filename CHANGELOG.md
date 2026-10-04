@@ -11,6 +11,21 @@ you**.
 
 ## [Unreleased]
 
+## [0.19.0] — 2026-10-04
+
+```bash
+uv add "ontary @ git+https://github.com/ryoochi0112/ontary@v0.19.0"
+```
+
+This release completes M1, "Model your operation". Actions can record events,
+the business facts they produce, in their own transaction. Function parameters
+are typed like action parameters. An injectable clock stamps every write, and
+`ctx.now()` reads it. Lints now name the concrete fix and link to the design
+guide, and `accept=` silences a lint at the declaration that caused it.
+**The store schema moves to v14**, so a 0.18.0 store must be dropped and
+re-ingested. Dict-form Function handlers are deprecated and are removed in
+0.20.0.
+
 ### Added
 
 - `EVENT_NEVER_EMITTED` lint (#47). Warns when no action declares an event in `emits`; the event's `accept=` can suppress it.
