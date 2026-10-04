@@ -38,20 +38,31 @@ plugins:
         - locale: ja
           name: 日本語
           build: true
+          nav_translations:
+            Tutorials: チュートリアル
+            How-to guides: ハウツーガイド
+            Reference: リファレンス
+            Explanation: 解説
+            Project: プロジェクト
 
 hooks:
   - scripts/mkdocs_hooks.py
 
 nav:
   - Home: index.md
-  - Getting started: getting-started.md
-  - Ontology design: ontology-design.md
-  - API reference: api-reference.md
-  - Storage: storage.md
-  - MCP serving: mcp-serving.md
-  - CLI reference: cli.md
-  - Testing: testing.md
-  - Roadmap: roadmap.md
-  - Compatibility: compatibility.md
-  - Changelog: changelog.md
-  - Releasing: releasing.md
+  - Tutorials:
+      - Getting started: getting-started.md
+  - How-to guides:
+      - Testing your ontology: testing.md
+      - Storage, tenancy, and schema: storage.md
+      - MCP serving: mcp-serving.md
+  - Reference:
+      - API reference: api-reference.md
+      - CLI reference: cli.md
+      - Compatibility: compatibility.md
+  - Explanation:
+      - Ontology design: ontology-design.md
+  - Project:
+      - Roadmap: roadmap.md
+      - Changelog: changelog.md
+      - Releasing: releasing.md
