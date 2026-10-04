@@ -46,6 +46,7 @@ from ontary import (
 from ontary.authoring import Ontology, OntologyObject, prop
 from ontary.client import OntologyClient, OntologyRuntime
 from ontary.errors import ValidationFailed, VisibilityError
+from ontary.model import Event
 from ontary.testing import Scenario, consumer, scenario
 
 
@@ -685,3 +686,39 @@ def test_lint_accept_typing_surface() -> None:
     ontology.action(Params, target=Example, roles=[], accept="AUDIT_TYPE")  # type: ignore[arg-type]
     ontology.function(accept="FREE_TEXT_STATUS")  # type: ignore[arg-type]
     ontology.function(FunctionParams, accept="FREE_TEXT_STATUS")  # type: ignore[arg-type]
+
+
+def test_event_emits_typing_surface() -> None:
+    ontology = Ontology("event-types", scope_levels=["org"])
+
+    @ontology.object(layer="L0", scope="unscoped")
+    class Record(OntologyObject):
+        id: str = prop(primary_key=True)
+
+    @ontology.event(accept="EVENT_NEVER_EMITTED")
+    class Happened(Event):
+        value: str
+
+    assert_type(Happened(value="fact"), Happened)
+    ontology.event(accept=["EVENT_NEVER_EMITTED"])
+
+    class Params(ActionParams):
+        pass
+
+    @ontology.action(Params, target=Record, roles=[], emits=[Happened])
+    def run(ctx: ActionContext, params: Params) -> dict[str, Any]:
+        return {}
+
+    assert ontology.registry.get_action_type("Params").emits == ["Happened"]
+
+    class NotAnEvent:
+        pass
+
+    class InvalidParams(ActionParams):
+        pass
+
+    # --strict's warn_unused_ignores fails if emits ever accepts this class.
+    with raises_code(ValidationFailed, "ONTOLOGY_INVALID"):
+        @ontology.action(InvalidParams, target=Record, roles=[], emits=[NotAnEvent])  # type: ignore[list-item]
+        def invalid(ctx: ActionContext, params: InvalidParams) -> dict[str, Any]:
+            return {}

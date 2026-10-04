@@ -155,6 +155,19 @@ class ActionParams(BaseModel):
     _ontary_registry: ClassVar[OntologyRegistry | None] = None
 
 
+class Event(BaseModel):
+    """Base class for declared business facts.
+
+    Declaration stamps belong to the class itself; resolve them through
+    `_class_stamp` so an undecorated subclass cannot inherit registration.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    _ontary_api_name: ClassVar[str | None] = None
+    _ontary_registry: ClassVar[OntologyRegistry | None] = None
+
+
 class FunctionParams(BaseModel):
     """Base class for typed function-params models.
 
