@@ -155,6 +155,8 @@ def _render_findings(findings: list[Finding], as_json: bool) -> None:
             f"{finding.location}: {finding.message}"
         )
         print(f"  fix: {finding.fix_hint}")
+        if finding.guide is not None:
+            print(f"  guide: {finding.guide}")
 
 
 def _run_validate(target: str, as_json: bool) -> int:

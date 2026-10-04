@@ -11,6 +11,7 @@ import pytest
 
 import ontary.cli as cli
 from ontary.authoring import Ontology, OntologyObject, prop
+from ontary.diagnose import Finding
 from ontary.scope import SelfScope
 
 
@@ -148,3 +149,59 @@ def test_version_prints_ontary_version(capsys: pytest.CaptureFixture[str]) -> No
     assert code == 0
     assert captured.out.strip() == ontary.__version__
     assert captured.err == ""
+
+
+@pytest.mark.parametrize(
+    ("builder", "expected_guide"),
+    [
+        (
+            "_warning_ontology",
+            "https://ryoochi0112.github.io/ontary/ontology-design/"
+            "#normalization-and-derived-values",
+        ),
+        ("_error_ontology", None),
+    ],
+)
+def test_validate_json_includes_guide_on_every_finding(
+    builder: str, expected_guide: str | None, capsys: pytest.CaptureFixture[str]
+) -> None:
+    cli.main(["validate", _target(builder), "--json"])
+
+    findings = json.loads(capsys.readouterr().out)
+    assert findings
+    assert all(finding["guide"] == expected_guide for finding in findings)
+
+
+def test_validate_text_prints_guide_immediately_after_fix(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    cli.main(["validate", _target("_warning_ontology")])
+
+    assert capsys.readouterr().out == (
+        "[WARN] STORED_DERIVABLE at object Ticket, property avg_response_hours: "
+        "looks like a stored aggregate; facts are stored once and derived by Functions\n"
+        "  fix: declare a Function that computes it from source rows, "
+        "or mark the type as a declared snapshot\n"
+        "  guide: https://ryoochi0112.github.io/ontary/ontology-design/"
+        "#normalization-and-derived-values\n"
+    )
+
+
+def test_render_findings_omits_guide_line_when_unset(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    cli._render_findings(
+        [Finding(
+            code="ONTOLOGY_INVALID",
+            severity="error",
+            location="object Ticket",
+            message="invalid declaration",
+            fix_hint="repair the declaration",
+        )],
+        as_json=False,
+    )
+
+    assert capsys.readouterr().out == (
+        "[ERROR] ONTOLOGY_INVALID at object Ticket: invalid declaration\n"
+        "  fix: repair the declaration\n"
+    )

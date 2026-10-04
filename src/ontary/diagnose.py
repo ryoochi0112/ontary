@@ -52,9 +52,22 @@ class Finding(BaseModel):
     location: str
     message: str
     fix_hint: str
+    guide: str | None = None
 
 
 DiagnosticRule = Callable[["OntologyDef"], tuple[Finding, ...]]
+
+
+GUIDE_URL = "https://ryoochi0112.github.io/ontary/ontology-design/"
+GUIDE_ANCHORS: dict[str, tuple[str, ...]] = {
+    "STORED_DERIVABLE": ("normalization-and-derived-values",),
+    "MICRO_ACTION": ("action-sprawl",),
+    "CRUD_ACTION_NAME": ("action-sprawl", "retirement-and-removal"),
+    "FORBIDDEN_TYPE_NAME": ("the-time-machine",),
+    "UNSCOPED_SENSITIVE": ("security-design",),
+    "MIN_N_UNSET": ("security-design",),
+}
+ADVISORY_CODES = set(GUIDE_ANCHORS)
 
 
 # Advisory name heuristics from docs/ontology-design.md.  They are deliberately
@@ -102,23 +115,29 @@ def _error(code: str, location: str, message: str, fix_hint: str) -> Finding:
     )
 
 
-def _warn(code: str, location: str, message: str, fix_hint: str) -> Finding:
+def _warn(
+    code: str, location: str, message: str, fix_hint: str, guide: str
+) -> Finding:
     return Finding(
         code=code,
         severity="warn",
         location=location,
         message=message,
         fix_hint=fix_hint,
+        guide=guide,
     )
 
 
-def _info(code: str, location: str, message: str, fix_hint: str) -> Finding:
+def _info(
+    code: str, location: str, message: str, fix_hint: str, guide: str
+) -> Finding:
     return Finding(
         code=code,
         severity="info",
         location=location,
         message=message,
         fix_hint=fix_hint,
+        guide=guide,
     )
 
 
@@ -614,6 +633,7 @@ def _stored_derivable_findings(
                     "derived by Functions",
                     "declare a Function that computes it from "
                     f"{sibling} rows, or mark the type as a declared snapshot",
+                    GUIDE_URL + "#" + GUIDE_ANCHORS["STORED_DERIVABLE"][0],
                 )
             )
     return tuple(findings)
@@ -634,6 +654,9 @@ def _crud_action_name_findings(
                 "action name looks like a CRUD operation rather than a "
                 "business verb",
                 "Rename the action with the business outcome it performs.",
+                GUIDE_URL + "#" + GUIDE_ANCHORS["CRUD_ACTION_NAME"][
+                    1 if api_name.startswith(("Delete", "Remove", "Erase")) else 0
+                ],
             )
         )
     return tuple(findings)
@@ -662,6 +685,7 @@ def _forbidden_type_name_findings(
                 "clone",
                 "Keep one object type and let row history carry the past; declare a "
                 "snapshot explicitly when a point-in-time value is first-class.",
+                GUIDE_URL + "#" + GUIDE_ANCHORS["FORBIDDEN_TYPE_NAME"][0],
             )
         )
     return tuple(findings)
@@ -698,6 +722,7 @@ def _micro_action_findings(
                 "action shape looks like a single-property write",
                 "Model the business transition as one invariant-preserving "
                 "action instead of exposing a property setter.",
+                GUIDE_URL + "#" + GUIDE_ANCHORS["MICRO_ACTION"][0],
             )
         )
     return tuple(findings)
@@ -725,6 +750,7 @@ def _unscoped_sensitive_findings(
                     "sensitive property has no scope rule for its object type",
                     "Add a scope rule for the object type or explicitly mark "
                     "the type as unscoped.",
+                    GUIDE_URL + "#" + GUIDE_ANCHORS["UNSCOPED_SENSITIVE"][0],
                 )
             )
     return tuple(findings)
@@ -755,6 +781,7 @@ def _min_n_unset_findings(
             "ScopePolicy.min_n",
             "min_n is left at the default while sensitivity is declared",
             "Set min_n explicitly for the ontology's privacy requirements.",
+            GUIDE_URL + "#" + GUIDE_ANCHORS["MIN_N_UNSET"][0],
         ),
     )
 

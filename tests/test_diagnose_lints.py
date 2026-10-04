@@ -69,6 +69,10 @@ def test_stored_derivable_golden_finding_is_byte_exact() -> None:
             "declare a Function that computes it from Comment rows, or mark the "
             "type as a declared snapshot"
         ),
+        "guide": (
+            "https://ryoochi0112.github.io/ontary/ontology-design/"
+            "#normalization-and-derived-values"
+        ),
     }
     assert json.dumps(dumped) == (
         '{"code": "STORED_DERIVABLE", "severity": "warn", '
@@ -76,7 +80,8 @@ def test_stored_derivable_golden_finding_is_byte_exact() -> None:
         '"message": "looks like a stored aggregate; facts are stored once '
         'and derived by Functions", "fix_hint": "declare a Function that '
         'computes it from Comment rows, or mark the type as a declared '
-        'snapshot"}'
+        'snapshot", "guide": "https://ryoochi0112.github.io/ontary/'
+        'ontology-design/#normalization-and-derived-values"}'
     )
 
 
@@ -109,14 +114,22 @@ def _ontology_with_action_name(api_name: str) -> Ontology:
 
 
 @pytest.mark.parametrize(
-    "api_name",
-    ["UpdateStatus", "DeleteTicket", "RemoveTicket", "EraseTicket"],
+    ("api_name", "anchor"),
+    [
+        ("SetStatus", "action-sprawl"),
+        ("UpdateStatus", "action-sprawl"),
+        ("CreateTicket", "action-sprawl"),
+        ("DeleteTicket", "retirement-and-removal"),
+        ("RemoveTicket", "retirement-and-removal"),
+        ("EraseTicket", "retirement-and-removal"),
+    ],
 )
-def test_crud_action_name_positive(api_name: str) -> None:
+def test_crud_action_name_positive(api_name: str, anchor: str) -> None:
     findings = _ontology_with_action_name(api_name).diagnose()
 
     assert [finding.code for finding in findings] == ["CRUD_ACTION_NAME"]
     assert findings[0].severity == "warn"
+    assert findings[0].guide == diagnose_module.GUIDE_URL + "#" + anchor
 
 
 def test_crud_action_name_negative_when_only_api_name_uses_business_verb() -> None:
@@ -142,6 +155,7 @@ def test_forbidden_type_name_positive_without_declared_snapshot_marker() -> None
     findings = _snapshot_named_ontology("A copied ticket value.").diagnose()
 
     assert [finding.code for finding in findings] == ["FORBIDDEN_TYPE_NAME"]
+    assert findings[0].guide == diagnose_module.GUIDE_URL + "#the-time-machine"
     assert findings[0].severity == "warn"
 
 
@@ -185,6 +199,7 @@ def test_micro_action_positive_for_single_property_shape() -> None:
     findings = _ontology_with_micro_action("status").diagnose()
 
     assert [finding.code for finding in findings] == ["MICRO_ACTION"]
+    assert findings[0].guide == diagnose_module.GUIDE_URL + "#action-sprawl"
     assert findings[0].severity == "warn"
 
 
@@ -211,6 +226,7 @@ def test_unscoped_sensitive_positive_without_policy_scope_rule() -> None:
     findings = _sensitive_ontology(scoped=False).diagnose()
 
     assert [finding.code for finding in findings] == ["UNSCOPED_SENSITIVE"]
+    assert findings[0].guide == diagnose_module.GUIDE_URL + "#security-design"
     assert findings[0].severity == "warn"
 
 
@@ -254,6 +270,7 @@ def test_min_n_unset_positive_for_default_with_sensitive_property() -> None:
     findings = _min_n_ontology(3).diagnose()
 
     assert [finding.code for finding in findings] == ["MIN_N_UNSET"]
+    assert findings[0].guide == diagnose_module.GUIDE_URL + "#security-design"
     assert findings[0].severity == "info"
 
 
