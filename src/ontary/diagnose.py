@@ -69,6 +69,7 @@ GUIDE_ANCHORS: dict[str, tuple[str, ...]] = {
     "AUDIT_TYPE": ("the-golden-hammer",),
     "UNSCOPED_SENSITIVE": ("security-design",),
     "MIN_N_UNSET": ("security-design",),
+    "EVENT_NEVER_EMITTED": ("events",),
 }
 ADVISORY_CODES = frozenset(GUIDE_ANCHORS)
 
@@ -747,6 +748,33 @@ def _audit_type_findings(definition: "OntologyDef") -> tuple[Finding, ...]:
     return tuple(findings)
 
 
+def _event_never_emitted_findings(definition: "OntologyDef") -> tuple[Finding, ...]:
+    """Warn on registered events that no action declares it can emit."""
+    emitted = {
+        event_name
+        for action in definition.registry.action_types.values()
+        for event_name in action.emits
+    }
+    findings: list[Finding] = []
+    for api_name in sorted(definition.registry.event_types):
+        event = definition.registry.event_types[api_name]
+        if "EVENT_NEVER_EMITTED" in event.accept:
+            continue
+        if api_name in emitted:
+            continue
+        findings.append(
+            _warn(
+                "EVENT_NEVER_EMITTED",
+                f"event {api_name}",
+                f"event {api_name} is declared but appears in no action's emits",
+                f"add {api_name} to an action's emits=[{api_name}] or remove it; "
+                'if the unused event is intentional, add accept="EVENT_NEVER_EMITTED"',
+                GUIDE_URL + "#" + GUIDE_ANCHORS["EVENT_NEVER_EMITTED"][0],
+            )
+        )
+    return tuple(findings)
+
+
 def _micro_action_findings(definition: "OntologyDef") -> tuple[Finding, ...]:
     """Warn on the declared shape of a likely one-property write action.
 
@@ -856,6 +884,7 @@ RULES: tuple[DiagnosticRule, ...] = (
     _micro_action_findings,
     _free_text_status_findings,
     _audit_type_findings,
+    _event_never_emitted_findings,
     _unscoped_sensitive_findings,
     _min_n_unset_findings,
 )

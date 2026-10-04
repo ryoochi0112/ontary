@@ -42,6 +42,7 @@ When called with the `--json` flag, the command prints a JSON array of findings.
 |---|---|
 | `AUDIT_TYPE` | An object type name ends in `AuditLog`, `AuditEntry`, `AuditTrail`, `AuditRecord`, or `AuditEvent`. |
 | `CRUD_ACTION_NAME` | The first word of an action or Function API name is `Set`, `Update`, `Create`, `Delete`, `Remove`, or `Erase`, ignoring letter case. |
+| `EVENT_NEVER_EMITTED` | A registered event appears in no action's `emits` declaration. Add it to an action's `emits=[...]` or remove it; use `accept="EVENT_NEVER_EMITTED"` on the event to accept it. |
 | `FORBIDDEN_TYPE_NAME` | An object type name ends in `V` plus digits, `History`, or a year from 1900 to 2099, or ends in `Snapshot` without `snapshot=True`. |
 | `FREE_TEXT_STATUS` | A `status` or `*_status` property has type `str` and declares no choices. |
 | `MICRO_ACTION` | An action has one non-target parameter whose name matches a property on its target type. |

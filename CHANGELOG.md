@@ -13,6 +13,7 @@ you**.
 
 ### Added
 
+- `EVENT_NEVER_EMITTED` lint (#47). Warns when no action declares an event in `emits`; the event's `accept=` can suppress it.
 - Events (#47). `@ontology.event` declares a business fact as an `Event` subclass.
   An action lists the events it may emit with `emits=[...]`, and
   `ctx.emit(event, *, about=None)` records one inside the action's transaction.
@@ -45,7 +46,7 @@ you**.
   type name ending in `AuditLog`, `AuditEntry`, `AuditTrail`, `AuditRecord`, or
   `AuditEvent`.
 - `Finding.guide` (#50). It holds the URL of the design-guide section that explains
-  the finding, or `None`. All eight advisory codes set it. `ontary.diagnose` exports
+  the finding, or `None`. All nine advisory codes set it. `ontary.diagnose` exports
   `GUIDE_URL`, `GUIDE_ANCHORS`, and `ADVISORY_CODES`, and `ontary validate` prints a
   `guide:` line under `fix:` and a `guide` key in `--json`.
 - `accept=` on `prop`, `@ontology.object`, `@ontology.action`, and
