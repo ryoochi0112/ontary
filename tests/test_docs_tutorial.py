@@ -15,10 +15,11 @@ import pytest
 PAGE = Path(__file__).resolve().parent.parent / "docs/tutorial-leave-requests.md"
 EXPECTED_STAGES = 9
 EXPECTED_PYTHON_FENCES = 25
-EXPECTED_TESTS = 4
+EXPECTED_TESTS = 6
 EXPECTED_OUTPUT_BLOCKS = 9
 PYTEST_COMMAND = "pytest test_leave_requests.py -q"
-MAX_LINES = 550
+MAX_LINES = 620
+MAX_CODE_LINE = 100
 BANNED_TERMS = (
     r"aggregate root",
     r"bounded context",
@@ -297,6 +298,29 @@ def test_output_normalisation_and_duration_mask() -> None:
     assert _normalise("a\n") != _normalise("b\n")
 
 
+def _long_code_lines(md: str) -> list[str]:
+    preamble, sections = _sections(md)
+    found = []
+    for title, body in [("", preamble), *sections]:
+        for fence in re.findall(r"^```(?:python|bash)\n(.*?)^```\s*$", body, re.MULTILINE | re.DOTALL):
+            found.extend(
+                f"{title or 'preamble'}: {len(line)} chars: {line.strip()[:40]}"
+                for line in fence.splitlines()
+                if len(line) > MAX_CODE_LINE
+            )
+    return found
+
+
+def test_long_code_lines_name_the_stage() -> None:
+    md = f"## 2. Submit\n```python\nx = {'1' * MAX_CODE_LINE}\n```\n```text\n{'y' * 200}\n```\n"
+    assert _long_code_lines(md) == [f"2. Submit: {MAX_CODE_LINE + 4} chars: x = {'1' * 36}"]
+    assert _long_code_lines(f"## 1. A\n```bash\n{'z' * MAX_CODE_LINE}\n```\n") == []
+
+
+def test_tutorial_code_lines_fit_the_line_length() -> None:
+    assert _long_code_lines(PAGE.read_text()) == []
+
+
 def test_tutorial_structure_and_limits() -> None:
     md = PAGE.read_text()
     stages = _stages(md)
@@ -337,6 +361,29 @@ def test_tutorial_checkpoint(number: int) -> None:
                 test()
     except Exception as error:
         raise AssertionError(f"stage {number}: {error}") from error
+
+
+@pytest.mark.parametrize("number", range(1, EXPECTED_STAGES + 1), ids=lambda n: f"stage-{n}")
+def test_try_it_still_runs_against_the_whole_program(number: int) -> None:
+    md = PAGE.read_text()
+    checkpoints = _checkpoints(_stages(md))
+    program = checkpoints[-1][1]
+    try_it = next(fences for stage, _, fences in checkpoints if stage == number)
+    expected = [text for kind, text in _outputs(md)[number] if kind == "try_it"]
+    namespace: dict[str, object] = {}
+    filename = f"docs/tutorial-leave-requests.md#whole-program-stage-{number}"
+    try:
+        exec(compile(program, filename, "exec"), namespace)
+        for fence, text in zip(try_it, expected, strict=True):
+            printed = io.StringIO()
+            with contextlib.redirect_stdout(printed):
+                exec(compile(fence, filename, "exec"), namespace)
+            actual, wanted = _normalise(printed.getvalue()), _normalise(text)
+            assert actual == wanted, (
+                "Try it output differs from the text block\n" + _output_diff(wanted, actual)
+            )
+    except Exception as error:
+        raise AssertionError(f"stage {number} against the whole program: {error}") from error
 
 
 def test_stage_8_pytest_output_matches_its_text_block(tmp_path: Path) -> None:

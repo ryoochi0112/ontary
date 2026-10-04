@@ -111,6 +111,8 @@ class SubmitRequest(ActionParams):
 
 @ontology.action(SubmitRequest, target=LeaveRequest, roles=["Employee"])
 def submit(ctx: ActionContext, params: SubmitRequest) -> dict[str, str]:
+    if params.employee_id != ctx.consumer.actor_id:
+        raise ActionError("employees submit their own requests", code="PERMISSION_DENIED")
     employee = ctx.get(Employee, params.employee_id)
     if employee is None:
         raise ActionError("employee does not exist", code="PRECONDITION_FAILED")
@@ -125,6 +127,7 @@ def submit(ctx: ActionContext, params: SubmitRequest) -> dict[str, str]:
 `ActionContext` supplies reads and writes. `ctx.now()` supplies the timestamp.
 `ctx.create()` generates the id. The request and employee link commit together.
 `roles=["Employee"]` declares who can submit.
+`ctx.consumer` is the caller, so an employee can submit only their own request.
 
 In **Try it**, submit two working days and read the request:
 
@@ -209,7 +212,8 @@ def reject(ctx: ActionContext, params: RejectRequest) -> dict[str, str]:
     return {"request_id": request.id}
 ```
 
-Add cancellation in its own block:
+Add cancellation in its own block. The request's employee link names its owner,
+so an employee can cancel only their own request:
 
 ```python
 class CancelRequest(ActionParams):
@@ -220,6 +224,9 @@ def cancel(ctx: ActionContext, params: CancelRequest) -> dict[str, str]:
     request = ctx.get(LeaveRequest, params.request_id)
     if request is None:
         raise ActionError("request does not exist", code="PRECONDITION_FAILED")
+    owners = ctx.traverse(request_employee, request)
+    if [owner.id for owner in owners] != [ctx.consumer.actor_id]:
+        raise ActionError("employees cancel their own requests", code="PERMISSION_DENIED")
     request.status = "cancelled"
     ctx.save(request)
     return {"request_id": request.id}
@@ -376,14 +383,23 @@ class Employee(OntologyObject):
 ```python
 from ontary import ViaLink
 from ontary.meta import TransitionDef
-@ontology.object(layer="L0", owned=True, scope=[ViaLink(link_api_name="request_employee", direction="from", parent_type="Employee")])
+@ontology.object(layer="L0", owned=True, scope=[ViaLink(
+    link_api_name="request_employee", direction="from", parent_type="Employee",
+)])
 class LeaveRequest(OntologyObject):
     id: str = prop(primary_key=True)
     start_date: date
     days: int
-    status: Literal["submitted", "approved", "rejected", "cancelled"] = prop(transitions=TransitionDef(
-        initial=("submitted",), moves={"submitted": ("approved", "rejected", "cancelled"), "approved": ("cancelled",), "rejected": (), "cancelled": ()},
-    ))
+    status: Literal["submitted", "approved", "rejected", "cancelled"] = prop(
+        transitions=TransitionDef(
+            initial=("submitted",),
+            moves={
+                "submitted": ("approved", "rejected", "cancelled"),
+                "approved": ("cancelled",),
+                "rejected": (), "cancelled": (),
+            },
+        ),
+    )
     submitted_at: datetime
 ```
 **Replace the `fresh()` block** to seed employees without consumer scope and submit a team-B request through its client:
@@ -395,8 +411,11 @@ def fresh() -> tuple[OntologyClient, OntologyClient]:
     store = ObjectStore(ontology.registry)
     runtime = ontology.bind(store)
     for employee_id, name, team_id in [("e-1", "Amina", "team-a"), ("e-2", "Bo", "team-b")]:
-        store.insert("Employee", {"id": employee_id, "name": name, "team_id": team_id, "allowance_days": 25}, Source(source_system="staff"))
-    team_b = runtime.for_consumer(consumer(actor_id="e-2", role="Employee", scope_level="team", scope_id="team-b"))
+        store.insert("Employee", {
+            "id": employee_id, "name": name, "team_id": team_id, "allowance_days": 25,
+        }, Source(source_system="staff"))
+    bo = consumer(actor_id="e-2", role="Employee", scope_level="team", scope_id="team-b")
+    team_b = runtime.for_consumer(bo)
     team_b.execute(SubmitRequest(employee_id="e-2", start_date=date(2026, 11, 2), days=3))
     employee = consumer(actor_id="e-1", role="Employee", scope_level="team", scope_id="team-a")
     manager = consumer(actor_id="m-1", role="Manager", scope_level="team", scope_id="team-a")
@@ -441,14 +460,26 @@ Put these `scenario()` tests in `test_leave_requests.py`, which starts with `fro
 ```python
 from datetime import timezone
 from ontary.testing import FixedClock, scenario
+amina = Employee(id="e-1", name="Amina", team_id="team-a", allowance_days=25)
+def employee_in_team_a(actor_id: str):
+    return consumer(actor_id=actor_id, role="Employee", scope_level="team", scope_id="team-a")
 def test_submit_request():
     (scenario(ontology, clock=FixedClock(datetime(2026, 11, 1, tzinfo=timezone.utc)))
-     .given(Employee(id="e-1", name="Amina", team_id="team-a", allowance_days=25))
-     .when(SubmitRequest(employee_id="e-1", start_date=date(2026, 11, 2), days=2), by=consumer(actor_id="e-1", role="Employee", scope_level="team", scope_id="team-a"))
+     .given(amina)
+     .when(SubmitRequest(employee_id="e-1", start_date=date(2026, 11, 2), days=2),
+           by=employee_in_team_a("e-1"))
      .then(LeaveRequest, "id-2", status="submitted"))
+def test_employee_cannot_submit_for_a_colleague():
+    (scenario(ontology).given(amina)
+     .when(SubmitRequest(employee_id="e-1", start_date=date(2026, 11, 2), days=2),
+           by=employee_in_team_a("e-9"))
+     .then_error("PERMISSION_DENIED"))
 def decision_case(status: str, role: str):
-    request = LeaveRequest(id="r-1", start_date=date(2026, 11, 2), days=2, status=status, submitted_at=datetime(2026, 10, 1, tzinfo=timezone.utc))
-    case = scenario(ontology).given(Employee(id="e-1", name="Amina", team_id="team-a", allowance_days=25), request)
+    request = LeaveRequest(
+        id="r-1", start_date=date(2026, 11, 2), days=2, status=status,
+        submitted_at=datetime(2026, 10, 1, tzinfo=timezone.utc),
+    )
+    case = scenario(ontology).given(amina, request)
     case.given_link(request_employee, request, "e-1")
     actor = consumer(actor_id="test", role=role, scope_level="team", scope_id="team-a")
     return case, actor
@@ -457,10 +488,15 @@ def test_rejecting_approved_request_fails():
     case.when(RejectRequest(request_id="r-1"), by=manager).then_error("TRANSITION_NOT_ALLOWED")
 def test_approval_emits_decision():
     case, manager = decision_case("submitted", "Manager")
-    case.when(ApproveRequest(request_id="r-1"), by=manager).then_event(RequestDecided(decision="approved"), about="r-1")
+    case.when(ApproveRequest(request_id="r-1"), by=manager).then_event(
+        RequestDecided(decision="approved"), about="r-1",
+    )
 def test_employee_cannot_approve():
     case, employee = decision_case("submitted", "Employee")
     case.when(ApproveRequest(request_id="r-1"), by=employee).then_error("PERMISSION_DENIED")
+def test_colleague_cannot_cancel():
+    case, colleague = decision_case("submitted", "Employee")
+    case.when(CancelRequest(request_id="r-1"), by=colleague).then_error("PERMISSION_DENIED")
 ```
 
 Run the tests with pytest; the final checkpoint runs them again:
@@ -469,36 +505,41 @@ Run the tests with pytest; the final checkpoint runs them again:
 pytest test_leave_requests.py -q
 ```
 ```text
-....                                                                     [100%]
-4 passed in 0.16s
+......                                                                   [100%]
+6 passed in 0.16s
 ```
 
 ## 9. Let an agent drive it over MCP
 
-Replace `fresh()` to expose its seeded store to the in-process MCP server, which lists tools and submits a request.
+Add a `fresh_mcp()` helper that returns a seeded store and Amina as the caller.
+The in-process MCP server uses them to list tools and submit a request.
+`fresh()` keeps its stage 6 shape, so the earlier **Try it** snippets still run.
 
 ```python
-from ontary import Consumer, ObjectStore, OntologyClient, Source
+from ontary import Consumer, ObjectStore, Source
 from ontary.testing import SequentialIds, consumer
-def fresh() -> tuple[OntologyClient, OntologyClient, ObjectStore, Consumer]:
+def fresh_mcp() -> tuple[ObjectStore, Consumer]:
     ontology.validate()
     store = ObjectStore(ontology.registry)
-    runtime = ontology.bind(store, id_factory=SequentialIds("mcp"))
-    store.insert("Employee", {"id": "e-1", "name": "Amina", "team_id": "team-a", "allowance_days": 25}, Source(source_system="staff"))
-    employee_consumer = consumer(actor_id="e-1", role="Employee", scope_level="team", scope_id="team-a")
-    manager = consumer(actor_id="m-1", role="Manager", scope_level="team", scope_id="team-a")
-    return runtime.for_consumer(employee_consumer), runtime.for_consumer(manager), store, employee_consumer
+    ontology.bind(store, id_factory=SequentialIds("mcp"))
+    store.insert("Employee", {
+        "id": "e-1", "name": "Amina", "team_id": "team-a", "allowance_days": 25,
+    }, Source(source_system="staff"))
+    amina = consumer(actor_id="e-1", role="Employee", scope_level="team", scope_id="team-a")
+    return store, amina
 ```
 
 ```python
 # Try it
 import asyncio
 from ontary.mcp_server import build_mcp_server
-client, manager, store, employee = fresh()
+store, employee = fresh_mcp()
 server = build_mcp_server(ontology, store, employee)
 tools = [tool.name for tool in asyncio.run(server.list_tools())]
 print(len(tools), "execute_action" in tools, "call_function" in tools)
-result = asyncio.run(server.call_tool("execute_action", {"api_name": "SubmitRequest", "params": {"employee_id": "e-1", "start_date": "2026-11-02", "days": 2}}))
+params = {"employee_id": "e-1", "start_date": "2026-11-02", "days": 2}
+call = server.call_tool("execute_action", {"api_name": "SubmitRequest", "params": params})
+result = asyncio.run(call)
 print(sorted(result.structured_content["result"]))
 ```
 ```text
@@ -511,6 +552,11 @@ The CLI starts a localhost development server. `--dev` is required:
 ```bash
 PYTHONPATH=. ontary serve leave_requests:ontology --dev --store ./leave-requests.sqlite --port 8000
 ```
+
+The development server answers as one fixed dev caller, not as Amina or a manager.
+That caller sees only unscoped rows, so it sees none of the team-scoped employees or requests.
+It also holds neither the `Employee` nor the `Manager` role, so it cannot run the four actions.
+Use it to show an agent the model's tools; use the **Try it** above to act as a real employee.
 
 ## The whole program
 
