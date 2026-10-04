@@ -43,7 +43,9 @@ ILLUSTRATIVE = (
     "Order",
     "OrderStatus",
     "OffboardEmployee",
+    "OrderShipped",
     "RemoveEmployee",
+    "ShipOrder",
     "Survey2024",
     "SurveyResponseV2",
     # Authority code named in the retirement section of both guides.
@@ -91,6 +93,7 @@ _COVERAGE_INVENTORY = (
     "Composition over deep hierarchies",
     "Normalization and derived values",
     "Structs",
+    "Events",
     "Interfaces",
     "Links and object-backed link types",
     "Naming conventions",
@@ -354,3 +357,29 @@ def test_readme_links_both_design_guides() -> None:
         "docs/ontology-design.md",
         "docs/ontology-design.ja.md",
     } - set(re.findall(r"\((docs/[^)]+)\)", readme)) == set()
+
+
+def _events_section(path: Path) -> str:
+    match = re.search(r"(?ms)^### Events\n(.*?)(?=^### |^## |\Z)", path.read_text())
+    return "" if match is None else match.group(1)
+
+
+@pytest.mark.parametrize("path", DESIGN_GUIDES, ids=lambda path: path.name)
+def test_design_guide_events_section_example_runs(path: Path) -> None:
+    """The Events sample builds an ontology whose action declares the event."""
+    section = _events_section(path)
+    assert section, f"{path.name}: missing Events section"
+    blocks = re.findall(r"(?ms)^```python\n(.*?)^```", section)
+    assert len(blocks) == 1, f"{path.name}: expected one python example"
+    namespace: dict[str, object] = {"__name__": f"guide_events_{path.stem.replace('.', '_')}"}
+    exec(compile(blocks[0], str(path), "exec", dont_inherit=True), namespace)
+    ontology = namespace["_ontology"]
+    assert isinstance(ontology, ontary.Ontology)
+    assert ontology.registry.get_event_type("OrderShipped") is not None
+    required = ("OrderShipped", "ShipOrder", "emits=", "about=", "Event")
+    if path.name.endswith(".ja.md"):
+        required += ("監査", "過去形", "*Event", "保持期間")
+    else:
+        required += ("audit", "past tense", "*Event", "retention")
+    missing = [phrase for phrase in required if phrase not in section]
+    assert not missing, f"{path.name}: events section omits {missing}"
