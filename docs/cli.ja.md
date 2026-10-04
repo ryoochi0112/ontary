@@ -42,7 +42,7 @@
 |---|---|
 | `AUDIT_TYPE` | オブジェクト型名の末尾が `AuditLog`、`AuditEntry`、`AuditTrail`、`AuditRecord`、または `AuditEvent` の場合に発生します。 |
 | `CRUD_ACTION_NAME` | Action または Function の API 名の先頭語が、大文字と小文字を区別せず `Set`、`Update`、`Create`、`Delete`、`Remove`、または `Erase` の場合に発生します。 |
-| `FORBIDDEN_TYPE_NAME` | オブジェクト型名が `V` と数字、`History`、または4桁の年で終わる場合に発生します。`snapshot=True` がない `Snapshot` 末尾も対象です。 |
+| `FORBIDDEN_TYPE_NAME` | オブジェクト型名が `V` と数字、`History`、または 1900〜2099 の年で終わる場合に発生します。`snapshot=True` がない `Snapshot` 末尾も対象です。 |
 | `FREE_TEXT_STATUS` | `status` または `*_status` という名前の `str` 型プロパティに選択肢が宣言されていない場合に発生します。 |
 | `MICRO_ACTION` | Action の対象以外のパラメーターが1つだけあり、その名前が対象型のプロパティ名と一致する場合に発生します。 |
 | `MIN_N_UNSET` | 機微なプロパティが宣言され、`min_n` が既定値の 3 のままの場合に発生します。 |

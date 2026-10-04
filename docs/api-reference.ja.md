@@ -465,12 +465,12 @@ lint。一覧は [CLI リファレンス](cli.ja.md)）ごとに `Finding` を�
   ありません。
 
 ```python
-@ontology.object(layer="core", scope="unscoped", snapshot=True)
+@ontology.object(layer="L0", scope="unscoped", snapshot=True)
 class AccountSnapshot(OntologyObject):
     id: str = prop(primary_key=True)
     health_score: int  # STORED_DERIVABLE は出ない: 宣言済みのスナップショット型
 
-@ontology.object(layer="core", scope="unscoped")
+@ontology.object(layer="L0", scope="unscoped")
 class Applicant(OntologyObject):
     id: str = prop(primary_key=True)
     credit_score: int = prop(accept="STORED_DERIVABLE")  # 外部の信用情報機関から記録

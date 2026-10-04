@@ -70,7 +70,7 @@ GUIDE_ANCHORS: dict[str, tuple[str, ...]] = {
     "UNSCOPED_SENSITIVE": ("security-design",),
     "MIN_N_UNSET": ("security-design",),
 }
-ADVISORY_CODES = set(GUIDE_ANCHORS)
+ADVISORY_CODES = frozenset(GUIDE_ANCHORS)
 
 
 # Advisory name heuristics from docs/ontology-design.md.  They are deliberately
@@ -98,7 +98,6 @@ CRUD_ACTION_PREFIXES: tuple[str, ...] = (
     "Remove",
     "Erase",
 )
-FORBIDDEN_TYPE_SUFFIXES: tuple[str, ...] = ("V2", "V3", "History", "Snapshot")
 DEFAULT_MIN_N = 3
 
 _DEFAULT_SENSITIVITY = Sensitivity()
@@ -669,7 +668,7 @@ def _crud_action_name_findings(definition: "OntologyDef") -> tuple[Finding, ...]
 
 
 def _forbidden_type_name_findings(definition: "OntologyDef") -> tuple[Finding, ...]:
-    """Warn on version/history clones, except explicitly declared snapshots."""
+    """Warn on version, year, and history clones; a ``snapshot=True`` type may end in Snapshot."""
     findings: list[Finding] = []
     for api_name in sorted(definition.registry.object_types):
         obj = definition.registry.object_types[api_name]
@@ -697,7 +696,6 @@ def _forbidden_type_name_findings(definition: "OntologyDef") -> tuple[Finding, .
             )
         )
     return tuple(findings)
-
 
 
 def _free_text_status_findings(definition: "OntologyDef") -> tuple[Finding, ...]:

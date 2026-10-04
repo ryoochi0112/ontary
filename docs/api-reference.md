@@ -471,12 +471,12 @@ the fields `code`, `severity`, `location`, `message`, `fix_hint`, and `guide`.
   `ERROR_CODES` and not in the [error code table](#error-codes).
 
 ```python
-@ontology.object(layer="core", scope="unscoped", snapshot=True)
+@ontology.object(layer="L0", scope="unscoped", snapshot=True)
 class AccountSnapshot(OntologyObject):
     id: str = prop(primary_key=True)
     health_score: int  # no STORED_DERIVABLE: the type is a declared snapshot
 
-@ontology.object(layer="core", scope="unscoped")
+@ontology.object(layer="L0", scope="unscoped")
 class Applicant(OntologyObject):
     id: str = prop(primary_key=True)
     credit_score: int = prop(accept="STORED_DERIVABLE")  # recorded from a bureau
