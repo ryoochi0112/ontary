@@ -449,7 +449,7 @@ once; otherwise the call raises `ONTOLOGY_INVALID`. `accept=` takes
 `"EVENT_NEVER_EMITTED"`.
 
 An action lists the events it may emit with `emits=[...]`. `ActionTypeDef.emits` holds
-their api names, so `declarations` and MCP `list_action_types` show them. A class in
+their api names, which MCP `list_action_types` shows as `emits`. A class in
 `emits` that is not a registered event of the same `Ontology` raises
 `ONTOLOGY_INVALID` at declaration.
 
@@ -525,9 +525,10 @@ the fields `code`, `severity`, `location`, `message`, `fix_hint`, and `guide`.
   | `@ontology.object(...)` | `accept=` | `FORBIDDEN_TYPE_NAME`, `AUDIT_TYPE` |
   | `@ontology.action(...)` | `accept=` | `CRUD_ACTION_NAME`, `MICRO_ACTION` |
   | `@ontology.function(...)` | `accept=` | `CRUD_ACTION_NAME` |
+  | `@ontology.event(...)` | `accept=` | `EVENT_NEVER_EMITTED` |
 
   The accepted names are the `Literal` aliases `PropertyLint`, `ObjectLint`,
-  `ActionLint`, and `FunctionLint` in `ontary.meta`. They are not exported from
+  `ActionLint`, `FunctionLint`, and `EventLint` in `ontary.meta`. They are not exported from
   `ontary`, but they make a wrong code a `mypy` error at the call site. The same
   `accept` field (`tuple[str, ...]`, default `()`) exists on `PropertyDef`,
   `ObjectTypeDef`, `ActionTypeDef`, and `FunctionDef`, so a hand-built descriptor

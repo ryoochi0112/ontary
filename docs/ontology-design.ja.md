@@ -210,14 +210,15 @@ def shipped_needs_payment(order: Order) -> bool:
 します。
 
 イベントの対象は、アクションのターゲットです。ターゲット ID を持たないアクション(作成アクション)や、
-コンテキストが渡した別のオブジェクトに関する事実のときは、`ctx.emit` に `about=` を渡します。
+コンテキストが渡した、アクションのターゲットと同じ型の別のオブジェクトに関する事実のときは、
+`ctx.emit` に `about=` を渡します。
 イベントは保存先の監査行と同じ保持期間を共有します。呼び出しと一緒にコミットまたはロールバックされ、
 その行と同じ期間だけ残ります。
 
 ```python
 from typing import Any
 
-from ontary import ActionContext, ActionParams, Event, Ontology, OntologyObject, prop
+from ontary import ActionContext, ActionParams, Event, Ontology, OntologyObject, prop, target
 
 _ontology = Ontology("orders", scope_levels=["team"])
 
@@ -233,11 +234,13 @@ class OrderShipped(Event):
 
 
 class ShipOrder(ActionParams):
+    order_id: str = target(Order)
     carrier: str
 
 
 @_ontology.action(ShipOrder, target=Order, roles=["ops"], emits=[OrderShipped])
 def ship(ctx: ActionContext, p: ShipOrder) -> dict[str, Any]:
+    ctx.get(Order, p.order_id)
     ctx.emit(OrderShipped(carrier=p.carrier))
     return {}
 ```

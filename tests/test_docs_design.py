@@ -20,6 +20,7 @@ from ontary.meta import (
 )
 from ontary.scope import ScopePolicy
 from ontary.store import Store
+from ontary.testing import consumer, scenario
 
 _ROOT = Path(__file__).resolve().parent.parent
 _DOCS = _ROOT / "docs"
@@ -366,7 +367,7 @@ def _events_section(path: Path) -> str:
 
 @pytest.mark.parametrize("path", DESIGN_GUIDES, ids=lambda path: path.name)
 def test_design_guide_events_section_example_runs(path: Path) -> None:
-    """The Events sample builds an ontology whose action declares the event."""
+    """The Events sample executes and emits a fact about its resolved target."""
     section = _events_section(path)
     assert section, f"{path.name}: missing Events section"
     blocks = re.findall(r"(?ms)^```python\n(.*?)^```", section)
@@ -376,6 +377,18 @@ def test_design_guide_events_section_example_runs(path: Path) -> None:
     ontology = namespace["_ontology"]
     assert isinstance(ontology, ontary.Ontology)
     assert ontology.registry.get_event_type("OrderShipped") is not None
+    Order = namespace["Order"]
+    ShipOrder = namespace["ShipOrder"]
+    OrderShipped = namespace["OrderShipped"]
+    (
+        scenario(ontology)
+        .given(Order(id="o-1"))
+        .when(
+            ShipOrder(order_id="o-1", carrier="yamato"),
+            by=consumer(role="ops", scope_level="team", scope_id="team-1"),
+        )
+        .then_event(OrderShipped(carrier="yamato"), about="o-1")
+    )
     required = ("OrderShipped", "ShipOrder", "emits=", "about=", "Event")
     if path.name.endswith(".ja.md"):
         required += ("監査", "過去形", "*Event", "保持期間")

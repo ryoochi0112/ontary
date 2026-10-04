@@ -441,7 +441,7 @@ class OrderShipped(Event):
 `accept=` は `"EVENT_NEVER_EMITTED"` を受け取ります。
 
 Action は、送出してよいイベントを `emits=[...]` に列挙します。`ActionTypeDef.emits` には
-その api_name が入り、`declarations` と MCP の `list_action_types` に表示されます。同じ
+その api_name が入り、MCP の `list_action_types` に `emits` として表示されます。同じ
 `Ontology` に登録されたイベントではないクラスを `emits` に渡すと、宣言時に
 `ONTOLOGY_INVALID` になります。
 
@@ -519,9 +519,10 @@ lint。一覧は [CLI リファレンス](cli.ja.md)）ごとに `Finding` を�
   | `@ontology.object(...)` | `accept=` | `FORBIDDEN_TYPE_NAME`, `AUDIT_TYPE` |
   | `@ontology.action(...)` | `accept=` | `CRUD_ACTION_NAME`, `MICRO_ACTION` |
   | `@ontology.function(...)` | `accept=` | `CRUD_ACTION_NAME` |
+  | `@ontology.event(...)` | `accept=` | `EVENT_NEVER_EMITTED` |
 
   受け付ける名前は、`ontary.meta` の `Literal` エイリアス `PropertyLint`、
-  `ObjectLint`、`ActionLint`、`FunctionLint` です。`ontary` からは export されません
+  `ObjectLint`、`ActionLint`、`FunctionLint`、`EventLint` です。`ontary` からは export されません
   が、誤ったコードを呼び出し側の `mypy` エラーにします。同じ `accept` フィールド
   （`tuple[str, ...]`、デフォルトは `()`）は `PropertyDef`、`ObjectTypeDef`、
   `ActionTypeDef`、`FunctionDef` にもあり、手で組み立てた記述子もデコレートした

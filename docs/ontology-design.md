@@ -222,15 +222,15 @@ twice and escapes the engine's visibility rules. Declare an `Event` and let an
 action emit it with `emits=`.
 
 An event is about the action's target. Pass `about=` to `ctx.emit` when the action
-has no target id (a creating action) or when the fact concerns another object that
-the context handed out. Events share the retention of the audit row they are
-stored on: they commit or roll back with the invocation and live as long as that
-row.
+has no target id (a creating action) or when the fact concerns another object of
+the action's target type that the context handed out. Events share the retention
+of the audit row they are stored on: they commit or roll back with the invocation
+and live as long as that row.
 
 ```python
 from typing import Any
 
-from ontary import ActionContext, ActionParams, Event, Ontology, OntologyObject, prop
+from ontary import ActionContext, ActionParams, Event, Ontology, OntologyObject, prop, target
 
 _ontology = Ontology("orders", scope_levels=["team"])
 
@@ -246,11 +246,13 @@ class OrderShipped(Event):
 
 
 class ShipOrder(ActionParams):
+    order_id: str = target(Order)
     carrier: str
 
 
 @_ontology.action(ShipOrder, target=Order, roles=["ops"], emits=[OrderShipped])
 def ship(ctx: ActionContext, p: ShipOrder) -> dict[str, Any]:
+    ctx.get(Order, p.order_id)
     ctx.emit(OrderShipped(carrier=p.carrier))
     return {}
 ```

@@ -24,8 +24,7 @@ you**.
   `Scenario.then_event` checks them in tests. `Event` and `EventRecord` join the
   root exports.
 - `ActionTypeDef.emits` (#47). It lists the api names of the events an action may
-  emit, so `get_declarations` shows them. MCP `list_action_types` does not list
-  them yet.
+  emit. MCP `list_action_types` shows them as `emits`.
 - Event error codes (#47). `UNDECLARED_EVENT` reports an action emitting an
   event type outside its `emits` declaration; `EVENT_SUBJECT_INVALID` reports
   an event whose subject cannot be resolved to a valid target object.

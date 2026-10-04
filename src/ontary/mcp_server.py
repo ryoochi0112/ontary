@@ -686,6 +686,7 @@ def _action_type_payload(defn: ActionTypeDef) -> dict[str, Any]:
         "api_name": defn.api_name,
         "display_name": defn.display_name,
         "target_type": defn.target_type,
+        "emits": list(defn.emits),
         "executable_by_roles": list(defn.executable_by_roles),
         "description": defn.description,
         "capabilities": list(defn.capabilities),
