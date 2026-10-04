@@ -7,9 +7,9 @@ from pathlib import Path
 import pytest
 
 PAGE = Path(__file__).resolve().parent.parent / "docs/tutorial-leave-requests.md"
-EXPECTED_STAGES = 7
-EXPECTED_PYTHON_FENCES = 22
-EXPECTED_TESTS = 0
+EXPECTED_STAGES = 9
+EXPECTED_PYTHON_FENCES = 25
+EXPECTED_TESTS = 4
 MAX_LINES = 550
 BANNED_TERMS = (
     r"aggregate root",
@@ -19,6 +19,7 @@ BANNED_TERMS = (
     r"domain event",
     r"\bentit(y|ies)\b",
 )
+BLOCKING_RUN = re.compile(r"(?:\.run\(\)|\bserver\.run\()")
 
 
 def _stages(md: str) -> list[tuple[int, str, list[str]]]:
@@ -192,6 +193,12 @@ def test_try_it_marker_must_be_the_exact_first_line() -> None:
     assert not _is_try_it("# Try it later\n")
 
 
+def test_blocking_server_run_is_rejected_but_asyncio_run_is_allowed() -> None:
+    assert BLOCKING_RUN.search("server.run()")
+    assert BLOCKING_RUN.search('server.run(transport="stdio")')
+    assert not BLOCKING_RUN.search("asyncio.run(server.list_tools())")
+
+
 def test_tutorial_structure_and_limits() -> None:
     md = PAGE.read_text()
     stages = _stages(md)
@@ -200,7 +207,7 @@ def test_tutorial_structure_and_limits() -> None:
     assert all(fences for _, _, fences in stages)
     fences = [fence for _, _, blocks in stages for fence in blocks]
     assert len(fences) == EXPECTED_PYTHON_FENCES
-    assert all(".run(" not in fence for fence in fences)
+    assert all(not BLOCKING_RUN.search(fence) for fence in fences)
     assert len(md.splitlines()) <= MAX_LINES
     for term in BANNED_TERMS:
         assert not re.search(term, md, re.IGNORECASE), f"Banned term: {term}"

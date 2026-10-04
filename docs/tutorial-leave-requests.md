@@ -432,3 +432,89 @@ print("No findings.")
 ```text
 No findings.
 ```
+
+## 8. Test the operation with given / when / then
+
+Put these `scenario()` tests in `test_leave_requests.py`, which starts with `from leave_requests import *`.
+
+```python
+from datetime import timezone
+from ontary.testing import FixedClock, scenario
+def test_submit_request():
+    (scenario(ontology, clock=FixedClock(datetime(2026, 11, 1, tzinfo=timezone.utc)))
+     .given(Employee(id="e-1", name="Amina", team_id="team-a", allowance_days=25))
+     .when(SubmitRequest(employee_id="e-1", start_date=date(2026, 11, 2), days=2), by=consumer(actor_id="e-1", role="Employee", scope_level="team", scope_id="team-a"))
+     .then(LeaveRequest, "id-2", status="submitted"))
+def decision_case(status: str, role: str):
+    request = LeaveRequest(id="r-1", start_date=date(2026, 11, 2), days=2, status=status, submitted_at=datetime(2026, 10, 1, tzinfo=timezone.utc))
+    case = scenario(ontology).given(Employee(id="e-1", name="Amina", team_id="team-a", allowance_days=25), request)
+    case.given_link(request_employee, request, "e-1")
+    actor = consumer(actor_id="test", role=role, scope_level="team", scope_id="team-a")
+    return case, actor
+def test_rejecting_approved_request_fails():
+    case, manager = decision_case("approved", "Manager")
+    case.when(RejectRequest(request_id="r-1"), by=manager).then_error("TRANSITION_NOT_ALLOWED")
+def test_approval_emits_decision():
+    case, manager = decision_case("submitted", "Manager")
+    case.when(ApproveRequest(request_id="r-1"), by=manager).then_event(RequestDecided(decision="approved"), about="r-1")
+def test_employee_cannot_approve():
+    case, employee = decision_case("submitted", "Employee")
+    case.when(ApproveRequest(request_id="r-1"), by=employee).then_error("PERMISSION_DENIED")
+```
+
+Run the tests with pytest; the final checkpoint runs them again:
+
+```bash
+pytest test_leave_requests.py -q
+```
+```text
+....                                                                     [100%]
+4 passed in 0.16s
+```
+
+## 9. Let an agent drive it over MCP
+
+Replace `fresh()` to expose its seeded store to the in-process MCP server, which lists tools and submits a request.
+
+```python
+from ontary import Consumer, ObjectStore, OntologyClient, Source
+from ontary.testing import SequentialIds, consumer
+def fresh() -> tuple[OntologyClient, OntologyClient, ObjectStore, Consumer]:
+    ontology.validate()
+    store = ObjectStore(ontology.registry)
+    runtime = ontology.bind(store, id_factory=SequentialIds("mcp"))
+    store.insert("Employee", {"id": "e-1", "name": "Amina", "team_id": "team-a", "allowance_days": 25}, Source(source_system="staff"))
+    employee_consumer = consumer(actor_id="e-1", role="Employee", scope_level="team", scope_id="team-a")
+    manager = consumer(actor_id="m-1", role="Manager", scope_level="team", scope_id="team-a")
+    return runtime.for_consumer(employee_consumer), runtime.for_consumer(manager), store, employee_consumer
+```
+
+```python
+# Try it
+import asyncio
+from ontary.mcp_server import build_mcp_server
+client, manager, store, employee = fresh()
+server = build_mcp_server(ontology, store, employee)
+tools = [tool.name for tool in asyncio.run(server.list_tools())]
+print(len(tools), "execute_action" in tools, "call_function" in tools)
+result = asyncio.run(server.call_tool("execute_action", {"api_name": "SubmitRequest", "params": {"employee_id": "e-1", "start_date": "2026-11-02", "days": 2}}))
+print(sorted(result.structured_content["result"]))
+```
+```text
+12 True True
+['request_id']
+```
+
+The CLI starts a localhost development server. `--dev` is required:
+
+```bash
+ontary serve leave_requests:ontology --dev --store ./leave-requests.sqlite --port 8000
+```
+
+## The whole program
+
+Apply each marked replacement to `leave_requests.py`. Keep the **Try it** snippets in scratch files. Put the stage 8 tests in `test_leave_requests.py`; they use the same declarations and exercise the operation with fresh scenario stores.
+
+## Where to go next
+
+Continue with [Ontology design](ontology-design.md), [Testing](testing.md), [MCP serving](mcp-serving.md), and the [API reference](api-reference.md).
