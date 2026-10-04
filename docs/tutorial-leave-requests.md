@@ -358,3 +358,77 @@ print(records[0].event_type, records[0].payload.decision)
 ```text
 RequestDecided approved
 ```
+
+## 6. Each team sees only its own requests
+
+Declared scope limits each team to its own requests. The ontology already has `scope_levels=["team"]`.
+**Replace the `Employee` block**; `DirectProperty` reads the marked team key:
+```python
+from ontary import DirectProperty
+@ontology.object(layer="L0", scope=[DirectProperty(level="team", property_name="team_id")])
+class Employee(OntologyObject):
+    id: str = prop(primary_key=True)
+    name: str
+    team_id: str = prop(scope_level="team")
+    allowance_days: int
+```
+**Replace the `LeaveRequest` block**; `ViaLink` follows the employee link, so requests do not copy team facts:
+```python
+from ontary import ViaLink
+from ontary.meta import TransitionDef
+@ontology.object(layer="L0", owned=True, scope=[ViaLink(link_api_name="request_employee", direction="from", parent_type="Employee")])
+class LeaveRequest(OntologyObject):
+    id: str = prop(primary_key=True)
+    start_date: date
+    days: int
+    status: Literal["submitted", "approved", "rejected", "cancelled"] = prop(transitions=TransitionDef(
+        initial=("submitted",), moves={"submitted": ("approved", "rejected", "cancelled"), "approved": ("cancelled",), "rejected": (), "cancelled": ()},
+    ))
+    submitted_at: datetime
+```
+**Replace the `fresh()` block** to seed employees without consumer scope and submit a team-B request through its client:
+```python
+from ontary import ObjectStore, OntologyClient, Source
+from ontary.testing import consumer
+def fresh() -> tuple[OntologyClient, OntologyClient]:
+    ontology.validate()
+    store = ObjectStore(ontology.registry)
+    runtime = ontology.bind(store)
+    for employee_id, name, team_id in [("e-1", "Amina", "team-a"), ("e-2", "Bo", "team-b")]:
+        store.insert("Employee", {"id": employee_id, "name": name, "team_id": team_id, "allowance_days": 25}, Source(source_system="staff"))
+    team_b = runtime.for_consumer(consumer(actor_id="e-2", role="Employee", scope_level="team", scope_id="team-b"))
+    team_b.execute(SubmitRequest(employee_id="e-2", start_date=date(2026, 11, 2), days=3))
+    employee = consumer(actor_id="e-1", role="Employee", scope_level="team", scope_id="team-a")
+    manager = consumer(actor_id="m-1", role="Manager", scope_level="team", scope_id="team-a")
+    return runtime.for_consumer(employee), runtime.for_consumer(manager)
+```
+In **Try it**, `list().items` contains only team A's request; the engine applies scope to reads:
+```python
+# Try it
+client, manager = fresh()
+result = client.execute(SubmitRequest(employee_id="e-1", start_date=date(2026, 11, 2), days=2))
+requests = client.list(LeaveRequest).items
+assert [request.id for request in requests] == [result["request_id"]]
+print("team A sees:", [request.days for request in requests])
+```
+```text
+team A sees: [2]
+```
+
+## 7. Check the model: validate and diagnose
+
+Validation checks the model, and diagnosis reports errors and design advisories. Run this command beside `leave_requests.py`:
+```bash
+ontary validate leave_requests:ontology
+```
+In **Try it**, run the same checks in Python. `validate()` raises on invalid declarations; `diagnose()` returns findings:
+```python
+# Try it
+ontology.validate()
+findings = ontology.diagnose()
+assert findings == []
+print("No findings.")
+```
+```text
+No findings.
+```
