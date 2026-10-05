@@ -28,15 +28,7 @@ PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"原則"),
 )
 
-_PENDING: frozenset[str] = frozenset(
-    {
-        "src/ontary/__init__.py",
-        "src/ontary/ontology.py",
-        "src/ontary/scope.py",
-        "src/ontary/security.py",
-        "src/ontary/typesys.py",
-    }
-)
+_PENDING: frozenset[str] = frozenset()
 
 _ROOT = Path(__file__).resolve().parent.parent
 _SRC_ROOT = _ROOT / "src" / "ontary"

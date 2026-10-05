@@ -6,8 +6,7 @@ hardcoded here) and, per object type, an ORDERED list of resolution rules
 that say how to find the scope object that owns an instance of that type at
 a given level. This module knows nothing about any particular domain: it is
 the generalized replacement for the prototype's `dso.security._TEAM_CHAIN` /
-`_TEAM_CHAIN_TO_SIDE` / per-type `if` branches (see
-specs/ontary-platform.md §5, §10).
+`_TEAM_CHAIN_TO_SIDE` / per-type `if` branches.
 
 Rule kinds (tried in declaration order, first successful one wins):
 
@@ -282,12 +281,12 @@ class ScopePolicy(BaseModel):
     # identity behind a row" (e.g. Response -> Person) instead of an owning
     # scope. `rule.level` is not meaningful here (contributor resolution has
     # no scope-level hierarchy) and is not checked against `self.levels`.
-    # `GuardedQuery.aggregate` (T8) counts DISTINCT resolved contributors per
+    # `GuardedQuery.aggregate` counts DISTINCT resolved contributors per
     # group when the queried type has contributor rules declared here,
-    # falling back to a plain row count for any type that has none (T4
-    # debt). Opting in means supplying at least one rule: a type mapped to an
-    # EMPTY list is refused by `validate`, because it would claim the
-    # distinct-identity guarantee while giving the engine no way to honour it.
+    # falling back to a plain row count for any type that has none. Opting
+    # in means supplying at least one rule: a type mapped to an EMPTY list is
+    # refused by `validate`, because it would claim the distinct-identity
+    # guarantee while giving the engine no way to honour it.
     contributor_rules: dict[str, list[ScopeRule]] = {}
     # Per-type author-supplied row-visibility predicate (see
     # `RowVisibilityFn`): the generalized replacement for one-off,
@@ -627,7 +626,7 @@ def _apply_rule(
 
     if isinstance(rule, ViaLink):
         # A retired object has no live links: `ActionContext.retire`
-        # cascade-closes every one of them (AC3), so `links_from`/`links_to`
+        # cascade-closes every one of them, so `links_from`/`links_to`
         # -- which filter `valid_to IS NULL` -- answer `[]` and the object
         # resolves to no scope at all. Reading its own row back is not
         # enough for a `ViaLink` rule: there is a tombstone to read and

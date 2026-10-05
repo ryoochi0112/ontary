@@ -1,7 +1,7 @@
 """ontary: a domain-agnostic ontology SDK -- declare an ontology, get a
 governed runtime (typed objects/links, business-verb actions, derived
-functions, scope/min-N/AI-use security), with no imports from any
-DSO/domain module (spec AC1).
+functions, scope/min-N/AI-use security), with no imports from any domain
+module.
 
 This module is the SDK's front door: an ontology author or app developer
 should be able to author, ingest, read, act, and call functions through the
