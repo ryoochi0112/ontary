@@ -4,7 +4,7 @@
 
 *リファレンス* — `ontary` の公開名を調べるための一覧ページで、使い方は[はじめに](getting-started.ja.md)と[オントロジーのテスト](testing.ja.md)で確認できます。
 
-`ontary` のキュレーションされたフロントドア: `__all__` の **45 個の名前**。
+`ontary` のキュレーションされたフロントドア: `__all__` の **46 個の名前**。
 残りのエンジン API は、`ontary.meta`、`ontary.store` などの
 定義元サブモジュールから利用します。
 
@@ -34,7 +34,7 @@
 
 ## フロントドア
 
-`__all__` はソート済み・重複なし・import 可能で、ちょうど 45 個です。オントロジーの
+`__all__` はソート済み・重複なし・import 可能で、ちょうど 46 個です。オントロジーの
 作者がエンジンの名前空間を選ばずに使う名前だけをここに置きます。
 
 ### Authoring vocabulary / 宣言用語彙
@@ -46,16 +46,22 @@
 
 ### Runtime entries / ランタイム項目
 
-`Declarations`、`EventRecord`、`Finding`、`InMemoryStore`、`ObjectStore`、`OntologyClient`、
+`Declarations`、`EventRecord`、`Finding`、`InMemoryStore`、`MCPServer`、`ObjectStore`、`OntologyClient`、
 `Page`、`PostgresStore`、`ScopePolicy`、`TypedPage`、
 `__version__`、`build_mcp_server`、`declarations`。
+
+`MCPServer` は `mcp` SDK のサーバークラスです。MCP ビルダーの戻り値なので再エクスポートしています。
+利用には `[mcp]` extra が必要です（`pip install 'ontary[mcp]'`）。
+extra がなくても `import ontary` は動きます。`MCPServer` に触れたときだけ、
+インストールコマンドを示す `ImportError` になります。core のみの環境では
+`from ontary import *` も同じ `ImportError` になります。`__all__` の全名前を取得するためです。
 
 ### Error classes / 例外クラス
 
 `ActionError`、`AuthorityError`、`ConflictError`、`InternalError`、`OntaryError`、
 `PermissionDenied`、`PreconditionFailed`、`ValidationFailed`、`VisibilityError`。
 
-この 45 個という個数は `tests/test_docs.py` が厳密に検証するため、root export の増加を
+この 46 個という個数は `tests/test_docs.py` が厳密に検証するため、root export の増加を
 見落としません。
 
 ```python

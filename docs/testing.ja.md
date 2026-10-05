@@ -160,6 +160,59 @@ def test_escalate_with_low_level_helpers():
         client.execute(EscalateTicket(ticket_id="missing"))
 ```
 
+## MCP サーバーをプロセス内でテストする
+
+ソケットを開かずに、クライアントと同じ呼び方でサーバーをテストします。
+ASGI アプリを `ASGITransport` 経由の `httpx2.AsyncClient` で呼び出します
+（`httpx2` は `[mcp]` extra に含まれます）。通常のテスト関数からは `asyncio.run` で呼びます。
+
+ここでは Starlette の同期版 `TestClient` を使わないでください。`TestClient` はアプリを
+別スレッドで実行しますが、SQLite の `ObjectStore` の接続はスレッドをまたげません。
+HTTP 呼び出しは 200 を返しますが、ツールの結果はすべて `INTERNAL_ERROR` になります。
+`ASGITransport` はアプリをテストと同じスレッドで動かすため、どのストアでも同じテストが動きます。
+
+```python
+import asyncio
+
+import httpx2
+from ontary import MCPServer, ObjectStore, build_mcp_server
+
+def test_get_ticket_over_mcp_in_process():
+    store = ObjectStore(ontology.registry)  # SQLite, in memory
+    source = Source(source_system="demo")
+    store.insert("Queue", {"id": "queue-a", "name": "Billing"}, source)
+    store.insert(
+        "Ticket", {"subject": "Invoice mismatch", "queue_id": "queue-a"}, source
+    )
+    agent = consumer(role="Agent", scope_level="queue", scope_id="queue-a")
+    server: MCPServer = build_mcp_server(ontology, store, agent)
+    app = server.streamable_http_app(stateless_http=True, json_response=True)
+
+    async def call_tool(name, arguments):
+        async with server.session_manager.run():
+            # Keep the port: the default Host check refuses a portless host.
+            async with httpx2.AsyncClient(
+                transport=httpx2.ASGITransport(app=app),
+                base_url="http://localhost:8000",
+            ) as client:
+                response = await client.post(
+                    "/mcp",
+                    json={
+                        "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                        "params": {"name": name, "arguments": arguments},
+                    },
+                    headers={"Accept": "application/json, text/event-stream"},
+                )
+        return response.json()["result"]["structuredContent"]
+
+    result = asyncio.run(call_tool("query_objects", {"obj_type": "Ticket"}))
+    assert [row["payload"]["subject"] for row in result["result"]] == ["Invoice mismatch"]
+```
+
+`stateless_http=True` にすると、`initialize` のハンドシェイクなしで `tools/call`
+リクエストを 1 件だけ送れます。呼び出し元を認証するサーバーについては
+[MCP での提供](mcp-serving.md)を参照してください。
+
 ## 固定日時と固定ID
 
 アクションは、実行中にIDやタイムスタンプを生成します。`bind`に固定クロックとIDファクトリを渡すと、どちらも決定論的になります。クロックはストアに設定されるため、`bulk_upsert`、`bulk_link`、ストアへの直接書き込みにも適用されます。

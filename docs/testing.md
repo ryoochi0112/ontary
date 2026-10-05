@@ -160,6 +160,60 @@ def test_escalate_with_low_level_helpers():
         client.execute(EscalateTicket(ticket_id="missing"))
 ```
 
+## Testing an MCP server in-process
+
+Test the server the way a client calls it, without opening a socket: drive its
+ASGI app with `httpx2.AsyncClient` over `ASGITransport` (`httpx2` ships with the
+`[mcp]` extra), and call it from a plain test with `asyncio.run`.
+
+Do not use Starlette's sync `TestClient` here. It runs the app on a separate
+thread, and the SQLite `ObjectStore` connection refuses to cross threads. The
+HTTP call still returns 200, but every tool result is an `INTERNAL_ERROR`
+envelope. `ASGITransport` keeps the app on the test's own thread, so the same
+test works with every store.
+
+```python
+import asyncio
+
+import httpx2
+from ontary import MCPServer, ObjectStore, build_mcp_server
+
+def test_get_ticket_over_mcp_in_process():
+    store = ObjectStore(ontology.registry)  # SQLite, in memory
+    source = Source(source_system="demo")
+    store.insert("Queue", {"id": "queue-a", "name": "Billing"}, source)
+    store.insert(
+        "Ticket", {"subject": "Invoice mismatch", "queue_id": "queue-a"}, source
+    )
+    agent = consumer(role="Agent", scope_level="queue", scope_id="queue-a")
+    server: MCPServer = build_mcp_server(ontology, store, agent)
+    app = server.streamable_http_app(stateless_http=True, json_response=True)
+
+    async def call_tool(name, arguments):
+        async with server.session_manager.run():
+            # Keep the port: the default Host check refuses a portless host.
+            async with httpx2.AsyncClient(
+                transport=httpx2.ASGITransport(app=app),
+                base_url="http://localhost:8000",
+            ) as client:
+                response = await client.post(
+                    "/mcp",
+                    json={
+                        "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                        "params": {"name": name, "arguments": arguments},
+                    },
+                    headers={"Accept": "application/json, text/event-stream"},
+                )
+        return response.json()["result"]["structuredContent"]
+
+    result = asyncio.run(call_tool("query_objects", {"obj_type": "Ticket"}))
+    assert [row["payload"]["subject"] for row in result["result"]] == ["Invoice mismatch"]
+```
+
+`stateless_http=True` lets one `tools/call` request stand alone, with no
+`initialize` handshake. For a server that authenticates its callers, see
+[Serving over MCP](mcp-serving.md).
+
 ## Fixed time and IDs
 
 Actions generate identifiers and timestamps while they run. Pass a fixed clock and an id factory to `bind` to make both deterministic. The clock is installed on the store, so it also stamps `bulk_upsert`, `bulk_link`, and direct store writes.

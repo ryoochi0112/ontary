@@ -87,6 +87,9 @@ def run_tickets_example() -> None:
     check(entry.target_id == ticket_id, "the audit entry names the real target")
 
     server = build_multi_consumer_server()
+    from ontary import MCPServer
+
+    check(isinstance(server, MCPServer), "the root MCPServer export is the built server's class")
     tools = asyncio.run(server.list_tools())
     names = {tool.name for tool in tools}
     check(len(names) > 0, f"the MCP server exposes tools ({sorted(names)})")
