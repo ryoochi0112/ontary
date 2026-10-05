@@ -276,18 +276,104 @@ whether the types should instead link to one common object.
 
 ### Links and object-backed link types
 
-Use `LinkTypeDef` for a relationship whose meaning is captured by its endpoints,
-direction, `Cardinality`, and governance flags. Name the relationship from the
-domain, validate both endpoints, and declare `owned` when an action rather than a
-source creates the link. A domain example can use links to distinguish ordinary
-containment, identity-revealing traversal, and action-owned relationships.
+A relationship that has its own facts, such as a time, role, rank, or provenance,
+is an object type linked to each participant. Foundry calls this an object-backed
+link type.
 
-Foundry object-backed link types attach properties to a relationship. **No
-equivalent yet; `LinkTypeDef` carries no payload properties, and the nearest
-approximation is an explicit relationship `ObjectTypeDef` connected to each
-participant by a `LinkTypeDef`.** Use that shape for facts such as role, effective
-date, rank, or provenance that belong to the relationship itself. The relationship
-object also becomes the correct target when its lifecycle needs an `ActionTypeDef`.
+Use a plain `LinkTypeDef` when the endpoints, direction, and cardinality describe
+the whole relationship. Use a relationship object when the relationship has facts
+or its own lifecycle.
+
+Name each link from the domain. Declare `owned` when an action, not a source,
+creates the link.
+
+```python
+from datetime import datetime
+from typing import Any
+
+from ontary import (
+    ActionContext,
+    ActionError,
+    ActionParams,
+    BoundQuery,
+    Cardinality,
+    FunctionParams,
+    LinkHandle,
+    Ontology,
+    OntologyObject,
+    prop,
+    ref,
+    target,
+)
+
+_ontology = Ontology("scheduling", scope_levels=["team"])
+
+
+@_ontology.object(layer="L0", scope="unscoped")
+class Session(OntologyObject):
+    id: str = prop(primary_key=True)
+
+
+@_ontology.object(layer="L0", scope="unscoped")
+class Room(OntologyObject):
+    id: str = prop(primary_key=True)
+
+
+@_ontology.object(layer="L0", scope="unscoped", owned=True)
+class Assignment(OntologyObject):
+    id: str = prop(primary_key=True)
+    starts_at: datetime
+    ends_at: datetime
+
+
+assignment_session: LinkHandle[Assignment, Session] = _ontology.link(
+    "assignment_session", Assignment, Session, Cardinality.MANY_TO_ONE, owned=True
+)
+assignment_room: LinkHandle[Assignment, Room] = _ontology.link(
+    "assignment_room", Assignment, Room, Cardinality.MANY_TO_ONE, owned=True
+)
+
+
+class ScheduleSession(ActionParams):
+    session_id: str = target(Session)
+    room_id: str = ref(Room)
+    starts_at: datetime
+    ends_at: datetime
+
+
+@_ontology.action(ScheduleSession, target=Session, roles=["ops"])
+def schedule_session(ctx: ActionContext, p: ScheduleSession) -> dict[str, str]:
+    session = ctx.get(Session, p.session_id)
+    if session is None:
+        raise ActionError("session does not exist", code="PRECONDITION_FAILED")
+    assignment = ctx.create(Assignment, starts_at=p.starts_at, ends_at=p.ends_at)
+    ctx.link(assignment_session, assignment, session)
+    ctx.link(assignment_room, assignment, p.room_id)
+    return {"assignment_id": assignment.id}
+
+
+class SessionPlacement(FunctionParams):
+    session_id: str = ref(Session)
+
+
+@_ontology.function(SessionPlacement)
+def session_placement(
+    query: BoundQuery, p: SessionPlacement
+) -> dict[str, Any] | None:
+    assignments = query.traverse(assignment_session, p.session_id, reverse=True)
+    if not assignments:
+        return None
+    assignment = assignments[0]
+    room = query.traverse(assignment_room, assignment.id)[0]
+    return {
+        "room_id": room.id,
+        "starts_at": assignment.starts_at,
+        "ends_at": assignment.ends_at,
+    }
+```
+
+If the room is unknown, ctx.link refuses it and the whole action rolls back.
+Moving a session is its own business action that retires the old Assignment.
 
 Do not encode the same association independently as an unconstrained foreign-key
 property and a link unless the property is required for scope or contributor

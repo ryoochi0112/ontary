@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -396,3 +397,73 @@ def test_design_guide_events_section_example_runs(path: Path) -> None:
         required += ("audit", "past tense", "*Event", "retention")
     missing = [phrase for phrase in required if phrase not in section]
     assert not missing, f"{path.name}: events section omits {missing}"
+
+
+def _relationship_section(path: Path) -> str:
+    match = re.search(
+        r"(?ms)^### Links and object-backed link types\n(.*?)(?=^### |^## |\Z)",
+        path.read_text(),
+    )
+    return "" if match is None else match.group(1)
+
+
+def test_design_guide_relationship_section_phrases() -> None:
+    """The English section presents relationship objects as the chosen model."""
+    section = _relationship_section(DESIGN_GUIDES[0])
+    assert section, "ontology-design.md: missing relationship section"
+    for phrase in ("Assignment", "owned=True", "SessionPlacement"):
+        assert phrase in section, f"ontology-design.md: relationship section omits {phrase!r}"
+    assert "No equivalent yet" not in section
+    assert "nearest approximation" not in section
+
+
+@pytest.mark.parametrize(
+    "path", (DESIGN_GUIDES[0],), ids=lambda path: path.name
+)
+def test_design_guide_relationship_object_example_runs(path: Path) -> None:
+    """The relationship object example creates both links and reads its placement."""
+    section = _relationship_section(path)
+    assert section, f"{path.name}: missing relationship section"
+    blocks = re.findall(r"(?ms)^```python\n(.*?)^```", section)
+    assert len(blocks) == 1, f"{path.name}: expected one python example"
+    namespace: dict[str, object] = {
+        "__name__": f"guide_relationship_{path.stem.replace('.', '_')}"
+    }
+    exec(compile(blocks[0], str(path), "exec", dont_inherit=True), namespace)
+
+    ontology = namespace["_ontology"]
+    assert isinstance(ontology, ontary.Ontology)
+    store = ontary.InMemoryStore(ontology.registry)
+    store.insert("Session", {"id": "session-1"}, source=_SOURCE)
+    store.insert("Room", {"id": "room-1"}, source=_SOURCE)
+    client = ontology.bind(store).for_consumer(
+        consumer(role="ops", scope_level="team", scope_id="team-1")
+    )
+
+    SessionPlacement = namespace["SessionPlacement"]
+    ScheduleSession = namespace["ScheduleSession"]
+    assert client.call_function(SessionPlacement(session_id="session-1")) is None
+
+    starts_at = datetime(2026, 10, 6, 9, tzinfo=timezone.utc)
+    ends_at = datetime(2026, 10, 6, 10, tzinfo=timezone.utc)
+    result = client.execute(
+        ScheduleSession(
+            session_id="session-1",
+            room_id="room-1",
+            starts_at=starts_at,
+            ends_at=ends_at,
+        )
+    )
+    assignment_id = result["assignment_id"]
+    assert store.links_from("assignment_session", assignment_id) == ["session-1"]
+    assert store.links_from("assignment_room", assignment_id) == ["room-1"]
+
+    placement = client.call_function(SessionPlacement(session_id="session-1"))
+    assert placement is not None
+    assert placement["room_id"] == "room-1"
+    # The Function returns datetime objects, so compare the aware UTC values directly.
+    assert placement["starts_at"] == starts_at
+    assert placement["ends_at"] == ends_at
+
+    assert ontology.registry.get_link_type("assignment_session").owned is True
+    assert ontology.registry.get_link_type("assignment_room").owned is True
