@@ -11,6 +11,7 @@ import pytest
 import ontary
 from ontary import OntologyObject, Sensitivity, Source
 from ontary.actions import ActionContext
+from ontary.errors import ERROR_CODES
 from ontary.meta import (
     ActionTypeDef,
     FunctionDef,
@@ -161,7 +162,10 @@ def _sdk_vocabulary() -> set[str]:
         for model in cited_models
         for field_name in model.model_fields
     }
-    return set(ontary.__all__) | fields | set(ILLUSTRATIVE) | ENGINE_IDENTIFIERS
+    return (
+        set(ontary.__all__) | fields | set(ILLUSTRATIVE) | ENGINE_IDENTIFIERS
+        | set(ERROR_CODES)
+    )
 
 
 @pytest.mark.parametrize("path", DESIGN_GUIDES, ids=lambda path: path.name)
@@ -207,6 +211,9 @@ def test_design_guide_explains_rules_and_transitions(path: Path) -> None:
             "宣言済みの任意の状態",
             "既存行",
             "ルール名",
+            "事前チェックしません",
+            "エンジンのコード",
+            "`exc.code`",
         )
     else:
         required = (
@@ -219,6 +226,9 @@ def test_design_guide_explains_rules_and_transitions(path: Path) -> None:
             "any declared state",
             "existing row",
             "rule name",
+            "does not pre-check",
+            "the engine's code",
+            "`exc.code`",
         )
     normalized = re.sub(r"\s+", " ", section).casefold()
     missing = [phrase for phrase in required if phrase.casefold() not in normalized]
@@ -247,6 +257,12 @@ def test_api_reference_documents_transitions_rules_and_mcp_schema(path: Path) ->
         required.extend(("`TransitionDef`", "`ontary.meta`", "`ontary.__all__`"))
     else:
         required.extend(("import `TransitionDef` from", "`ontary.meta`", "`ontary.__all__`"))
+    required.extend((
+        "TRANSITION_NOT_ALLOWED: Order 'o-1': status cannot move from 'pending' to"
+        " 'shipped'; allowed from 'pending': ['paid']",
+        "RULE_VIOLATED: Order 'o-1': rule 'shipped_needs_payment': payment required",
+        "`exc.code`",
+    ))
     missing = [phrase for phrase in required if phrase not in text]
     assert not missing, f"{path.name}: API reference omits {missing}"
 
@@ -274,6 +290,11 @@ def test_design_guide_rules_and_transitions_example_runs(path: Path) -> None:
         store.update("Order", "o-1", {"status": "shipped"}, source=_SOURCE)
     assert unpaid.value.code == "RULE_VIOLATED"
     assert "shipped_needs_payment" in str(unpaid.value)
+    section = _rules_transitions_section(path)
+    for refusal in (moved.value, unpaid.value):
+        assert f"{refusal.code}: {refusal}" in section, (
+            f"{path.name}: guide omits the engine's {refusal.code} message"
+        )
 
 
 def test_changelog_covers_declared_rules_and_transitions() -> None:

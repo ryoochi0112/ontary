@@ -195,6 +195,22 @@ def shipped_needs_payment(order: Order) -> bool:
 宣言済みのすべてのプロパティを持つ新しいオブジェクト全体が渡されます。エンジンは純粋性を強制しません。
 ルールが失敗すると書き込みは拒否され、拒否メッセージにはルール名とメッセージが含まれます。
 
+エンジンは書き込みのたびに両方を確認します。拒否された遷移のメッセージには、現在の状態、
+要求された状態、許可された遷移先が含まれます。拒否されたルールのメッセージには、ルール名と
+そのメッセージが含まれます。
+
+```text
+TRANSITION_NOT_ALLOWED: Order 'o-1': status cannot move from 'pending' to 'shipped'; allowed from 'pending': ['paid']
+RULE_VIOLATED: Order 'o-1': rule 'shipped_needs_payment': payment is required
+```
+
+各行はエラーコードとメッセージを並べたものです。メッセージ（`str(exc)`）にはコードが
+含まれないため、コードは `exc.code` から読み取ってください。
+
+アクションは新しい状態を代入して保存します。宣言済みの遷移やルールをアクション内で事前チェックしません。
+書き込みはエンジンが拒否するため、テストではエンジンのコード（`TRANSITION_NOT_ALLOWED` または
+`RULE_VIOLATED`）を期待してください。
+
 `initial` の状態は、アクションで作成するオブジェクトに適用されます。ingest と直接の store insert は、
 宣言済みの任意の状態から開始できます。既存行への ingest update には引き続き遷移グラフが適用され、
 グラフで許可されない状態へ移すことはできません。

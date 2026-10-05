@@ -303,6 +303,16 @@ ontology.validate(store=store)  # 編集したオントロジーを提供する�
 グラフは `prop(transitions=...)` で指定し、`TransitionDef` は
 `ontary.meta` から import します。`ontary.__all__` からは公開されません。
 
+グラフに反する書き込みは `TRANSITION_NOT_ALLOWED` で拒否されます。メッセージには、
+現在の状態、要求された状態、許可された遷移先が含まれます。
+
+```text
+TRANSITION_NOT_ALLOWED: Order 'o-1': status cannot move from 'pending' to 'shipped'; allowed from 'pending': ['paid']
+```
+
+この行はエラーコードとメッセージを並べたものです。メッセージ（`str(exc)`）にはコードが
+含まれないため、コードは `exc.code` から読み取ってください。
+
 #### `Ontology.rule(cls, name, *, message)`
 
 `@ontology.object` で `cls` を登録した後、型付きの述語をデコレートします。
@@ -317,6 +327,17 @@ def shipped_needs_payment(order: Order) -> bool:
 読み取る必要があります。名前とメッセージは型宣言に表示され、関数本体はエクスポート
 されるスキーマデータには含まれません。`ontology.definition` でオントロジーが固定
 されるまでルールを登録できます。
+
+新しい行がルールを満たさない書き込みは `RULE_VIOLATED` で拒否されます。メッセージには、
+ルール名とそのメッセージが含まれます。
+
+```text
+RULE_VIOLATED: Order 'o-1': rule 'shipped_needs_payment': payment required
+```
+
+アクションは新しい状態を代入して保存します。宣言済みの遷移やルールをアクション内で
+事前チェックしません。書き込みはエンジンが拒否するため、テストではエンジンのコードを
+期待してください。
 
 #### 選択肢プロパティ: `Enum` と `Literal`
 

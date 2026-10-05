@@ -205,6 +205,22 @@ full new object with every declared property, including properties restricted
 from consumers. The engine does not enforce purity. A failed rule refuses the
 write, and the refusal includes the rule name and its message.
 
+The engine checks both on every write. A refused move names the current state,
+the requested state, and the allowed moves; a refused rule names the rule and
+its message:
+
+```text
+TRANSITION_NOT_ALLOWED: Order 'o-1': status cannot move from 'pending' to 'shipped'; allowed from 'pending': ['paid']
+RULE_VIOLATED: Order 'o-1': rule 'shipped_needs_payment': payment is required
+```
+
+Each line shows the error code, then its message. The message, `str(exc)`,
+does not include the code; read the code from `exc.code`.
+
+An action assigns the new status and saves. It does not pre-check the declared
+moves or rules: the engine refuses the write, and tests should expect the
+engine's code (`TRANSITION_NOT_ALLOWED` or `RULE_VIOLATED`).
+
 The `initial` states apply to objects created through an action. Ingest and
 direct store inserts may start at any declared state. An ingest update of an
 existing row must still follow the transition graph; it cannot move that row to
