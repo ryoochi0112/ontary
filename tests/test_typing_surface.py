@@ -21,12 +21,14 @@ from examples.tickets.fixtures import load_fixtures
 from examples.tickets.ontology import (
     Agent,
     EscalateTicketParams,
+    Escalation,
     Org,
     Queue,
     Ticket,
     build_ontology,
     commentByAgent,
     commentOnTicket,
+    escalationOnTicket,
     queueOfOrg,
     ticketInQueue,
 )
@@ -72,6 +74,7 @@ def test_agent_escalates_an_open_ticket_golden_scenario() -> None:
     result = (
         scenario(ontology)
         .given(
+            Agent(id="agent-1", display_name="Ada"),
             Queue(id="queue-a", name="Billing"),
             Ticket(
                 id="t-1",
@@ -80,8 +83,9 @@ def test_agent_escalates_an_open_ticket_golden_scenario() -> None:
                 queue_id="queue-a",
             ),
         )
-        .when(EscalateTicket(ticket_id="t-1"), by=agent)
-        .then(Ticket, "t-1", escalated=True)
+        .when(EscalateTicket(ticket_id="t-1", agent_id="agent-1"), by=agent)
+        .then(Escalation, "id-2", state="open")
+        .then_link(escalationOnTicket, "id-2", "t-1")
     )
 
     assert_type(result, Scenario)
@@ -93,6 +97,7 @@ def test_viewer_cannot_escalate_golden_scenario() -> None:
     viewer = consumer(role="Viewer", scope_level="queue", scope_id="queue-a")
 
     scenario(ontology).given(
+        Agent(id="agent-1", display_name="Ada"),
         Queue(id="queue-a", name="Billing"),
         Ticket(
             id="t-1",
@@ -100,7 +105,7 @@ def test_viewer_cannot_escalate_golden_scenario() -> None:
             age_hours=4.0,
             queue_id="queue-a",
         ),
-    ).when(EscalateTicket(ticket_id="t-1"), by=viewer).then_error(
+    ).when(EscalateTicket(ticket_id="t-1", agent_id="agent-1"), by=viewer).then_error(
         "PERMISSION_DENIED"
     )
 
@@ -394,30 +399,44 @@ def test_aggregate_without_value_field_is_rejected_for_float_funcs() -> None:
 
 
 def test_typed_execute_accepts_positional_and_keyword_forms() -> None:
-    # README's "typed client.execute(EscalateTicket(ticket_id=...))" claim
-    # (spec typed-actions.md AC5) -- the params INSTANCE is accepted
-    # directly (no string action name), and both the typed and string forms
-    # also accept their documented keyword spellings.
+    # Both typed and string execute forms accept positional and keyword arguments.
     client, ids = _client()
-    result = client.execute(EscalateTicketParams(ticket_id=ids["ticket_1_id"]))
+    result = client.execute(EscalateTicketParams(
+        ticket_id=ids["ticket_1_id"], agent_id=ids["agent_1_id"]
+    ))
     assert_type(result, dict[str, Any])
-    assert result == {"ticket_id": ids["ticket_1_id"]}
 
-    string_result = client.execute("EscalateTicket", {"ticket_id": ids["ticket_2_id"]})
+    string_result = client.execute("EscalateTicket", {
+        "ticket_id": ids["ticket_2_id"], "agent_id": ids["agent_1_id"]
+    })
     assert_type(string_result, dict[str, Any])
-    assert string_result == {"ticket_id": ids["ticket_2_id"]}
 
     typed_keyword_result = client.execute(
-        params=EscalateTicketParams(ticket_id=ids["ticket_1_id"])
+        params=EscalateTicketParams(ticket_id=ids["ticket_4_id"], agent_id=ids["agent_1_id"])
     )
     assert_type(typed_keyword_result, dict[str, Any])
-    assert typed_keyword_result == {"ticket_id": ids["ticket_1_id"]}
 
     string_keyword_result = client.execute(
-        action="EscalateTicket", params={"ticket_id": ids["ticket_2_id"]}
+        action="EscalateTicket",
+        params={"ticket_id": ids["ticket_5_id"], "agent_id": ids["agent_1_id"]},
     )
     assert_type(string_keyword_result, dict[str, Any])
-    assert string_keyword_result == {"ticket_id": ids["ticket_2_id"]}
+
+    for action_result, ticket_id in (
+        (result, ids["ticket_1_id"]),
+        (string_result, ids["ticket_2_id"]),
+        (typed_keyword_result, ids["ticket_4_id"]),
+        (string_keyword_result, ids["ticket_5_id"]),
+    ):
+        assert set(action_result) == {"escalation_id"}
+        escalation_id = action_result["escalation_id"]
+        assert isinstance(escalation_id, str)
+        escalation = client.get(Escalation, escalation_id)
+        assert escalation is not None
+        assert escalation.state == "open"
+        assert [ticket.id for ticket in client.traverse(
+            escalationOnTicket, escalation_id
+        )] == [ticket_id]
 
 
 def test_ontology_bind_returns_ontology_runtime() -> None:

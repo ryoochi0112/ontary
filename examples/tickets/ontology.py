@@ -1,28 +1,11 @@
-"""A tiny support-ticket domain ontology, declared entirely via `ontary`'s
-public class-based authoring API (spec `typed-authoring.md` AC9) -- the
-"second, tiny non-DSO example" proving the engine holds zero DSO
-assumptions (spec AC11, T9). Also the README quickstart's code.
+"""A support-ticket ontology with source-backed tickets and owned escalations.
 
-Domain: Org -> Queue -> Ticket -> Comment, Agents comment on Tickets. One
-action (`EscalateTicket`), one function (`ticketStats`, a `BoundQuery`
-aggregate), a two-level `ScopePolicy` (`queue` <- `org`) with `min_n`.
+Org and Queue scope Tickets, Comments, and Escalations. Agents escalate tickets,
+resolve escalations, and Managers archive them. Escalation status is derived by
+`isTicketEscalated`; `ticketStats` aggregates ticket ages under the scope policy.
 
-Per spec `typed-actions.md` §6/AC10, `EscalateTicket`/`ticketStats` are
-declare-once, class-authored (`@_ontology.action(...)`/`@_ontology
-.function(...)`) right here, next to the object/link declarations --
-`fixtures.py` now only holds the synthetic-data loader, not any
-registration wiring.
-
-`build_ontology()` is called by every test/fixture that needs an
-`(Ontology, ObjectStore)` pair. Handlers/functions are declared exactly
-once, at import time, on the module-level `_ontology` -- so unlike the
-pre-M4b version there is no need to re-create a `FunctionRegistry`/handler
-table per call; `build_ontology()` simply hands out the SAME `Ontology`
-(registry + declared handlers + `.definition`'s `FunctionRegistry`, all
-shared) with a fresh `ObjectStore` each time, so every caller still gets
-independent data to seed and tear down. Passing the `Ontology` itself
-(not `.definition`) is what lets `OntologyClient`/`build_mcp_server`
-auto-bind `EscalateTicket`'s handler with zero manual wiring (spec AC6).
+Handlers are declared once on the module-level ontology. `build_ontology()`
+pairs that validated ontology with a fresh store for independent data.
 """
 
 from __future__ import annotations
@@ -47,6 +30,7 @@ from ontary import (
     prop,
     target,
 )
+from ontary.meta import TransitionDef
 
 LEVELS = ["queue", "org"]
 M2O = Cardinality.MANY_TO_ONE
@@ -81,7 +65,6 @@ class Agent(OntologyObject):
 
 @_ontology.object(
     layer="L0",
-    owned={"escalated": False},
     scope=[
         DirectProperty(level="queue", property_name="queue_id"),
         ViaLink(link_api_name="ticketInQueue", direction="from", parent_type="Queue"),
@@ -93,7 +76,6 @@ class Ticket(OntologyObject):
     age_hours: float
     status: Literal["open", "pending", "closed"] | None = None
     queue_id: str | None = prop(default=None, scope_level="queue")
-    escalated: bool | None = prop(default=None)
     channel: str | None = prop(default=None, choices=["email", "chat", "phone"])
 
 
@@ -120,7 +102,10 @@ class Comment(OntologyObject):
 class Escalation(OntologyObject):
     id: str = prop(primary_key=True)
     reason: str | None = None
-    state: str | None = prop(default=None, choices=["open", "resolved"])
+    state: Literal["open", "resolved"] = prop(transitions=TransitionDef(
+        initial=("open",),
+        moves={"open": ("resolved",), "resolved": ()},
+    ))
 
 
 queueOfOrg: LinkHandle[Queue, Org] = _ontology.link("queueOfOrg", Queue, Org, M2O)
@@ -139,9 +124,7 @@ escalationAssignedTo: LinkHandle[Escalation, Agent] = _ontology.link(
 
 class EscalateTicketParams(ActionParams):
     ticket_id: str = target(Ticket)
-    # Audited, not read: the handler does not branch on `reason`, but every
-    # parameter is recorded in the `AuditEntry`, so the caller's stated reason
-    # is preserved with the escalation. Not dead code.
+    agent_id: str
     reason: str | None = None
 
 
@@ -150,97 +133,90 @@ class EscalateTicketParams(ActionParams):
     target=Ticket,
     roles=["Agent", "Manager"],
     display_name="Escalate Ticket",
-    description="Escalates a Ticket as urgent.",
+    description="Opens an Escalation for a Ticket and assigns an Agent.",
     api_name="EscalateTicket",
 )
 def _escalate_ticket(ctx: ActionContext, params: EscalateTicketParams) -> dict[str, str]:
-    """Same precondition + write as the pre-M4b `fixtures._escalate_ticket_handler`
-    (existence check, then a `Ticket.escalated=True` update) -- now via
-    `ActionContext` instead of closing over a raw `ObjectStore`."""
+    """Open an assigned escalation only when the ticket has no open escalation."""
     ticket = ctx.get(Ticket, params.ticket_id)
     if ticket is None:
         raise ActionError(
             f"ticket {params.ticket_id!r} does not exist",
             code="PRECONDITION_FAILED",
         )
-    ticket.escalated = True
-    ctx.save(ticket)
-    return {"ticket_id": params.ticket_id}
-
-
-class OpenEscalationParams(ActionParams):
-    ticket_id: str = target(Ticket)
-    agent_id: str
-    reason: str | None = None
-
-
-@_ontology.action(
-    OpenEscalationParams,
-    target=Ticket,
-    roles=["Agent", "Manager"],
-    api_name="OpenEscalation",
-    display_name="Open Escalation",
-    description="Escalates a Ticket and opens an Escalation.",
-)
-def _open_escalation(ctx: ActionContext, params: OpenEscalationParams) -> dict[str, str]:
-    ticket = ctx.get(Ticket, params.ticket_id)
-    if ticket is None:
-        raise ActionError(
-            f"ticket {params.ticket_id!r} does not exist",
-            code="PRECONDITION_FAILED",
-        )
-    ticket.escalated = True
-    ctx.save(ticket)
+    if any(
+        escalation.state == "open"
+        for escalation in ctx.traverse(escalationOnTicket, ticket, reverse=True)
+    ):
+        raise ActionError("already escalated", code="PRECONDITION_FAILED")
     escalation = ctx.create(Escalation, reason=params.reason, state="open")
     ctx.link(escalationOnTicket, escalation, ticket)
     ctx.link(escalationAssignedTo, escalation, params.agent_id)
     return {"escalation_id": escalation.id}
 
 
-class ResolveTicketParams(ActionParams):
+class ResolveEscalationParams(ActionParams):
     escalation_id: str = target(Escalation)
 
 
 @_ontology.action(
-    ResolveTicketParams,
+    ResolveEscalationParams,
     target=Escalation,
     roles=["Agent", "Manager"],
-    api_name="ResolveTicket",
-    display_name="Resolve Ticket",
-    description="Resolves the escalation and clears the ticket's escalated flag.",
+    api_name="ResolveEscalation",
+    display_name="Resolve Escalation",
+    description="Resolves an open Escalation.",
 )
-def _resolve_ticket(ctx: ActionContext, params: ResolveTicketParams) -> dict[str, str]:
+def _resolve_escalation(ctx: ActionContext, params: ResolveEscalationParams) -> dict[str, str]:
+    """Resolve an open escalation, refusing repeated resolution."""
     escalation = ctx.get(Escalation, params.escalation_id)
     if escalation is None:
         raise ActionError(
             f"escalation {params.escalation_id!r} does not exist",
             code="PRECONDITION_FAILED",
         )
+    if escalation.state != "open":
+        raise ActionError("escalation is not open", code="TRANSITION_NOT_ALLOWED")
     escalation.state = "resolved"
     ctx.save(escalation)
-    for ticket in ctx.traverse(escalationOnTicket, escalation):
-        ticket.escalated = False
-        ctx.save(ticket)
     return {"escalation_id": params.escalation_id}
 
 
-class ArchiveTicketParams(ActionParams):
+class ArchiveEscalationParams(ActionParams):
     escalation_id: str = target(Escalation)
 
 
 @_ontology.action(
-    ArchiveTicketParams,
+    ArchiveEscalationParams,
     target=Escalation,
     roles=["Manager"],
-    api_name="ArchiveTicket",
-    display_name="Archive Ticket",
-    description="Releases the assignment and retires the escalation.",
+    api_name="ArchiveEscalation",
+    display_name="Archive Escalation",
+    description="Retires an Escalation and closes its owned links.",
 )
-def _archive_ticket(ctx: ActionContext, params: ArchiveTicketParams) -> dict[str, str]:
-    for agent in ctx.traverse(escalationAssignedTo, params.escalation_id):
-        ctx.unlink(escalationAssignedTo, params.escalation_id, agent)
+def _archive_escalation(ctx: ActionContext, params: ArchiveEscalationParams) -> dict[str, str]:
+    """Retire the escalation; the retirement cascade closes its owned links."""
     ctx.retire(Escalation, params.escalation_id)
     return {"escalation_id": params.escalation_id}
+
+
+class IsTicketEscalatedParams(FunctionParams):
+    ticket_id: str
+
+
+@_ontology.function(
+    IsTicketEscalatedParams,
+    description="Whether a Ticket has an open Escalation.",
+    input_description="A ticket_id.",
+    output_description="True when a visible open Escalation is linked to the Ticket.",
+    api_name="isTicketEscalated",
+)
+def _is_ticket_escalated(query: BoundQuery, params: IsTicketEscalatedParams) -> bool:
+    """Answer the per-ticket question through consumer-scoped traversal."""
+    return any(
+        escalation.payload["state"] == "open"
+        for escalation in query.traverse("escalationOnTicket", params.ticket_id, reverse=True)
+    )
 
 
 class TicketStatsParams(FunctionParams):
@@ -266,14 +242,7 @@ _ontology.validate()
 
 
 def build_ontology() -> tuple[Ontology, ObjectStore]:
-    """Returns the module-level `Ontology` (registry + declared
-    `EscalateTicket`/`ticketStats` handlers, shared and immutable after
-    `.validate()` above) paired with a fresh `ObjectStore` -- every caller
-    (tests/fixtures) gets independent data to seed and tear
-    down, while `OntologyClient(ontology, store, consumer)`/
-    `build_mcp_server(ontology, store, consumer)` auto-bind the SAME
-    declared handlers with zero manual wiring (spec `typed-actions.md`
-    AC6/AC7)."""
+    """Return the shared validated ontology paired with a fresh object store."""
     return _ontology, ObjectStore(_ontology.registry)
 
 
@@ -291,8 +260,8 @@ __all__ = [
     "escalationOnTicket",
     "escalationAssignedTo",
     "EscalateTicketParams",
-    "OpenEscalationParams",
-    "ResolveTicketParams",
-    "ArchiveTicketParams",
+    "ResolveEscalationParams",
+    "ArchiveEscalationParams",
+    "IsTicketEscalatedParams",
     "build_ontology",
 ]

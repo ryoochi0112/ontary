@@ -1,16 +1,7 @@
-"""The living AC4 demo (declared-contracts §3 AC4, task T8 review anchor):
-`examples/tickets`' `Ticket.escalated` is declared ontology-owned
-(`owned={"escalated": False}`) while `status` stays source-backed.
+"""End-to-end checks for the tickets app's governed runtime.
 
-This test drives the FULL governed path -- `OntologyClient.ingest`, not
-`store.update` directly, and `EscalateTicket` through the real
-`ActionExecutor`/`OntologyClient.execute`, not a raw store write -- to prove
-the seam the spec's problem statement calls out is closed end to end:
-
-    ingest (status="open") -> EscalateTicket via executor -> re-ingest the
-    SAME ticket with status="closed" from source -> `escalated` still True,
-    `status` refreshed to "closed", and the escalation's audit entry carries
-    the real `WriteRecord`s + a real `target_id` (not a guess).
+Source re-ingest refreshes ticket facts while owned escalations and their links
+survive. Actions record their object and link writes with the real target id.
 """
 
 from __future__ import annotations
@@ -143,10 +134,9 @@ def test_ingest_escalate_reingest_survives_via_governed_path() -> None:
         ),
     )
 
-    # 1. Bulk ingest lands the ticket with status="open"; `escalated` is not
-    #    supplied by source (it's ontology-owned) -- the declared default
-    #    (False) is injected on insert.
+    # 1. Bulk ingest supplies the ticket facts and the agent to assign.
     loader.ingest("Org", [{"id": "o1", "name": "Acme Support"}], _INGEST_SOURCE)
+    loader.ingest("Agent", [{"id": "agent-1", "display_name": "Ada"}], _INGEST_SOURCE)
     loader.ingest("Queue", [{"id": "q1", "name": "Billing"}], _INGEST_SOURCE)
     loader.ingest_links("queueOfOrg", [("q1", "o1")], _INGEST_SOURCE)
     report = loader.ingest("Ticket", _TICKETS_OPEN, _INGEST_SOURCE)
@@ -158,7 +148,6 @@ def test_ingest_escalate_reingest_survives_via_governed_path() -> None:
     ticket = store.read_current("Ticket", ticket_id)
     assert ticket is not None
     assert ticket.payload["status"] == "open"
-    assert ticket.payload["escalated"] is False
 
     # 2. EscalateTicket through the real governed path: OntologyClient ->
     #    ActionExecutor.execute -- not store.update directly.
@@ -167,12 +156,17 @@ def test_ingest_escalate_reingest_survives_via_governed_path() -> None:
     )
     client = OntologyClient(ontology, store, consumer)
 
-    result = client.execute("EscalateTicket", {"ticket_id": ticket_id})
-    assert result == {"ticket_id": ticket_id}
+    result = client.execute("EscalateTicket", {"ticket_id": ticket_id, "agent_id": "agent-1"})
+    escalation_id = result["escalation_id"]
+    assert result == {"escalation_id": escalation_id}
+    escalation = store.read_current("Escalation", escalation_id)
+    assert escalation is not None
+    assert escalation.payload["state"] == "open"
+    assert store.links_from("escalationOnTicket", escalation_id) == [ticket_id]
+    assert store.links_from("escalationAssignedTo", escalation_id) == ["agent-1"]
 
     escalated_ticket = store.read_current("Ticket", ticket_id)
     assert escalated_ticket is not None
-    assert escalated_ticket.payload["escalated"] is True
     assert escalated_ticket.payload["status"] == "open"
 
     # The escalation's audit entry carries the real WriteRecord(s) + a real
@@ -187,20 +181,20 @@ def test_ingest_escalate_reingest_survives_via_governed_path() -> None:
     assert escalate_entry.outcome == "ok"
     assert escalate_entry.target_id == ticket_id
     assert escalate_entry.writes == [
-        WriteRecord(op="update", object_type="Ticket", object_id=ticket_id),
+        WriteRecord(op="create", object_type="Escalation", object_id=escalation_id),
+        WriteRecord(op="link", link_type="escalationOnTicket", from_id=escalation_id, to_id=ticket_id),
+        WriteRecord(op="link", link_type="escalationAssignedTo", from_id=escalation_id, to_id="agent-1"),
     ]
 
-    # 3. Re-ingest the SAME ticket from source with status changed to
-    #    "closed" -- the source-backed property refreshes, and the
-    #    ontology-owned `escalated` (written only by the action, never by
-    #    source) survives the merge (spec AC4/AC5).
+    # 3. Source re-ingest refreshes status and preserves the escalation and link.
     report2 = loader.ingest("Ticket", _TICKETS_CLOSED, _INGEST_SOURCE)
     assert report2.ok, report2.errors
 
     final_ticket = store.read_current("Ticket", ticket_id)
     assert final_ticket is not None
     assert final_ticket.payload["status"] == "closed"
-    assert final_ticket.payload["escalated"] is True
+    assert store.read_current("Escalation", escalation_id) == escalation
+    assert store.links_from("escalationOnTicket", escalation_id) == [ticket_id]
 
 
 def test_tickets_store_isolates_both_tenants_on_one_file(tmp_path: Path) -> None:
@@ -253,12 +247,12 @@ def test_testing_harness_drives_the_escalation_through_the_public_helpers() -> N
 
     with raises_code("PRECONDITION_FAILED"):
         client.execute(
-            "EscalateTicket", {"ticket_id": "missing-ticket", "reason": "missing"}
+            "EscalateTicket", {"ticket_id": "missing-ticket", "agent_id": ids["agent_1_id"], "reason": "missing"}
         )
 
     client.execute(
         "EscalateTicket",
-        {"ticket_id": ids["ticket_1_id"], "reason": "SLA exceeded"},
+        {"ticket_id": ids["ticket_1_id"], "agent_id": ids["agent_1_id"], "reason": "SLA exceeded"},
     )
 
     entry = store.audit_entries()[-1]
@@ -268,7 +262,7 @@ def test_testing_harness_drives_the_escalation_through_the_public_helpers() -> N
 
     with pytest.raises(ActionError) as caught_precondition:
         client.execute(
-            "EscalateTicket", {"ticket_id": "missing-ticket", "reason": "missing"}
+            "EscalateTicket", {"ticket_id": "missing-ticket", "agent_id": ids["agent_1_id"], "reason": "missing"}
         )
     assert isinstance(caught_precondition.value, PreconditionFailed)
     assert isinstance(caught_precondition.value, OntaryError)
@@ -468,7 +462,7 @@ def test_escalation_lifecycle_runs_through_client_and_audits() -> None:
     )
     with pytest.raises(PermissionDenied) as caught_permission:
         agent_client.execute(
-            "OpenEscalation",
+            "EscalateTicket",
             {
                 "ticket_id": ids["ticket_1_id"],
                 "agent_id": ids["agent_1_id"],
@@ -478,7 +472,7 @@ def test_escalation_lifecycle_runs_through_client_and_audits() -> None:
     assert caught_permission.value.code == "PERMISSION_DENIED"
 
     opened = client.execute(
-        "OpenEscalation",
+        "EscalateTicket",
         {
             "ticket_id": ids["ticket_1_id"],
             "agent_id": ids["agent_1_id"],
@@ -488,16 +482,17 @@ def test_escalation_lifecycle_runs_through_client_and_audits() -> None:
     escalation_id = opened["escalation_id"]
     assert store.links_from("escalationAssignedTo", escalation_id) == [ids["agent_1_id"]]
 
-    resolved = client.execute("ResolveTicket", {"escalation_id": escalation_id})
+    resolved = client.execute("ResolveEscalation", {"escalation_id": escalation_id})
     assert resolved == {"escalation_id": escalation_id}
     escalation = store.read_current("Escalation", escalation_id)
     ticket = store.read_current("Ticket", ids["ticket_1_id"])
     assert escalation is not None
     assert escalation.payload["state"] == "resolved"
     assert ticket is not None
-    assert ticket.payload["escalated"] is False
+    assert client.call_function("isTicketEscalated", {"ticket_id": ids["ticket_1_id"]}) is False
+    assert store.links_from("escalationOnTicket", escalation_id) == [ids["ticket_1_id"]]
 
-    archived = client.execute("ArchiveTicket", {"escalation_id": escalation_id})
+    archived = client.execute("ArchiveEscalation", {"escalation_id": escalation_id})
     assert archived == {"escalation_id": escalation_id}
     assert store.read_current("Escalation", escalation_id) is None
     assert store.links_from("escalationAssignedTo", escalation_id) == []
@@ -507,18 +502,18 @@ def test_escalation_lifecycle_runs_through_client_and_audits() -> None:
         for entry in store.audit_entries()
         if entry.kind == "action" and entry.outcome == "ok"
     }
-    assert {"OpenEscalation", "ResolveTicket", "ArchiveTicket"} <= successful_actions.keys()
-    assert successful_actions["ArchiveTicket"].writes[0] == WriteRecord(
+    assert {"EscalateTicket", "ResolveEscalation", "ArchiveEscalation"} <= successful_actions.keys()
+    assert WriteRecord(
         op="unlink",
         link_type="escalationAssignedTo",
         from_id=escalation_id,
         to_id=ids["agent_1_id"],
-    )
+    ) in successful_actions["ArchiveEscalation"].writes
     assert WriteRecord(
         op="retire",
         object_type="Escalation",
         object_id=escalation_id,
-    ) in successful_actions["ArchiveTicket"].writes
+    ) in successful_actions["ArchiveEscalation"].writes
 
 
 def test_tickets_cli_validate_and_version_in_subprocesses() -> None:
@@ -798,7 +793,7 @@ def test_tickets_example_has_choices_and_no_findings_or_accept() -> None:
     assert status.choices == ("open", "pending", "closed")
     assert status.required is False
     assert status.transitions is None
-    assert "status" not in ontology.registry.object_types["Ticket"].owned
+    assert ontology.registry.object_types["Ticket"].owned is False
 
 
 def test_tickets_ingest_refuses_status_outside_choices() -> None:

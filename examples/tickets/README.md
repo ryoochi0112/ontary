@@ -3,23 +3,29 @@
 `examples/tickets/` is the in-repo reference consumer for `ontary`. It models
 a small support-ticket workflow:
 
-- **Tickets** (`Ticket`), the owned entity being tracked, with a `channel`
-  choices property (`email`, `chat`, or `phone`).
-- **Agents** and **Teams**, the identities and scopes tickets are governed
-  under.
-- **Escalation**, an owned lifecycle object opened, resolved, and archived
-  through the `OpenEscalation`, `ResolveTicket`, and `ArchiveTicket` business
-  verbs.
+- **Org** (`Org`) and **Queue** (`Queue`) define the organization and queue
+  scopes.
+- **Agent** (`Agent`) represents a support agent.
+- **Ticket** (`Ticket`) is a source-backed ticket with a `channel` choices
+  property (`email`, `chat`, or `phone`).
+- **Comment** (`Comment`) records a comment on a ticket.
+- **Escalation** (`Escalation`) is an owned lifecycle object linked to a ticket
+  and assigned to an agent.
+
+The actions are `EscalateTicket`, `ResolveEscalation`, and
+`ArchiveEscalation`. The Functions are `ticketStats` and
+`isTicketEscalated`. “Escalated” is derived from open Escalation links; it is
+not stored on Ticket.
 
 See [`ontology.py`](ontology.py) for the full declaration.
 
 ## Running it
 
-[`run_mcp.py`](run_mcp.py) starts a multi-consumer MCP server over the
-tickets ontology:
+From the repository root, [`run_mcp.py`](run_mcp.py) starts a multi-consumer
+MCP server over the tickets ontology:
 
 ```bash
-uv run python examples/tickets/run_mcp.py
+uv run python -m examples.tickets.run_mcp
 ```
 
 Note: `run_mcp.py`'s `build_multi_consumer_server()` omits `token_verifier`

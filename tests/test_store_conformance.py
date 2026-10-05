@@ -44,9 +44,9 @@ from pydantic import BaseModel
 
 from examples.tickets.ontology import (
     Agent,
-    ArchiveTicketParams,
+    ArchiveEscalationParams,
+    EscalateTicketParams,
     Escalation,
-    OpenEscalationParams,
     Queue,
     Ticket,
     build_ontology,
@@ -1101,14 +1101,14 @@ def test_scenario_conforms_across_store_backends(store_factory: StoreFactory) ->
         )
         .given_link(ticketInQueue, "t-1", "queue-a")
         .when(
-            OpenEscalationParams(
+            EscalateTicketParams(
                 ticket_id="t-1", agent_id="agent-1", reason="Duplicate invoice"
             ),
             by=agent,
         )
         .then(Escalation, "id-2", reason="Duplicate invoice", state="open")
         .then_link(escalationOnTicket, "id-2", "t-1")
-        .when(ArchiveTicketParams(escalation_id="id-2"), by=viewer)
+        .when(ArchiveEscalationParams(escalation_id="id-2"), by=viewer)
         .then_error("PERMISSION_DENIED")
         .then_link(ticketInQueue, "t-1", "queue-a")
     )

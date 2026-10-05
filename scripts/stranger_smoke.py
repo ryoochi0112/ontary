@@ -72,10 +72,15 @@ def run_tickets_example() -> None:
     tickets = client.list("Ticket")
     check(len(tickets.items) > 0, f"the agent sees its queue's tickets ({len(tickets.items)})")
     ticket_id = tickets.items[0].payload["id"]
-    result = client.execute("EscalateTicket", {"ticket_id": ticket_id})
-    check(result == {"ticket_id": ticket_id}, "EscalateTicket runs through the governed path")
-    row = store.read_current("Ticket", ticket_id)
-    check(row is not None and row.payload["escalated"] is True, "the ticket is escalated")
+    result = client.execute("EscalateTicket", {"ticket_id": ticket_id, "agent_id": ids["agent_1_id"]})
+    escalation_id = result["escalation_id"]
+    check(isinstance(escalation_id, str), "EscalateTicket returns an escalation id")
+    row = store.read_current("Escalation", escalation_id)
+    check(row is not None and row.payload["state"] == "open", "the escalation is open")
+    check(
+        store.links_from("escalationOnTicket", escalation_id) == [ticket_id],
+        "the escalation is linked to the ticket",
+    )
     entry = next(
         e for e in store.audit_entries() if e.action == "EscalateTicket" and e.outcome == "ok"
     )
