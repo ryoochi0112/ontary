@@ -236,9 +236,9 @@ def schedule(ctx: ActionContext, p: Schedule) -> dict[str, str]:
     asset = ctx.traverse(order_asset, order)[0]
     if ctx.traverse(asset_site, asset)[0].id != ctx.traverse(technician_site, technician)[0].id:
         raise ActionError("technician must work at the asset's site", code="PRECONDITION_FAILED")
-    ctx.link(order_technician, order, technician)
     order.status = "scheduled"
     ctx.save(order)
+    ctx.link(order_technician, order, technician)
     if p.reserve_part_id is not None:
         if ctx.get(Part, p.reserve_part_id) is None:
             raise ActionError("part does not exist", code="PRECONDITION_FAILED")

@@ -1,5 +1,6 @@
 """Synthetic reference data, three consumers, and work orders created through the actions.
 
+    clock = FixtureClock(FIXTURE_NOW)
     ontology, store = build_ontology(clock=clock)
     ids = load_fixtures(store)
     manager = ontology.bind(store, clock=clock).for_consumer(manager_consumer(ids))
@@ -30,6 +31,25 @@ _SRC = Source(source_system="synthetic")
 
 # The instant the seeded work orders are reported at; the manager client's clock must read it.
 FIXTURE_NOW = datetime(2026, 10, 5, 9, tzinfo=UTC)
+
+
+class FixtureClock:
+    """A settable clock: ontary's FixedClock cannot move (#157) and a store binds one clock."""
+
+    def __init__(self, now: datetime) -> None:
+        self._now = _aware(now)
+
+    def __call__(self) -> datetime:
+        return self._now
+
+    def set(self, when: datetime) -> None:
+        self._now = _aware(when)
+
+
+def _aware(when: datetime) -> datetime:
+    if when.tzinfo is None or when.utcoffset() is None:
+        raise ValueError("FixtureClock time must be timezone-aware")
+    return when
 
 
 def load_fixtures(store: Store) -> dict[str, str]:
