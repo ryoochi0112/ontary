@@ -69,6 +69,7 @@ class TestDerivedMatchesHandWritten:
 
         class EscalateTicketParams(ActionParams):
             ticket_id: str = target(Ticket)
+            agent_id: str
             reason: str | None = None
 
         @ontology.action(
@@ -76,7 +77,7 @@ class TestDerivedMatchesHandWritten:
             target=Ticket,
             roles=["Agent", "Manager"],
             display_name="Escalate Ticket",
-            description="Escalates a Ticket as urgent.",
+            description="Opens an Escalation for a Ticket and assigns an Agent.",
             api_name="EscalateTicket",
         )
         def escalate(ctx: ActionContext, params: EscalateTicketParams) -> dict[str, str]:

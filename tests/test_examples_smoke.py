@@ -123,11 +123,15 @@ def test_client_get_list_traverse() -> None:
 def test_client_execute_and_call_function() -> None:
     client, ids, _ = _seeded()
 
-    result = client.execute("EscalateTicket", {"ticket_id": ids["ticket_1_id"]})
-    assert result == {"ticket_id": ids["ticket_1_id"]}
+    result = client.execute("EscalateTicket", {"ticket_id": ids["ticket_1_id"], "agent_id": ids["agent_1_id"]})
+    escalation = client.get("Escalation", result["escalation_id"])
+    assert escalation is not None
+    assert escalation.payload["state"] == "open"
+    assert [row.payload["id"] for row in client.traverse(
+        "Escalation", "escalationOnTicket", result["escalation_id"]
+    )] == [ids["ticket_1_id"]]
     ticket = client.get("Ticket", ids["ticket_1_id"])
     assert ticket is not None
-    assert ticket.payload["escalated"] is True
     assert ticket.payload["status"] == "open"
 
     mean_age = client.call_function("ticketStats", {"queue_id": ids["queue_a_id"]})
@@ -267,9 +271,13 @@ def test_mcp_execute_action_success_and_denial() -> None:
     payload = _call(
         server,
         "execute_action",
-        {"api_name": "EscalateTicket", "params": {"ticket_id": ids["ticket_1_id"]}},
+        {"api_name": "EscalateTicket", "params": {"ticket_id": ids["ticket_1_id"], "agent_id": ids["agent_1_id"]}},
     )
-    assert payload == {"result": {"ticket_id": ids["ticket_1_id"]}}
+    escalation_id = payload["result"]["escalation_id"]
+    escalation = store.read_current("Escalation", escalation_id)
+    assert escalation is not None
+    assert escalation.payload["state"] == "open"
+    assert store.links_from("escalationOnTicket", escalation_id) == [ids["ticket_1_id"]]
 
     # An Agent scoped to queue_b has no scope over queue_a's ticket.
     server_denied = build_mcp_server(
@@ -280,7 +288,7 @@ def test_mcp_execute_action_success_and_denial() -> None:
     denial_payload = _call(
         server_denied,
         "execute_action",
-        {"api_name": "EscalateTicket", "params": {"ticket_id": ids["ticket_2_id"]}},
+        {"api_name": "EscalateTicket", "params": {"ticket_id": ids["ticket_2_id"], "agent_id": ids["agent_1_id"]}},
     )
     assert "error" in denial_payload
     assert "result" not in denial_payload
