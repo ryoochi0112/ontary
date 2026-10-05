@@ -610,6 +610,8 @@ def test_bound_query_exposes_only_the_guarded_read_methods() -> None:
         # `count_contributors` is a derived READ, min-N gated like the
         # aggregate it accompanies -- see `GuardedQuery.count_contributors`.
         "count_contributors",
+        # The bound clock's instant for this call (#154): a read, not a write.
+        "now",
     }
 
 

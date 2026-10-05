@@ -594,6 +594,9 @@ def test_function_cannot_write_by_construction() -> None:
         # so it widens what a Function can LEARN by exactly one aggregate
         # statistic, and not what it can DO.
         "count_contributors",
+        # The runtime's bound clock, read once per call (#154). Time is a
+        # READ of the runtime, not of the store or the outside world.
+        "now",
     }
 
 

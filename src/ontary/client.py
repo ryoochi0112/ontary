@@ -738,6 +738,7 @@ class OntologyClient(_TypedReadMixin):
                     self._consumer,
                     self._ontology.registry,
                     capability_providers=self._capability_providers,
+                    clock=self._clock,
                 ),
                 call_params,
             )
@@ -756,6 +757,7 @@ class OntologyClient(_TypedReadMixin):
             capability_providers=self._capability_providers,
             capability_accesses=accesses,
             disclosures=disclosures,
+            clock=self._clock,
         )
         invocation_id = self._id_factory()
         try:
