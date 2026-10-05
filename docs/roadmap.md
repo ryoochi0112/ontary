@@ -115,6 +115,12 @@ Make the MCP tools honest and cheap for an agent.
 - Push `where` filters and scope checks down to SQL.
 - Bulk ingest in one transaction, and batch link traversal.
 
+## Decided against
+
+This section records features the project chose not to build, so the same design question is not reopened without new evidence.
+
+- Links will not carry properties. A relationship that has its own facts (a time, role, or rank) is an object type linked to each participant. That object already gets identity, history, scope, actions, and audit, so no new engine concept is needed. See the [design guide](ontology-design.md#links-and-object-backed-link-types).
+
 ## Later — pulled by real use
 
 These come back only when an example or a user needs them:

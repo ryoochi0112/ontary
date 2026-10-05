@@ -475,3 +475,24 @@ def test_design_guide_relationship_object_example_runs(path: Path) -> None:
 
     assert ontology.registry.get_link_type("assignment_session").owned is True
     assert ontology.registry.get_link_type("assignment_room").owned is True
+
+
+def test_roadmap_records_links_will_not_carry_properties() -> None:
+    roadmap = (_ROOT / "docs" / "roadmap.md").read_text()
+    assert "## Decided against" in roadmap
+    assert "## Later" in roadmap
+    assert roadmap.index("## Decided against") < roadmap.index("## Later")
+    section = roadmap.split("## Decided against", 1)[1].split("\n## ", 1)[0]
+    assert "Links will not carry properties" in section
+    assert "ontology-design.md#links-and-object-backed-link-types" in section
+
+
+def test_changelog_changed_list_mentions_relationship_objects() -> None:
+    """Version-agnostic: finds the release section that carries #58."""
+    changelog = (_ROOT / "CHANGELOG.md").read_text()
+    sections = re.findall(r"(?ms)^## \[[^\]]+\][^\n]*\n(.*?)(?=^## \[|\Z)", changelog)
+    matching = [section for section in sections if "(#58)" in section]
+    assert len(matching) == 1, "CHANGELOG must carry exactly one #58 release section"
+    changed_match = re.search(r"(?ms)^### Changed\n(.*?)(?=^### |\Z)", matching[0])
+    assert changed_match is not None, "the #58 section is missing ### Changed"
+    assert "#58" in changed_match.group(1)
