@@ -251,12 +251,11 @@ class ActionContext:
         inspects nothing (providers are the same trust tier as handlers).
 
         **Cost to be aware of:** a handler calls its capability INSIDE the
-        engine-owned store transaction, so a slow outside
-        call holds the SQLite write lock for its whole duration. That is allowed
-        rather than forbidden -- a handler that must decide *based on* an outside
-        read has nowhere else to do it -- but a long call here blocks every other
-        writer. DSO's own LLM use is entirely in Functions, which have no
-        transaction.
+        engine-owned store transaction, so a slow outside call holds the
+        SQLite write lock for its whole duration. That is allowed rather
+        than forbidden -- a handler that must decide *based on* an outside
+        read has nowhere else to do it -- but a long call here blocks every
+        other writer. Functions have no transaction; LLM calls belong there.
         """
         provider = resolve_capability(
             handle,
@@ -578,13 +577,13 @@ class ActionExecutor:
         params_cls: type[BaseModel] | None = None,
     ) -> None:
         """Register `fn` for `api_name`, optionally paired with a typed
-        params class (`fn` then receives `(ActionContext, params_cls
-        instance)` instead of the legacy `(consumer, params dict)`).
-        Private: the only registration entry point (the old public
-        `register_handler`/`.handler` surface was removed) -- `Ontology.action()`
-        and `OntologyRuntime` call this directly; a legacy
-        `(consumer, dict) -> dict[str, Any]` handler still registers fine
-        by passing `params_cls=None`."""
+        params class. Then `fn` receives `(ActionContext, params_cls instance)`
+        instead of the legacy `(consumer, params dict)` arguments.
+        Private: the only registration entry point; the old public
+        `register_handler`/`.handler` surface was removed. `Ontology.action()`
+        and `OntologyRuntime` call this directly. A legacy handler still
+        registers when `params_cls=None`, using the
+        `(consumer, dict) -> dict[str, Any]` signature."""
         try:
             self._registry.get_action_type(api_name)
         except ValidationFailed as exc:
@@ -666,11 +665,10 @@ class ActionExecutor:
         instant: datetime,
         unscoped_params: list[str],
     ) -> BaseModel | None:
-        """Typed-invocation path: a params class turns the already-validated dict
-        into a model instance BEFORE the
-        transaction, so a `model_validate` failure is audited/raised
-        exactly like the declared-shape validation failures before it --
-        never inside the txn/capture block, never reaching the handler."""
+        """Typed-invocation path: a params class turns the already-validated
+        dict into a model instance BEFORE the transaction. A `model_validate`
+        failure is audited/raised exactly like declared-shape validation
+        failures before the txn/capture block opens or the handler runs."""
         if params_cls is None:
             return None
         if isinstance(params, params_cls):

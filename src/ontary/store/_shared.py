@@ -137,7 +137,7 @@ def decode_audit_entry(row: AuditRowLike) -> AuditEntry:
     )
 
 
-# -- write-path contract helpers ---------------------------------------
+# -- write-path contract helpers -------------------------------------------
 #
 # The refusal/validation sequence every backend ran as a hand-copied preamble.
 # Message strings, exception types, and check ORDER are frozen behavior -- do

@@ -177,7 +177,7 @@ class ObjectStore(SqliteSchemaGate):
         finally:
             self._txn_depth -= 1
 
-    # -- authority / write capture -----------
+    # -- authority / write capture -----------------------------------------
 
     @property
     def in_transaction(self) -> bool:

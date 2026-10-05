@@ -83,24 +83,23 @@ class Declarations(BaseModel):
         "policies enforce the same boundary in the database (unless rls=False), "
         "and a superuser bypasses them by Postgres design"
     )
-    # Rewritten after a
-    # review caught clause 1 making an unscoped whole-SDK claim that is
-    # false on `build_mcp_server`: that server has no verifier and refuses
-    # NOTHING, so "a deployment with no configured verifier refuses every
-    # call" is only true of the multi-consumer server. The string now says,
-    # in order: (1) on a multi-consumer server, identity is proven by the
-    # transport, not this runtime, and a deployment with no configured
-    # verifier refuses every call; (2) on a single-consumer server or in
-    # direct Python use, the Consumer is asserted by the operator at
-    # construction and nothing proves it -- the honest counterpart to (1),
-    # not merely a weaker "carries no principal"; (3) the resolver that maps
-    # a verified principal to a Consumer (multi-consumer only) is trusted
-    # author code, returned no proxy and inspected by nothing here -- the
-    # same admission `capabilities` already makes about a provider, made
-    # here about a resolver; (4) the principal and the actor it resolved to
-    # are BOTH audited, which is what makes a resolver that maps every
-    # principal onto one privileged actor visible in the log instead of a
-    # silent single point of failure.
+    # Rewritten after a review caught clause 1 making an unscoped whole-SDK
+    # claim that is false on `build_mcp_server`: that server has no verifier
+    # and refuses NOTHING, so "a deployment with no configured verifier
+    # refuses every call" is only true of the multi-consumer server. The
+    # string now says, in order: (1) on a multi-consumer server, identity is
+    # proven by the transport, not this runtime, and a deployment with no
+    # configured verifier refuses every call; (2) on a single-consumer
+    # server or in direct Python use, the Consumer is asserted by the
+    # operator at construction and nothing proves it -- the honest
+    # counterpart to (1), not merely a weaker "carries no principal"; (3)
+    # the resolver that maps a verified principal to a Consumer
+    # (multi-consumer only) is trusted author code, returned no proxy and
+    # inspected by nothing here -- the same admission `capabilities`
+    # already makes about a provider, made here about a resolver; (4) the
+    # principal and the actor it resolved to are BOTH audited, which is what
+    # makes a resolver that maps every principal onto one privileged actor
+    # visible in the log instead of a silent single point of failure.
     #
     # Deliberately NOT claimed: anything about a resolver's own error
     # messages. A resolver's deliberate `OntaryError` is re-raised to the

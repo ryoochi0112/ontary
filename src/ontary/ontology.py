@@ -23,15 +23,14 @@ via the internal `_register` seam -- see `tests/test_client.py`);
 class-authored (`Ontology.action(...)`) handlers, by contrast, ARE declared
 on the `Ontology` and auto-bind to every runtime built from it (the old
 public per-client `register_handler`/`.handler` surface was removed).
-The seam an ontology author writes once for descriptor authoring
-is a `make_handlers(store) -> dict[api_name, fn]`-shaped factory function,
-which is still a per-ontology *authoring* artifact -- not per-consumer,
-since the handler bodies never vary by which `Consumer` calls `execute`
-(that's an argument `ActionExecutor.execute` passes through, not something
-the handler closes over) -- it is simply re-applied to each client's own
-store/executor at construction time, the same way
-`bulk_upsert`/`bulk_link` are re-applied per store rather than memoized on
-the registry.
+The seam an ontology author writes once for descriptor authoring is a
+`make_handlers(store) -> dict[api_name, fn]`-shaped factory function, which
+is still a per-ontology *authoring* artifact -- not per-consumer, since the
+handler bodies never vary by which `Consumer` calls `execute` (that's an
+argument `ActionExecutor.execute` passes through, not something the handler
+closes over) -- it is simply re-applied to each client's own store/executor
+at construction time, the same way `bulk_upsert`/`bulk_link` are re-applied
+per store rather than memoized on the registry.
 """
 
 from __future__ import annotations

@@ -319,8 +319,9 @@ class _ReadDisclosure:
 
     ``where`` is the caller mapping snapshotted once. ``where_fields`` keeps
     each predicate's supplied/learned classification beside that snapshot,
-    so field gates never re-derive it. ``narrows_population`` is the D4 rule
-    consumed by the hidden aggregate-value exemption.
+    so field gates never re-derive it. ``narrows_population`` records whether
+    the selection narrows the population; the hidden aggregate-value exemption
+    consumes this flag.
     """
 
     where: _NormalizedWhere | None
@@ -466,12 +467,12 @@ def _refuse_page_walk(what: str) -> NoReturn:
 
 class Page(BaseModel):
     """A page of `get_objects(..., limit=...)` results: `items` holds
-    exactly `limit` `StoredObject`s whenever that many visible rows remain, and `next_cursor` is the
-    opaque key of the last row actually KEPT -- never a payload primary
-    key, never read off a row (`StoredObject`/`Lineage` carry no row
-    identity) -- or `None` iff the store was exhausted before the
-    page filled. Frozen, like every other read-model value this layer
-    returns."""
+    exactly `limit` `StoredObject`s whenever that many visible rows remain,
+    and `next_cursor` is the opaque key of the last row actually KEPT --
+    never a payload primary key, never read off a row
+    (`StoredObject`/`Lineage` carry no row identity) -- or `None` iff the
+    store was exhausted before the page filled. Frozen, like every other
+    read-model value this layer returns."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -1699,9 +1700,10 @@ class GuardedQuery:
 
         Closing it properly needs release-set evaluation (complementary
         suppression over the set of cells a caller has been shown) -- not
-        something this method can do while answering one query at a time. `test_count_contributors_complement_differencing_is_a_known_residual`
-        pins the residual so the claim and the behaviour have to move
-        together the day release-set evaluation lands.
+        something this method can do while answering one query at a time.
+        `test_count_contributors_complement_differencing_is_a_known_residual`
+        pins the residual so the claim and the behaviour have to move together
+        the day release-set evaluation lands.
         """
         # Same first gates as `_aggregate`, and for the parity reason this
         # method exists to hold: an unregistered type must refuse as one on
@@ -2178,8 +2180,8 @@ class GuardedQuery:
         obj_type: str,
         group_rows: list[StoredObject],
     ) -> int:
-        """Count distinct contributors backing a group of rows (see the module
-        docstring for what replaced the prototype's hardcoded `_contributor_count`).
+        """Counts distinct contributors per row group; see the module docstring
+        for how the prototype's hardcoded `_contributor_count` was replaced.
 
         Falls back to a plain row count when `obj_type` has no
         `contributor_rules` declared at all -- that type never opted into

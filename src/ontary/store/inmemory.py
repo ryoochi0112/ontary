@@ -162,11 +162,9 @@ class InMemoryStore:
         # Mirrors `ObjectStore`'s `objects.row_id INTEGER PRIMARY KEY
         # AUTOINCREMENT`: a monotonic, per-row identity distinct from the
         # payload primary key (`Lineage.object_id`), whose uniqueness among
-        # current rows the store does not enforce -- see `read_page`'s
-        # docstring. Never exposed on `Lineage`/`StoredObject` (see `Lineage`'s
-        # docstring);
-        # `read_page`'s only consumer-facing surface for it is the
-        # out-of-band cursor string.
+        # current rows is not enforced here -- see `read_page`'s docstring.
+        # Consumers see it only in `read_page`'s out-of-band cursor string;
+        # `Lineage`/`StoredObject` never expose it; see `Lineage`'s docstring.
         self._next_row_id = 1
 
     @contextmanager
@@ -708,7 +706,7 @@ def _static_conformance_check(registry: OntologyRegistry) -> Store:
     """Never called at runtime -- exists purely so mypy (which runs
     `--strict` over `src/`, see `make verify`) fails the build if
     `InMemoryStore` ever drifts from the `Store` Protocol it's declared to
-    satisfy. Returning `InMemoryStore(registry)`
-    typed as `Store` forces a structural check at type-check time with zero
-    runtime cost and zero `# type: ignore`."""
+    satisfy. Returning `InMemoryStore(registry)` typed as `Store` forces a
+    structural check at type-check time with zero runtime cost and zero
+    `# type: ignore`."""
     return InMemoryStore(registry)

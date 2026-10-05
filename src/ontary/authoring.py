@@ -1,14 +1,15 @@
-"""Class-based ontology authoring: author
-Pydantic classes decorated with `@ontology.object(...)`; the SDK derives
-the existing descriptor IR (`ObjectTypeDef`/`PropertyDef`) from them. Zero
-engine changes -- `GuardedQuery`/`ActionExecutor`/`ObjectStore`/MCP still
-only ever see the derived descriptors.
+"""Class-based ontology authoring: author Pydantic classes decorated with
+`@ontology.object(...)`; the SDK derives the existing descriptor IR
+(`ObjectTypeDef`/`PropertyDef`) from them. Zero engine changes --
+`GuardedQuery`/`ActionExecutor`/`ObjectStore`/MCP still only ever see the
+derived descriptors.
 
-Object-type authoring uses (`OntologyObject`, `prop()`,
-`Ontology.object()`). Link authoring adds links (`LinkHandle`,
+Object-type authoring uses `OntologyObject`, `prop()` and
+`Ontology.object()`. Link authoring adds links (`LinkHandle`,
 `Ontology.link()`), assembles the `ScopePolicy` from the per-class
-`scope`/`contributor`/`row_visibility` kwargs stashed, and exposes the
-built `OntologyDef` as `Ontology.definition` (+ `Ontology.validate()`).
+`scope`/`contributor`/`row_visibility` kwargs that `Ontology.object()`
+stashes, and exposes the built `OntologyDef` as `Ontology.definition`,
+with `Ontology.validate()` available for explicit validation.
 """
 
 from __future__ import annotations

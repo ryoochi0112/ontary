@@ -157,13 +157,13 @@ def _validate_record(
 ) -> tuple[str, str] | None:
     """Return a `(code, reason)` rejection, or None if the record is valid.
 
-    Authority: a declared owned property is exempt from the
-    required-property check below -- it is
-    forbidden in a source record instead (a connector may never supply an
-    ontology-owned property; the declared default is injected on first
-    insert, and the merge in `store.update` preserves the current value on
-    re-ingest) -- that refusal carries `OWNED_PROPERTY_REFUSED`; every other
-    rejection here is a plain shape failure, carrying `INVALID_RECORD`.
+    Authority: a declared owned property is exempt from the required-property
+    check below -- it is forbidden in a source record instead (a connector
+    may never supply an ontology-owned property; the declared default is
+    injected on first insert, and the merge in `store.update` preserves the
+    current value on re-ingest) -- that refusal carries
+    `OWNED_PROPERTY_REFUSED`; every other rejection here is a plain shape
+    failure, carrying `INVALID_RECORD`.
     """
     pk_value = record.get(obj_def.primary_key)
     if pk_value is None:

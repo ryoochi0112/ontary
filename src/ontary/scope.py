@@ -282,11 +282,11 @@ class ScopePolicy(BaseModel):
     # scope. `rule.level` is not meaningful here (contributor resolution has
     # no scope-level hierarchy) and is not checked against `self.levels`.
     # `GuardedQuery.aggregate` counts DISTINCT resolved contributors per
-    # group when the queried type has contributor rules declared here,
-    # falling back to a plain row count for any type that has none. Opting
-    # in means supplying at least one rule: a type mapped to an EMPTY list is
-    # refused by `validate`, because it would claim the distinct-identity
-    # guarantee while giving the engine no way to honour it.
+    # group when the type's contributor rules are declared here; a type
+    # without them uses a plain row count. That plain-row-count fallback is
+    # a known gap. A type must declare at least one rule: `validate` refuses
+    # an EMPTY list, since it would claim the distinct-identity guarantee
+    # without giving the engine a way to honour it.
     contributor_rules: dict[str, list[ScopeRule]] = {}
     # Per-type author-supplied row-visibility predicate (see
     # `RowVisibilityFn`): the generalized replacement for one-off,

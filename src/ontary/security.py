@@ -46,10 +46,9 @@ class Consumer(BaseModel):
     # is trusted to set: the intent is for a multi-consumer MCP server to
     # overwrite it, after `resolve_consumer` returns, from the verified access
     # token's `subject` (falling back to `client_id`) -- so that a resolver
-    # cannot forge who authenticated.
-    # That overwrite is the multi-consumer server's job, not this model's,
-    # and until it lands this field is UNENFORCED: any caller can
-    # set it to whatever it wants.
+    # cannot forge who authenticated. That overwrite is the multi-consumer
+    # server's job, not this model's, and until it lands this field is
+    # UNENFORCED: any caller can set it to whatever it wants.
     principal: str | None = None
 
 
