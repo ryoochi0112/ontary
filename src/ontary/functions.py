@@ -49,10 +49,12 @@ from __future__ import annotations
 import builtins
 import inspect
 from collections.abc import Callable, Mapping
+from datetime import datetime
 from typing import Any, Literal, TypeVar, cast, overload
 
 from pydantic import ValidationError
 
+from ontary._runtime import default_clock
 from ontary._typed_api import _TypedReadMixin, list_objects, resolve_capability
 from ontary.audit import CapabilityAccessRecord
 from ontary.errors import PreconditionFailed, ValidationFailed
@@ -72,6 +74,7 @@ from ontary.query import (
 )
 from ontary.security import Consumer
 from ontary.store import StoredObject
+from ontary.store._shared import iso_instant
 from ontary.typesys import choice_value, validate_scalar
 
 T = TypeVar("T", bound="OntologyObject")
@@ -122,6 +125,7 @@ class BoundQuery(_TypedReadMixin):
         capability_providers: Mapping[CapabilityHandle[Any], object] | None = None,
         capability_accesses: list[CapabilityAccessRecord] | None = None,
         disclosures: list[tuple[str, str]] | None = None,
+        clock: Callable[[], datetime] | None = None,
     ) -> None:
         self._query = query
         self._consumer = consumer
@@ -142,6 +146,8 @@ class BoundQuery(_TypedReadMixin):
         # -- and only the exemption -- let this dispatch read a hidden field.
         # See `_TypedReadMixin._disclosures` and `OntologyClient.call_function`.
         self._disclosures = disclosures
+        self._clock = clock if clock is not None else default_clock
+        self._now: datetime | None = None
 
     def _for_author_dispatch(self, declared: frozenset[str]) -> BoundQuery:
         """A throwaway view of this query for ONE declared-Function call:
@@ -171,10 +177,25 @@ class BoundQuery(_TypedReadMixin):
             capability_providers=self._capability_providers,
             capability_accesses=self._capability_accesses,
             disclosures=self._disclosures,
+            clock=self._clock,
         )
         dispatched._declared_capabilities = declared
         dispatched._author_dispatch = _AUTHOR_DISPATCH
         return dispatched
+
+    def now(self) -> datetime:
+        """The Function call's single instant, from the runtime's bound clock
+        (the same clock as `ActionContext.now`).
+
+        The clock is read on the first call and the value is reused for the
+        rest of this Function call, so a Function that never asks reads no
+        clock. A naive value raises `ValidationFailed` code
+        `CLOCK_NOT_TIMEZONE_AWARE`."""
+        if self._now is None:
+            instant = self._clock()
+            iso_instant(instant)
+            self._now = instant
+        return self._now
 
     def capability(self, handle: CapabilityHandle[P]) -> P:
         """The bound provider for `handle`, typed as the handle's protocol

@@ -1136,8 +1136,20 @@ params クラスを指定しない場合、ハンドラは既定値なしの `qu
 ### `BoundQuery`
 
 コンシューマーを固定した `GuardedQuery`: `.get`、`.list`、`.count`、`.exists`、`.traverse`、
-`.aggregate`、`.aggregate_by`、`.count_contributors`、`.capability(handle)`。型付きオーバーロードは
+`.aggregate`、`.aggregate_by`、`.count_contributors`、`.capability(handle)`、`.now()`。型付きオーバーロードは
 `OntologyClient` と同様に機能します（`query.get(Ticket, id) -> Ticket | None`）。
+
+`query.now()` は、ランタイムにバインドされた clock（`ctx.now()` と同じ clock）から、その call の
+単一の時刻を返します。clock は最初の呼び出しで読まれ、同じ Function call 内の以降の呼び出しは
+その時刻を返します。時刻に依存する Function では、`datetime.now()` や clock の Capability ではなく
+これを使います。Capability を宣言すると、すべての call が監査対象になります。
+
+```python
+@ontology.function(api_name="overdueIds")
+def overdue_ids(query: BoundQuery) -> list[str]:
+    now = query.now()
+    return [order.id for order in query.list(WorkOrder) if order.due < now]
+```
 
 入力がない Function は、引数が 1 つのハンドラ `(query)` として宣言し、params なしまたは `{}` で呼び出します。
 
@@ -1204,7 +1216,7 @@ def handler(ctx, params):
     ctx.capability(Mailer).send(...)
 ```
 
-現在時刻には Capability ではなく `ctx.now()` を使います。
+現在時刻には Capability ではなく、アクションでは `ctx.now()`、Function では `query.now()` を使います。
 
 未宣言の Capability を要求すると `UNDECLARED_CAPABILITY`、宣言済みでもプロバイダが
 バインドされていなければ `CAPABILITY_NOT_PROVIDED` になります。

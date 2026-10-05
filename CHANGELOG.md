@@ -18,6 +18,7 @@ you**.
 - `MCPServer` is importable from the package root (`from ontary import MCPServer`), so code can annotate what `build_mcp_server` returns (#61). It is the `mcp` SDK's class and needs the `[mcp]` extra. `import ontary` still works without the extra; touching `MCPServer` raises the builders' install hint, and in a core-only install so does `from ontary import *`. `__all__` now has 46 names.
 - `docs/testing.md` (EN and JA) has a "Testing an MCP server in-process" section: drive the server through `httpx2.ASGITransport`, because a sync `TestClient` runs the app on another thread and the SQLite store then returns `INTERNAL_ERROR` for every tool call (#61).
 - `docs/mcp-serving.md` has a complete authenticated multi-consumer example: a stand-in `TokenVerifier`, real `AuthSettings`, one `tools/call` request with its JSON response, and the `401` a missing or unknown token gets (#56). A doc test runs the program and replays the shown requests in-process, so the page fails `make verify` when it stops matching ontary or `mcp`.
+- `BoundQuery.now()` gives a Function the current time from the runtime's bound clock, the same clock as `ctx.now()` (#154). The clock is read on first use and the instant is reused for the rest of the call. A time-dependent Function no longer needs a clock capability, which made every call audited.
 
 ### Removed
 

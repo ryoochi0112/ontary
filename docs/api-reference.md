@@ -1154,8 +1154,21 @@ matching the action parameter shape without `scope_semantics`. The value is
 
 A `GuardedQuery` with the consumer fixed: `.get`, `.list`, `.count`, `.exists`, `.traverse`,
 `.aggregate`, `.aggregate_by`, `.count_contributors`,
-`.capability(handle)`. Typed overloads
+`.capability(handle)`, `.now()`. Typed overloads
 work the same as on `OntologyClient` (`query.get(Ticket, id) -> Ticket | None`).
+
+`query.now()` returns the call's single instant from the runtime's bound clock,
+the same clock as `ctx.now()`. The clock is read on first use, and later calls
+in the same Function call return that instant. Use it in a time-dependent
+Function instead of `datetime.now()` or a clock capability. A declared
+capability makes every call audited.
+
+```python
+@ontology.function(api_name="overdueIds")
+def overdue_ids(query: BoundQuery) -> list[str]:
+    now = query.now()
+    return [order.id for order in query.list(WorkOrder) if order.due < now]
+```
 
 For a function with no inputs, declare a one-argument handler `(query)` and call
 it with no params or `{}`.
@@ -1225,7 +1238,7 @@ def handler(ctx, params):
     ctx.capability(Mailer).send(...)
 ```
 
-For the current time use `ctx.now()`, not a capability.
+For the current time use `ctx.now()` in an action and `query.now()` in a Function, not a capability.
 
 Requesting an undeclared capability raises `UNDECLARED_CAPABILITY`; a declared one
 with no provider bound raises `CAPABILITY_NOT_PROVIDED`.
