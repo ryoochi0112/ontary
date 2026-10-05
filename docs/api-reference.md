@@ -428,6 +428,11 @@ class EscalateTicketParams(ActionParams):
     reason: str | None = None
 ```
 
+A `date` or `datetime` parameter follows the property rule in
+[Date and datetime values](#date-and-datetime-values) and is refused with
+`INVALID_PARAMS`; over MCP `execute_action` the value is a JSON string, so the
+string rule applies.
+
 #### Events: `Event`, `@ontology.event`, `emits=`, `ctx.emit`, `client.events`
 
 An event is a business fact an action records, such as "order shipped". It is not
@@ -693,13 +698,9 @@ scope-routing keys. Unlike the equality-shaped `where` exemption below,
 
 > **Hydration.** A typed read parses a `datetime`-typed property into a real
 > `datetime` (via Pydantic); the string surface returns the ISO-8601 string exactly as
-> stored. On write, a `date` or an offset-aware `datetime` object is accepted next to
-> the ISO string and persisted as its own `isoformat()` spelling, offset preserved; a
-> naive `datetime` object is refused with a message that says so (`INVALID_RECORD` on
-> the store and ingest paths, `INVALID_PARAMS` for an action parameter,
-> `OPERATOR_TYPE_MISMATCH` for a `where` operand), while a naive ISO *string* is still
-> accepted. The store never rewrites what it persists — only the typed client's
-> hydration step parses on the way out.
+> stored. The store never rewrites what it persists — only the typed client's
+> hydration step parses on the way out. What a write accepts is in
+> [Date and datetime values](#date-and-datetime-values).
 
 > **Redaction shape.** A redacted field comes back as `None` on the typed surface, with
 > its name in `redacted_fields`. On the **string and MCP surfaces the key is absent
@@ -953,6 +954,10 @@ runtime only.
 | `.unlink(handle, from_, to)` | Close one live link, ends as for `link` |
 | `.traverse(handle, anchor) -> list[To]` | The `To` objects linked from `anchor`; `reverse=True` returns the `From` objects linked to it |
 | `.retire(obj)` / `.retire(cls, obj_id)` | Retire the object and close every live link that touches it |
+
+A `date` or `datetime` value passed to `create` or assigned before `save` follows
+[Date and datetime values](#date-and-datetime-values); a refused value raises
+`INVALID_RECORD`.
 
 A typed handler reads an object, changes it, and saves it:
 
@@ -1269,6 +1274,10 @@ with `ConflictError` and code `OBJECT_ALREADY_EXISTS`; the store is left unchang
 An object has at most one live row, and the SQL backends back this with a partial
 unique index. A retired object's id may be inserted again, which starts a new live row.
 
+`insert` and `update` take a `date` or `datetime` value as an ISO-8601 string or a
+`date` / offset-aware `datetime` object; see
+[Date and datetime values](#date-and-datetime-values).
+
 `create_link` needs a live object at both ends. Each id is looked up under the link
 type's declared `from_type` / `to_type`; an id that is missing, retired, or live only
 as some other type is refused with `ValidationFailed` and code
@@ -1413,6 +1422,69 @@ three identifiers. All three shipped backends implement these verbs. The
 action-context cascade is layered above the store's object-retirement
 primitive.
 
+### Date and datetime values
+
+Every write path checks a `date` or `datetime` property value the same way:
+`Store.insert` / `update`, `ActionContext.create` / `save`, `bulk_upsert` /
+`client.ingest`, and action parameters (including MCP `execute_action`).
+
+| Value written | `date` property | `datetime` property |
+| --- | --- | --- |
+| `date` object | Stored as `YYYY-MM-DD` | Refused |
+| Offset-aware `datetime` object | Refused | Stored as its own `isoformat()`, offset preserved |
+| Naive `datetime` object (no `tzinfo`) | Refused | Refused |
+| `"YYYY-MM-DD"` string | Stored verbatim | Refused: a time component is required |
+| Other ISO-8601 date spelling, such as `"20261005"` | Refused | — |
+| ISO-8601 string with a time, with or without an offset (`Z` included) | — | Stored verbatim |
+| Any other string | Refused | Refused |
+
+- **Nothing is normalised.** The store keeps the exact spelling: an offset is not
+  converted to UTC, and `Z` stays `Z`. `eq` and `in` filters match that spelling;
+  the comparison operators compare instants (see
+  [Filters, ordering, and bounded reads](#filters-ordering-and-bounded-reads)).
+- **Naive strings are accepted, naive objects are not.** A naive ISO *string* is
+  stored as written. A naive `datetime` *object* is refused, because adding
+  `tzinfo=` is the only way to say which instant it means. Avoid mixing naive and
+  offset-aware values in one property: the two kinds have no defined order.
+- **Refusal codes.** A refused value raises `ValidationFailed` with
+  `INVALID_RECORD` on `Store.insert` / `update`, `ActionContext.create` / `save`,
+  and per record in an ingest report. An action parameter is refused with
+  `INVALID_PARAMS` before the handler runs. A `where` operand is refused with
+  `OPERATOR_TYPE_MISMATCH`.
+
+```python
+from datetime import datetime, timedelta, timezone
+
+from ontary import InMemoryStore, Ontology, OntologyObject, Source, prop
+from ontary.errors import ValidationFailed
+
+ontology = Ontology("shifts", scope_levels=["org"], min_n=1)
+
+
+@ontology.object(layer="L0", scope="unscoped")
+class Shift(OntologyObject):
+    id: str = prop(primary_key=True)
+    starts_at: datetime
+
+
+ontology.validate()
+store = InMemoryStore(ontology.registry)
+source = Source(source_system="roster")
+jst = timezone(timedelta(hours=9))
+
+store.insert("Shift", {"id": "s1", "starts_at": datetime(2026, 10, 5, 9, tzinfo=jst)}, source)
+store.insert("Shift", {"id": "s2", "starts_at": "2026-10-05T00:00:00Z"}, source)
+assert store.read_current("Shift", "s1").payload["starts_at"] == "2026-10-05T09:00:00+09:00"
+assert store.read_current("Shift", "s2").payload["starts_at"] == "2026-10-05T00:00:00Z"
+
+try:
+    store.insert("Shift", {"id": "s3", "starts_at": datetime(2026, 10, 5, 9)}, source)
+except ValidationFailed as exc:
+    assert exc.code == "INVALID_RECORD"  # a naive datetime object
+else:
+    raise AssertionError("a naive datetime object must be refused")
+```
+
 ### Schema versioning
 
 Every SQLite file is stamped with the engine's `SCHEMA_VERSION` via `PRAGMA
@@ -1459,6 +1531,10 @@ cardinality violation; the other pairs still land, so ingest objects before thei
 links. Re-running a link load is idempotent: a pair identical to a live link is a
 no-op and is still listed in `inserted_ids`, so the second run returns the same
 report as the first.
+
+A `date` or `datetime` value is written as an ISO-8601 string or a `date` /
+offset-aware `datetime` object; a naive `datetime` object is refused with
+`INVALID_RECORD`. See [Date and datetime values](#date-and-datetime-values).
 
 ---
 
