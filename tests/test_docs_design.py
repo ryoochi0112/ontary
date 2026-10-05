@@ -407,19 +407,27 @@ def _relationship_section(path: Path) -> str:
     return "" if match is None else match.group(1)
 
 
-def test_design_guide_relationship_section_phrases() -> None:
-    """The English section presents relationship objects as the chosen model."""
-    section = _relationship_section(DESIGN_GUIDES[0])
-    assert section, "ontology-design.md: missing relationship section"
+@pytest.mark.parametrize("path", DESIGN_GUIDES, ids=lambda path: path.name)
+def test_design_guide_relationship_section_phrases(path: Path) -> None:
+    """Each guide presents relationship objects as the chosen model."""
+    section = _relationship_section(path)
+    assert section, f"{path.name}: missing relationship section"
     for phrase in ("Assignment", "owned=True", "SessionPlacement"):
-        assert phrase in section, f"ontology-design.md: relationship section omits {phrase!r}"
-    assert "No equivalent yet" not in section
-    assert "nearest approximation" not in section
+        assert phrase in section, f"{path.name}: relationship section omits {phrase!r}"
+    for stale in ("No equivalent yet", "nearest approximation", "同等物はまだありません", "最も近い近似"):
+        assert stale not in section, f"{path.name}: relationship section keeps {stale!r}"
 
 
-@pytest.mark.parametrize(
-    "path", (DESIGN_GUIDES[0],), ids=lambda path: path.name
-)
+def test_design_guide_relationship_examples_match_translation() -> None:
+    """The English and Japanese relationship examples are the same code."""
+    english, japanese = (
+        re.findall(r"(?ms)^```python\n(.*?)^```", _relationship_section(p))
+        for p in DESIGN_GUIDES
+    )
+    assert english == japanese
+
+
+@pytest.mark.parametrize("path", DESIGN_GUIDES, ids=lambda path: path.name)
 def test_design_guide_relationship_object_example_runs(path: Path) -> None:
     """The relationship object example creates both links and reads its placement."""
     section = _relationship_section(path)
