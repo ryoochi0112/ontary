@@ -308,6 +308,16 @@ or `StrEnum`) are accepted as states. A primary key cannot have transitions.
 Use `prop(transitions=...)` to attach the graph, and import `TransitionDef` from
 `ontary.meta`; it is not exported from `ontary.__all__`.
 
+A write that breaks the graph is refused with `TRANSITION_NOT_ALLOWED`. The
+message names the current state, the requested state, and the allowed moves:
+
+```text
+TRANSITION_NOT_ALLOWED: Order 'o-1': status cannot move from 'pending' to 'shipped'; allowed from 'pending': ['paid']
+```
+
+The line shows the error code, then its message. The message, `str(exc)`,
+does not include the code; read the code from `exc.code`.
+
 #### `Ontology.rule(cls, name, *, message)`
 
 Decorate a typed predicate after registering `cls` with `@ontology.object`:
@@ -322,6 +332,17 @@ The predicate receives a hydrated object built from the full stored row and
 must read only that object. Its name and message appear in the type declaration;
 the callable is omitted from exported schema data. Rules can be registered
 until `ontology.definition` freezes the ontology.
+
+A write whose new row fails a rule is refused with `RULE_VIOLATED`. The message
+names the rule and its message:
+
+```text
+RULE_VIOLATED: Order 'o-1': rule 'shipped_needs_payment': payment required
+```
+
+An action assigns the new status and saves. It does not pre-check the declared
+moves or rules: the engine refuses the write, and tests should expect the
+engine's code.
 
 #### Choice properties: `Enum` and `Literal`
 
