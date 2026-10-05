@@ -2,11 +2,19 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 import tokenize
 from pathlib import Path
+from typing import Any
 
 import pytest
+
+from ontary.authoring import Ontology, OntologyObject, prop
+from ontary.mcp_server import build_mcp_server, build_multi_consumer_mcp_server
+from ontary.scope import SelfScope
+from ontary.security import Consumer
+from ontary.store import ObjectStore
 
 PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bAC\d+"),
@@ -34,7 +42,6 @@ _PENDING: frozenset[str] = frozenset(
         "src/ontary/errors.py",
         "src/ontary/functions.py",
         "src/ontary/ingest.py",
-        "src/ontary/mcp_server.py",
         "src/ontary/meta.py",
         "src/ontary/model.py",
         "src/ontary/ontology.py",
@@ -184,3 +191,48 @@ def test_src_has_no_spec_ids(path: Path) -> None:
 def test_api_reference_has_no_spec_ids(path: Path) -> None:
     relative_path = path.relative_to(_ROOT).as_posix()
     _assert_pending_ratchet(relative_path, find_spec_ids_in_text(path.read_text()))
+
+
+@pytest.mark.parametrize("multi_consumer", [False, True], ids=["single", "multi"])
+def test_mcp_tools_list_has_no_spec_ids(multi_consumer: bool) -> None:
+    """Both builders expose clean tool and input-schema descriptions in-process."""
+    ontology = Ontology(name="description-check", scope_levels=["workspace"])
+
+    @ontology.object(layer="L0", scope=[SelfScope(level="workspace")])
+    class Workspace(OntologyObject):
+        id: str = prop(primary_key=True)
+
+    ontology.validate()
+    store = ObjectStore(ontology.registry)
+    consumer = Consumer(
+        actor_id="reader",
+        role="Reader",
+        scope_level="workspace",
+        scope_id="workspace-a",
+        kind="ai",
+    )
+    if multi_consumer:
+        server = build_multi_consumer_mcp_server(
+            ontology, store, resolve_consumer=lambda token: consumer
+        )
+    else:
+        server = build_mcp_server(ontology, store, consumer)
+
+    def check_schema(node: Any, path: str) -> None:
+        if isinstance(node, dict):
+            description = node.get("description")
+            if isinstance(description, str):
+                assert not (hits := find_spec_ids_in_text(description)), f"{path}: {hits}"
+            for key, value in node.items():
+                check_schema(value, f"{path}.{key}")
+        elif isinstance(node, list):
+            for index, value in enumerate(node):
+                check_schema(value, f"{path}[{index}]")
+
+    tools = asyncio.run(server.list_tools())
+    assert tools, "server registered no tools"
+    for tool in tools:
+        assert not (hits := find_spec_ids_in_text(tool.description or "")), (
+            f"{tool.name}.description: {hits}"
+        )
+        check_schema(tool.input_schema, f"{tool.name}.input_schema")
