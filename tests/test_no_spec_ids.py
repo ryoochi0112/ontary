@@ -30,17 +30,13 @@ PATTERNS: tuple[re.Pattern[str], ...] = (
 
 _PENDING: frozenset[str] = frozenset(
     {
-        "docs/api-reference.ja.md",
-        "docs/api-reference.md",
         "src/ontary/__init__.py",
         "src/ontary/actions.py",
         "src/ontary/audit.py",
-        "src/ontary/errors.py",
         "src/ontary/functions.py",
         "src/ontary/ingest.py",
         "src/ontary/meta.py",
         "src/ontary/ontology.py",
-        "src/ontary/query.py",
         "src/ontary/scope.py",
         "src/ontary/security.py",
         "src/ontary/store/_shared.py",
