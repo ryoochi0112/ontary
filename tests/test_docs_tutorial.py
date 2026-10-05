@@ -15,7 +15,26 @@ import pytest
 PAGE = Path(__file__).resolve().parent.parent / "docs/tutorial-leave-requests.md"
 EXPECTED_STAGES = 9
 EXPECTED_PYTHON_FENCES = 25
-EXPECTED_TESTS = 6
+TUTORIAL_TESTS = (
+    "test_submit_request",
+    "test_employee_cannot_submit_for_a_colleague",
+    "test_rejecting_approved_request_fails",
+    "test_approval_emits_decision",
+    "test_employee_cannot_approve",
+    "test_colleague_cannot_cancel",
+)
+OWNERSHIP_CHECKS = {
+    "submit": (
+        "    if params.employee_id != ctx.consumer.actor_id:\n"
+        '        raise ActionError("employees submit their own requests", code="PERMISSION_DENIED")\n',
+        "test_employee_cannot_submit_for_a_colleague",
+    ),
+    "cancel": (
+        "    if [owner.id for owner in owners] != [ctx.consumer.actor_id]:\n"
+        '        raise ActionError("employees cancel their own requests", code="PERMISSION_DENIED")\n',
+        "test_colleague_cannot_cancel",
+    ),
+}
 EXPECTED_OUTPUT_BLOCKS = 9
 PYTEST_COMMAND = "pytest test_leave_requests.py -q"
 MAX_LINES = 620
@@ -355,12 +374,36 @@ def test_tutorial_checkpoint(number: int) -> None:
                 "Try it output differs from the text block\n" + _output_diff(wanted, actual)
             )
         if number == EXPECTED_STAGES:
-            tests = [v for k, v in namespace.items() if k.startswith("test_") and callable(v)]
-            assert len(tests) == EXPECTED_TESTS
-            for test in tests:
-                test()
+            tests = [k for k, v in namespace.items() if k.startswith("test_") and callable(v)]
+            assert tests == list(TUTORIAL_TESTS)
     except Exception as error:
         raise AssertionError(f"stage {number}: {error}") from error
+
+
+def _run_tutorial_test(md: str, name: str) -> None:
+    program = _checkpoints(_stages(md))[-1][1]
+    namespace: dict[str, object] = {}
+    exec(compile(program, f"docs/tutorial-leave-requests.md#{name}", "exec"), namespace)
+    test = namespace[name]
+    assert callable(test)
+    try:
+        test()
+    except Exception as error:
+        raise AssertionError(f"{name}: {error}") from error
+
+
+@pytest.mark.parametrize("name", TUTORIAL_TESTS)
+def test_tutorial_scenario_test(name: str) -> None:
+    _run_tutorial_test(PAGE.read_text(), name)
+
+
+@pytest.mark.parametrize("action", sorted(OWNERSHIP_CHECKS))
+def test_removed_ownership_check_names_its_refusal_test(action: str) -> None:
+    check, refusal = OWNERSHIP_CHECKS[action]
+    md = PAGE.read_text()
+    assert md.count(check) == 1, f"{action}: ownership check not found verbatim"
+    with pytest.raises(AssertionError, match=f"^{refusal}: "):
+        _run_tutorial_test(md.replace(check, ""), refusal)
 
 
 @pytest.mark.parametrize("number", range(1, EXPECTED_STAGES + 1), ids=lambda n: f"stage-{n}")

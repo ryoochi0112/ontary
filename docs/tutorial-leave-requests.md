@@ -128,6 +128,8 @@ def submit(ctx: ActionContext, params: SubmitRequest) -> dict[str, str]:
 `ctx.create()` generates the id. The request and employee link commit together.
 `roles=["Employee"]` declares who can submit.
 `ctx.consumer` is the caller, so an employee can submit only their own request.
+This ownership check is an action-level business rule,
+not a replacement for the declared scope in stage 6.
 
 In **Try it**, submit two working days and read the request:
 
