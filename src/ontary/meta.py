@@ -323,7 +323,7 @@ class ObjectTypeDef(BaseModel):
     properties: list[PropertyDef]
     rules: tuple[RuleDef, ...] = ()
     primary_key: str
-    # Authority declaration (spec `declared-contracts` §3 AC1): `True` means
+    # Authority declaration: `True` means
     # the whole type is ontology-owned (no connector supplies it); a dict
     # means the type is otherwise source-backed except for the named
     # properties, each with a default value used when a connector-supplied
@@ -395,8 +395,8 @@ def declared_shape_violation(
 ) -> str | None:
     """Why `payload` does not satisfy `obj_def`'s declared shape, or `None`.
 
-    Added by M9a (spec `ontology-evolution` AC9) to close a hole the evolution
-    investigation found: **only `bulk_upsert` enforced the declared shape.**
+    Added to close a hole the evolution investigation found: **only
+    `bulk_upsert` enforced the declared shape.**
     `Store.insert`/`update` -- and therefore `ActionContext.insert`/`update`, the
     write path every action uses -- did not, so an action could commit a row that
     the same ontology's typed reader then refused to hydrate
@@ -409,9 +409,9 @@ def declared_shape_violation(
     defaults are exempt from the required check -- the store injects them, so a
     caller omitting one is not writing a broken row.
 
-    **An undeclared key is deliberately allowed**, and that is a narrowing of
-    the spec's AC9 with a reason. Hydration ignores extra payload keys, so an
-    extra key cannot produce the failure this function exists to prevent; and
+    **An undeclared key is deliberately allowed**, with a reason. Hydration
+    ignores extra payload keys, so an extra key cannot produce the failure
+    this function exists to prevent; and
     real stores carry them legitimately -- a row whose scope is resolved
     `ViaLink` may still hold the source's own foreign-key field. Enforcing their
     absence here would reject data that works today and buy nothing. `bulk_upsert`
@@ -462,7 +462,7 @@ class LinkTypeDef(BaseModel):
     # False keeps every pre-existing LinkTypeDef backward-compatible; the
     # guarded query layer denies this link to human consumers only.
     identity_revealing: bool = False
-    # Authority declaration (spec `declared-contracts` §3 AC1): `True` means
+    # Authority declaration: `True` means
     # this link type is ontology-owned; `False` (default) means
     # source-backed. Undeclared == source-backed.
     owned: bool = False
@@ -644,7 +644,7 @@ class FunctionDef(BaseModel):
 
         **This property answers one question, and it is not the only one.**
         "Everything it can read is already bounded by the guarded query layer"
-        stays true, but that bound INCLUDES the AC10 contributor exemption: a
+        stays true, but that bound INCLUDES the contributor exemption: a
         capability-less function can still hand a consumer a mean over a field
         they cannot read. Being unable to reach outside the process was never
         the same as being unable to release an individual-bearing number.

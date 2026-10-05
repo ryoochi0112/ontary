@@ -1,10 +1,10 @@
-"""Lineage-stamped bulk ingest API (spec AC9).
+"""Lineage-stamped bulk ingest API.
 
 `bulk_upsert`/`bulk_link` validate each record/pair against the declared
 ontology *before* writing: unknown object/link types, missing primary keys,
 missing required properties, and wrong property types are rejected per-record
 with a typed error collected into an `IngestReport` -- no partial silent
-writes of an invalid record (spec §7). Cardinality violations on link
+writes of an invalid record. Cardinality violations on link
 creation are likewise reported per-pair rather than aborting the whole batch.
 
 This module bypasses the action pipeline (no role/scope checks, no audit --
@@ -157,8 +157,8 @@ def _validate_record(
 ) -> tuple[str, str] | None:
     """Return a `(code, reason)` rejection, or None if the record is valid.
 
-    Authority (declared-contracts §3 AC3, §8 edge cases): a declared owned
-    property is exempt from the required-property check below -- it is
+    Authority: a declared owned property is exempt from the
+    required-property check below -- it is
     forbidden in a source record instead (a connector may never supply an
     ontology-owned property; the declared default is injected on first
     insert, and the merge in `store.update` preserves the current value on
@@ -228,10 +228,10 @@ def bulk_upsert(
     can never carry an owned property (rejected by `_validate_record`
     above), that merge preserves whatever an action most recently wrote to
     an owned property while refreshing every source-backed property from
-    this record (declared-contracts §3 AC4/AC5).
+    this record.
 
-    Authority (declared-contracts §3 AC9): refuses outright, before writing
-    anything, if `store` already has a caller-opened `transaction()` block
+    Authority: refuses outright, before writing anything, if `store`
+    already has a caller-opened `transaction()` block
     open -- same reasoning as `ActionExecutor.execute()`'s refusal. In
     particular, calling `bulk_upsert` from inside a registered action
     handler body raises a `ConflictError` with code
@@ -323,8 +323,8 @@ def bulk_link(
     accepted for symmetry with `bulk_upsert` and future lineage-on-links
     support; the current store schema does not persist link lineage.
 
-    Authority (declared-contracts §3 AC9): refuses outright, before writing
-    anything, if `store` already has a caller-opened `transaction()` block
+    Authority: refuses outright, before writing anything, if `store`
+    already has a caller-opened `transaction()` block
     open. As with `bulk_upsert`, calling `bulk_link` from inside a
     registered action handler body raises a `ConflictError` with code
     `CALLER_TRANSACTION_REFUSED` for the same reason:

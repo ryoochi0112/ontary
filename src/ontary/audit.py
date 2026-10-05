@@ -1,7 +1,7 @@
 """Audit subsystem: models and JSON-safety helpers for the append-only audit
 log persisted by `ontary.store.ObjectStore`.
 
-Kept separable from object/link persistence (spec m35-sdk-refactor §6): the
+Kept separable from object/link persistence: the
 audit log's shape (`AuditEntry`, `WriteRecord`-derived writes) and its
 never-raise JSON encoding (`_safe_json_dumps`) are storage-adjacent concerns,
 not storage-*implementation* concerns -- a future second `Store` backend
@@ -98,22 +98,22 @@ class AuditEntry(BaseModel):
     # falling back to `client_id`) -- separate from `actor`/`role`, which
     # record who the request RESOLVED to. The two can differ: a resolver bug
     # that maps every token to one privileged actor is invisible in `actor`
-    # alone but visible here (spec `multi-consumer-mcp` AC8/AC9).
+    # alone but visible here.
     #
     # `None` means no transport proved an identity for this call: direct
     # Python use, the single-consumer stdio server (`build_mcp_server`), and
     # -- like `invocation_id` before it -- every entry written before this
-    # field existed, since the column is nullable so a pre-M10 file keeps
-    # reading.
+    # field existed, since the column is nullable so a file predating this
+    # field keeps reading.
     principal: str | None = None
     action: str
     target_type: str
     target_id: str | None = None
     params: dict[str, Any] = Field(default_factory=dict)
     outcome: str
-    # The real (op, type, id) writes the action made (declared-contracts §3
-    # AC11), captured via `capture_action_writes` -- empty for
-    # denied/error/rolled-back attempts, since nothing was committed.
+    # The real (op, type, id) writes the action made, captured via
+    # `capture_action_writes` -- empty for denied/error/rolled-back
+    # attempts, since nothing was committed.
     writes: list[WriteRecord] = Field(default_factory=list)
     events: list[EmittedEvent] = Field(default_factory=list)
     capability_accesses: list[CapabilityAccessRecord] = Field(default_factory=list)
@@ -142,9 +142,9 @@ def _placeholder(value: Any) -> dict[str, str]:
 
 
 def _safe_json_dumps(value: Any) -> str:
-    """Serialize `value` to JSON, never raising (declared-contracts §3
-    AC12): `append_audit` must persist an entry even when a param or write
-    value cannot be faithfully JSON-encoded. Per-key placeholders are used
+    """Serialize `value` to JSON, never raising: `append_audit` must persist
+    an entry even when a param or write value cannot be faithfully
+    JSON-encoded. Per-key placeholders are used
     for a dict's offending values where practical; anything else falls back
     to a single whole-value placeholder."""
     try:
