@@ -1,19 +1,18 @@
 """In-memory `Store` implementation: dict-backed, no SQL.
 
-Proves the storage seam (spec m35-sdk-refactor §6 "Storage seam") is real,
-not decorative: `InMemoryStore` implements the same `Store` Protocol as
-`ontary.store.ObjectStore` and passes the shared conformance suite
-(`tests/test_store_conformance.py`) unchanged -- CRUD, links + cardinality,
-authority refusals, audit, and transaction rollback all behave identically.
-It also doubles as a fast, dependency-free test double for user code.
+Proves the storage seam is real, not decorative: `InMemoryStore` implements
+the same `Store` Protocol as `ontary.store.ObjectStore` and passes the
+shared conformance suite (`tests/test_store_conformance.py`) unchanged --
+CRUD, links + cardinality, authority refusals, audit, and transaction
+rollback all behave identically. It also doubles as a fast, dependency-free
+test double for user code.
 
-Deliberately thin: no shared base class with `ObjectStore` (see spec §6
-"Alternative rejected") -- a from-scratch implementation is the only way the
-conformance suite proves the seam rather than exercising inherited SQLite
-helpers by another name. Refinement of that rule: pure CONTRACT logic the
-spec requires to be byte-identical across backends (refusal checks,
-validation, codecs) is shared via `ontary.store._shared` -- see that
-module's doctrine docstring -- while all storage mechanics remain
+Deliberately thin: no shared base class with `ObjectStore` -- a from-scratch
+implementation is the only way the conformance suite proves the seam rather
+than exercising inherited SQLite helpers by another name. Refinement of that
+rule: pure CONTRACT logic that must be byte-identical across backends
+(refusal checks, validation, codecs) is shared via `ontary.store._shared` --
+see that module's doctrine docstring -- while all storage mechanics remain
 from-scratch here, so the conformance suite still proves the seam.
 """
 
@@ -126,7 +125,7 @@ class InMemoryStore:
     shallow-copy snapshot/restore of the three top-level lists (objects,
     links, audit) rather than a deep copy.
 
-    **Tenancy here is structural** (M8b). Two `InMemoryStore` instances share no
+    **Tenancy here is structural**. Two `InMemoryStore` instances share no
     state, so one instance is one tenant's data by construction and cannot leak
     the way a shared file or database could. The `tenant` argument is still
     honored -- object and link rows carry it and reads filter on it -- so the
@@ -140,7 +139,7 @@ class InMemoryStore:
     def __init__(
         self, registry: OntologyRegistry, *, tenant: str = DEFAULT_TENANT
     ) -> None:
-        """`tenant` scopes every read and write, matching `ObjectStore` (M8b).
+        """`tenant` scopes every read and write, matching `ObjectStore`.
         Two in-memory stores cannot share rows anyway, so this exists for parity:
         a test double whose tenant argument was ignored would let a caller
         "verify" isolation against a store that cannot leak."""
@@ -164,8 +163,8 @@ class InMemoryStore:
         # AUTOINCREMENT`: a monotonic, per-row identity distinct from the
         # payload primary key (`Lineage.object_id`), whose uniqueness among
         # current rows the store does not enforce -- see `read_page`'s
-        # docstring (spec pagination-hardening §5's amended decision). Never
-        # exposed on `Lineage`/`StoredObject` (see `Lineage`'s docstring);
+        # docstring. Never exposed on `Lineage`/`StoredObject` (see `Lineage`'s
+        # docstring);
         # `read_page`'s only consumer-facing surface for it is the
         # out-of-band cursor string.
         self._next_row_id = 1
@@ -431,11 +430,11 @@ class InMemoryStore:
 
     def read_all(self, obj_type: str) -> list[StoredObject]:
         """Raw (unredacted, unscoped) read of every current row of
-        `obj_type`, ordered by the same per-row identity as `read_page`
-        (spec AC2). Its OWN single pass -- NOT a `read_page` loop: looping
-        would re-scan/re-sort per batch, and a batch-boundary loop is
-        exactly what silently dropped tied rows under the old payload-pk-
-        keyed cursor design this task replaces."""
+        `obj_type`, ordered by the same per-row identity as `read_page`. Its
+        OWN single pass -- NOT a `read_page` loop: looping would
+        re-scan/re-sort per batch, and a batch-boundary loop is exactly what
+        silently dropped tied rows under the old payload-pk-keyed cursor
+        design this replaces."""
         with self._transaction_lock:
             current = [
                 row
@@ -449,22 +448,22 @@ class InMemoryStore:
 
     def _resolve_page_token(self, obj_type: str, token: str) -> int:
         """Resolve an untrusted `after_key` PAGE TOKEN to the `row_id` it
-        was issued for (spec §5's T2 amendment) -- a linear scan here rather
-        than a maintained `token -> row_id` dict, unlike `ObjectStore`'s
-        real unique SQL index: this backend is a dependency-free test
-        double, never the scale-sensitive path the index in `ObjectStore`
-        exists to keep O(1) (see `idx_objects_page_token`'s comment), and a
-        maintained dict would need its own transaction-rollback snapshot
-        logic for no behavioral gain. The scan additionally requires
-        `row["object_type"] == obj_type`: `page_token` is only unique
-        *globally*, not scoped to a type, so a token issued for one object
-        type is a real token belonging to a DIFFERENT type's row --
-        without this guard it would still resolve to that row's `row_id`
-        and be accepted as a valid resume point into the CALLER's
-        requested type, silently reinterpreted as an arbitrary positional
-        offset into an unrelated type's ordering instead of refused.
-        Raises a validation-kind `INVALID_CURSOR` failure if `token` was never
-        issued for `obj_type` specifically."""
+        was issued for -- a linear scan here rather than a maintained `token
+        -> row_id` dict, unlike `ObjectStore`'s real unique SQL index: this
+        backend is a dependency-free test double, never the scale-sensitive
+        path the index in `ObjectStore` exists to keep O(1) (see
+        `idx_objects_page_token`'s comment), and a maintained dict would
+        need its own transaction-rollback snapshot logic for no behavioral
+        gain. The scan additionally requires `row["object_type"] ==
+        obj_type`: `page_token` is only unique *globally*, not scoped to a
+        type, so a token issued for one object type is a real token
+        belonging to a DIFFERENT type's row -- without this guard it would
+        still resolve to that row's `row_id` and be accepted as a valid
+        resume point into the CALLER's requested type, silently
+        reinterpreted as an arbitrary positional offset into an unrelated
+        type's ordering instead of refused. Raises a validation-kind
+        `INVALID_CURSOR` failure if `token` was never issued for `obj_type`
+        specifically."""
         for row in self._objects:
             if (
                 row["page_token"] == token
@@ -482,11 +481,10 @@ class InMemoryStore:
         Orders by `row_id` -- this store's own monotonic per-row counter
         (mirroring `ObjectStore`'s physical SQLite ROWID), not the payload
         primary key (which also can't express the ties the store allows
-        among current rows -- spec pagination-hardening §5's amended
-        decision). `row_id` never leaves this method except resolved-into
-        internally: the CURSOR a caller actually receives, `PagedRow.key`,
-        is a random per-row page token instead (spec §5's T2 amendment --
-        see `PagedRow`'s docstring for why), resolved back to `row_id` via
+        among current rows). `row_id` never leaves this method except
+        resolved-into internally: the CURSOR a caller actually receives,
+        `PagedRow.key`, is a random per-row page token instead (see
+        `PagedRow`'s docstring for why), resolved back to `row_id` via
         `_resolve_page_token` when it comes back as `after_key`."""
         check_read_page_batch(batch)
         with self._transaction_lock:
@@ -669,16 +667,16 @@ class InMemoryStore:
     # -- audit ---------------------------------------------------------
 
     def append_audit(self, entry: AuditEntry) -> None:
-        """Persist one audit entry. Never raises (declared-contracts §3
-        AC12): params/writes that fail JSON encoding are recorded as
-        placeholders via `_safe_json_dumps`, matching `ObjectStore`'s
-        JSON-round-trip behavior exactly even though this backend has no
-        physical serialization requirement of its own."""
+        """Persist one audit entry. Never raises: params/writes that fail
+        JSON encoding are recorded as placeholders via `_safe_json_dumps`,
+        matching `ObjectStore`'s JSON-round-trip behavior exactly even
+        though this backend has no physical serialization requirement of its
+        own."""
         # encode-then-decode through the SHARED codec -- literally the same
         # serialize/rebuild round trip this method used to hand-write per
         # field. The hand-written version silently dropped every field it
-        # forgot to list, and shipped that bug twice (`invocation_id`, M7a;
-        # `kind`, M7b -- see git history). With the field enumeration living
+        # forgot to list, and shipped that bug twice (`invocation_id`,
+        # `kind` -- see git history). With the field enumeration living
         # only in `ontary.store._shared`, this backend no longer HAS a list
         # to forget a field from; `test_audit_entries_round_trip_every_field`
         # still guards the codec itself.
@@ -710,7 +708,7 @@ def _static_conformance_check(registry: OntologyRegistry) -> Store:
     """Never called at runtime -- exists purely so mypy (which runs
     `--strict` over `src/`, see `make verify`) fails the build if
     `InMemoryStore` ever drifts from the `Store` Protocol it's declared to
-    satisfy (spec §6 "Storage seam"). Returning `InMemoryStore(registry)`
+    satisfy. Returning `InMemoryStore(registry)`
     typed as `Store` forces a structural check at type-check time with zero
     runtime cost and zero `# type: ignore`."""
     return InMemoryStore(registry)

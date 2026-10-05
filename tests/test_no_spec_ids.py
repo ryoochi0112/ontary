@@ -34,13 +34,6 @@ _PENDING: frozenset[str] = frozenset(
         "src/ontary/ontology.py",
         "src/ontary/scope.py",
         "src/ontary/security.py",
-        "src/ontary/store/_shared.py",
-        "src/ontary/store/_sql.py",
-        "src/ontary/store/inmemory.py",
-        "src/ontary/store/postgres.py",
-        "src/ontary/store/protocol.py",
-        "src/ontary/store/sqlite.py",
-        "src/ontary/store/values.py",
         "src/ontary/typesys.py",
     }
 )

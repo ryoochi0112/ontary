@@ -1,6 +1,6 @@
 """Cross-backend pure contract helpers.
 
-Logic the spec requires to be byte-identical across all three `Store`
+Logic that must be byte-identical across all three `Store`
 backends -- refusal checks, validation, and codecs -- lives here ONCE,
 instead of being hand-copied per backend. Doctrine (refining the "no shared
 base class" rule the backends' module docstrings state): this module may
@@ -80,7 +80,7 @@ class AuditRowFields(NamedTuple):
 def encode_audit_entry(entry: AuditEntry) -> AuditRowFields:
     """`AuditEntry` -> persisted string forms, exactly as every backend
     already wrote them: `_safe_json_dumps` so an unencodable value degrades
-    to a placeholder rather than raising (declared-contracts §3 AC12)."""
+    to a placeholder rather than raising."""
     return AuditRowFields(
         ts=entry.ts.isoformat(),
         actor=entry.actor,
@@ -137,7 +137,7 @@ def decode_audit_entry(row: AuditRowLike) -> AuditEntry:
     )
 
 
-# -- write-path contract helpers (B4) ---------------------------------------
+# -- write-path contract helpers ---------------------------------------
 #
 # The refusal/validation sequence every backend ran as a hand-copied preamble.
 # Message strings, exception types, and check ORDER are frozen behavior -- do
@@ -343,13 +343,13 @@ def prepare_insert(
     mint the primary key if absent, and refuse a declared-shape violation.
     The shape check runs AFTER the primary key is minted (a caller may
     legitimately omit it) and BEFORE anything is written, so a refused row
-    leaves no trace (spec `ontology-evolution` AC9). The missing-primary-key
-    UUID fallback here is no longer the only lever: an action handler's
-    `ctx.insert` fills the primary key from the runtime's configured
-    `id_factory` before the store is ever called, so this fallback now only
-    fires for a caller that reaches a `Store` directly, bypassing an
-    `ActionContext` -- a direct `store.insert` call therefore still needs an
-    explicit primary key to get a deterministic id."""
+    leaves no trace. The missing-primary-key UUID fallback here is no longer
+    the only lever: an action handler's `ctx.insert` fills the primary key
+    from the runtime's configured `id_factory` before the store is ever
+    called, so this fallback now only fires for a caller that reaches a
+    `Store` directly, bypassing an `ActionContext` -- a direct
+    `store.insert` call therefore still needs an explicit primary key to get
+    a deterministic id."""
     obj_def = resolve_object_type(registry, obj_type)
 
     if capturing and not obj_def.is_owned_type:
