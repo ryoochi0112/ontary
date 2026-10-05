@@ -9,8 +9,10 @@ the six actions at `FIXTURE_NOW`, on a clock the test can move.
 from __future__ import annotations
 
 import inspect
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -859,3 +861,17 @@ def test_given_fixtures_when_work_orders_are_seeded_then_each_site_has_a_reporte
     for site in ("a", "b"):
         assert world.manager.get(WorkOrder, world.orders[f"{site}_reported"]).status == "reported"
         assert world.manager.get(WorkOrder, world.orders[f"{site}_done"]).status == "done"
+
+
+# -- the example README runs --------------------------------------------------------------------
+
+
+def test_given_the_example_readme_when_its_python_blocks_run_then_every_claim_holds() -> None:
+    readme = Path(__file__).resolve().parent.parent / "examples/maintenance_desk/README.md"
+    text = readme.read_text()
+    blocks = re.findall(r"^```python\n(.*?)^```$", text, flags=re.DOTALL | re.MULTILINE)
+
+    assert len(blocks) == text.count("```python") == 3
+    namespace: dict[str, object] = {"__name__": "readme"}
+    for number, code in enumerate(blocks, start=1):
+        exec(compile(code, f"examples/maintenance_desk/README.md#{number}", "exec"), namespace)

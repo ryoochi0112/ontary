@@ -260,4 +260,4 @@ For deep architectural concepts and security rules, see the following topics:
 * Explore agent integration details in [MCP Serving](mcp-serving.md).
 * Learn about command-line tools in the [CLI Reference](cli.md).
 * Find testing guidelines in [Testing](testing.md).
-* See a fully realized example in the [Tickets Example](../examples/tickets/README.md).
+* See a fully realized example in the [Tickets Example](../examples/tickets/README.md) and the [Maintenance Desk Example](../examples/maintenance_desk/README.md).
