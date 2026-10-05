@@ -18,6 +18,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import subprocess
+import sys
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -377,3 +381,24 @@ def test_run_mcp_example_builds_server_and_returns_query_envelope() -> None:
         "Refund request",
     }
     assert payload["next_cursor"] is not None
+
+
+def test_run_mcp_module_starts_from_repo_root_without_pythonpath() -> None:
+    """The README's module command starts without relying on PYTHONPATH."""
+    pytest.importorskip("mcp")
+    env = os.environ.copy()
+    env.pop("PYTHONPATH", None)
+
+    result = subprocess.run(
+        [sys.executable, "-m", "examples.tickets.run_mcp"],
+        cwd=Path(__file__).resolve().parents[1],
+        env=env,
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "ModuleNotFoundError" not in result.stderr
