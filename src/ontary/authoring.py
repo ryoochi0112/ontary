@@ -1,13 +1,13 @@
-"""Class-based ontology authoring (spec `typed-authoring` §6): author
+"""Class-based ontology authoring: author
 Pydantic classes decorated with `@ontology.object(...)`; the SDK derives
 the existing descriptor IR (`ObjectTypeDef`/`PropertyDef`) from them. Zero
 engine changes -- `GuardedQuery`/`ActionExecutor`/`ObjectStore`/MCP still
 only ever see the derived descriptors.
 
-T1 covers object-type authoring (`OntologyObject`, `prop()`,
-`Ontology.object()`). This task (T2) adds links (`LinkHandle`,
+Object-type authoring uses (`OntologyObject`, `prop()`,
+`Ontology.object()`). Link authoring adds links (`LinkHandle`,
 `Ontology.link()`), assembles the `ScopePolicy` from the per-class
-`scope`/`contributor`/`row_visibility` kwargs T1 stashed, and exposes the
+`scope`/`contributor`/`row_visibility` kwargs stashed, and exposes the
 built `OntologyDef` as `Ontology.definition` (+ `Ontology.validate()`).
 """
 
@@ -96,12 +96,11 @@ __all__ = [
     "target",
 ]
 
-# Author field names reserved for OntologyObject's own hydration metadata
-# (spec §8 edge case).
+# Author field names reserved for OntologyObject's own hydration metadata.
 _RESERVED_FIELD_NAMES = frozenset({"redacted_fields", "lineage"})
 
 # Annotation -> PropertyType for the scalar types the mapping recognizes
-# directly (spec §6); `dict[...]`/`list[...]`/`Any` are handled separately
+# directly; `dict[...]`/`list[...]`/`Any` are handled separately
 # below since they're generic/singleton, not a fixed set of types.
 _ANNOTATION_MAP: dict[Any, PropertyType] = {
     str: "str",
@@ -137,7 +136,7 @@ def prop(
     `json_schema_extra["ontary"]` for `Ontology.object()` to read back.
     Everything else (default, description, ...) passes straight through
     to `Field`, so plain annotated fields and bare `Field(...)` keep
-    working on the same class (AC3).
+    working on the same class.
     """
     ontary_meta: dict[str, Any] = {"primary_key": primary_key, "accept": _normalize_accept(accept)}
     if sensitivity is not None:
@@ -168,7 +167,7 @@ def _field_ontary_meta(annotation_extra: Any) -> dict[str, Any]:
 
 def _unwrap_optional(annotation: Any) -> tuple[Any, bool]:
     """`X | None` -> `(X, True)`; anything else -> `(annotation, False)`.
-    Only unwraps a plain two-armed Optional (spec §6); a wider union isn't
+    Only unwraps a plain two-armed Optional; a wider union isn't
     a supported annotation shape.
     """
     origin = get_origin(annotation)
@@ -401,7 +400,7 @@ def _derive_properties(
 ) -> tuple[list[PropertyDef], str]:
     """Introspects `cls.model_fields` -> `(PropertyDef list, primary_key)`.
     Raises `ValidationFailed` with code `ONTOLOGY_INVALID` for a reserved field name, an
-    unmappable annotation, an AC6 sensitivity/Optional mismatch, or a
+    unmappable annotation, a sensitivity/Optional mismatch, or a
     primary-key count other than exactly one.
 
     Event mode refuses object identity/state/scope metadata and returns an
@@ -411,9 +410,8 @@ def _derive_properties(
     explicit default: without one, Pydantic still treats it as required
     at construction (`X | None` doesn't imply `= None` the way it would
     in some other typed-model libraries) -- which would make a sparse/
-    absent-and-restricted stored value fail typed hydration (spec §6 "T3
-    hydration", AC6). `cls.model_rebuild(force=True)` regenerates the
-    validator after the mutation; a no-op call when nothing changed would
+    absent-and-restricted stored value fail typed hydration.
+    `cls.model_rebuild(force=True)` regenerates the validator after the mutation; a no-op call when nothing changed would
     still be cheap, but is skipped entirely unless needed.
     """
     props: list[PropertyDef] = []
@@ -477,7 +475,7 @@ def _derive_properties(
             raise ValidationFailed(
                 f"{cls.__name__}.{field_name}: restricted sensitivity "
                 "(human_visible=False or ai_usable=False) requires an "
-                "Optional annotation (AC6)",
+                "Optional annotation",
                 code="ONTOLOGY_INVALID",
             )
 
@@ -553,7 +551,7 @@ def _marker(
 def target(cls: type["OntologyObject"], **field_kwargs: Any) -> Any:
     """Field marker on an `ActionParams` field: derives
     `ActionParameterDef.refers_to=<cls's registered api_name>` and
-    `scope_semantics="target"` (spec §6). The field's annotation must be
+    `scope_semantics="target"`. The field's annotation must be
     `str` (or `str | None`) -- checked at `@ontology.action` derivation
     time, not here (a bare `Field(...)` call can't see the annotation it's
     assigned to).
@@ -564,7 +562,7 @@ def target(cls: type["OntologyObject"], **field_kwargs: Any) -> Any:
 def scope_ref(cls: type["OntologyObject"], **field_kwargs: Any) -> Any:
     """Field marker on an `ActionParams` field: derives
     `ActionParameterDef.refers_to=<cls's registered api_name>` and
-    `scope_semantics="scope"` (spec §6). Same `str`-annotation requirement
+    `scope_semantics="scope"`. Same `str`-annotation requirement
     as `target()`.
     """
     return _marker(cls, "scope", **field_kwargs)
@@ -772,13 +770,13 @@ class Ontology:
     """Authoring facade: accumulates an `OntologyRegistry` plus, per
     registered class, its derived `ObjectTypeDef` and the scope/
     contributor/row_visibility kwargs it was decorated with -- no module-
-    global state, so two `Ontology` instances never cross-talk (spec §8).
+    global state, so two `Ontology` instances never cross-talk.
     `.link(...)` derives `LinkTypeDef`s; `.definition` lazily assembles the
     `ScopePolicy` from the stored per-class kwargs and builds the
     `OntologyDef` the client binds to -- built once and cached: further
     `.object()`/`.link()` calls after that first access raise, since the
     registry/policy they'd mutate has already been baked into the returned
-    `OntologyDef` (spec §6).
+    `OntologyDef`.
     """
 
     def __init__(self, name: str, scope_levels: list[str], min_n: int = 3) -> None:
@@ -853,8 +851,7 @@ class Ontology:
         Either way the author writes NO `cast`. The alternative -- keeping the
         single `type[P]` signature and making every Protocol author write
         `cast(Any, LLMClient)` at the declaration site -- puts a wart on the
-        front door of this milestone's headline feature for the exact use case
-        the spec presents as canonical.
+        front door of this feature for the canonical use case.
         """
         api_name = name if name is not None else proto.__name__
         self._check_not_frozen(f"capability {api_name!r}")
@@ -1099,7 +1096,7 @@ class Ontology:
         """Derives an `ActionTypeDef` + `ActionParameterDef`s from
         `params_cls` and registers both it and the decorated handler
         (`(ctx: ActionContext, params: params_cls) -> dict[str, Any]`) on
-        this `Ontology` (spec `typed-actions.md` §6). `api_name` defaults
+        this `Ontology`. `api_name` defaults
         to `params_cls.__name__`; `display_name` defaults to `api_name`.
         `target` must be an `OntologyObject` class already registered on
         THIS ontology (same identity discipline as `.link()`'s endpoints).
@@ -1376,7 +1373,7 @@ class Ontology:
                 registry=self.registry,
                 policy=self._build_policy(),
                 functions=functions,
-                # Typed action handlers ride the definition (C2), mirroring
+                # Typed action handlers ride the definition, mirroring
                 # the function binding above. Safe to snapshot here: this
                 # first access freezes registration, so the map cannot go
                 # stale.
@@ -1485,7 +1482,7 @@ class Ontology:
         id_factory: Callable[[], str] | None = None,
         capabilities: Mapping[CapabilityHandle[Any], builtins.object] | None = None,
     ) -> OntologyRuntime:
-        """Builds an `OntologyRuntime` (spec `typed-actions.md` AC6): ONE
+        """Builds an `OntologyRuntime`: ONE
         `GuardedQuery` + ONE `ActionExecutor` bound to `store`, with every
         `@ontology.action(...)`-declared handler on THIS ontology
         auto-bound exactly once. `runtime.for_consumer(consumer)` then

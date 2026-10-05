@@ -1,4 +1,4 @@
-"""Shared low-level typed-model layer (C1 of the staged refactor).
+"""Shared low-level typed-model layer.
 
 The pieces of the authoring DSL that the RUNTIME also needs -- the
 `OntologyObject`/`ActionParams`/`FunctionParams` base classes and their class stamps,
@@ -40,7 +40,7 @@ class OntologyObject(BaseModel):
     Carries two hydration-time private attrs the client sets after a
     guarded read (never author model fields, so they can't collide with a
     declared property): `_redacted_fields` (properties hidden from this
-    consumer) and `_lineage` (the engine's frozen `Lineage`, M3.5 T7).
+    consumer) and `_lineage` (the engine's frozen `Lineage`).
     `extra="ignore"` keeps forward-compat with payload keys added by later
     migrations.
     """
@@ -50,13 +50,13 @@ class OntologyObject(BaseModel):
     _redacted_fields: frozenset[str] = PrivateAttr(default_factory=frozenset)
     _lineage: Lineage | None = PrivateAttr(default=None)
 
-    # Stamped by `Ontology.object()`'s decorator (T3): the registered
+    # Stamped by `Ontology.object()`'s decorator: the registered
     # `api_name`, per-property `Sensitivity`, and the `OntologyRegistry`
     # instance the class was registered on, so `OntologyClient`/
     # `hydrate()` can resolve/redact a class without holding a reference to
     # the `Ontology` facade that registered it. `None`/empty on an
     # undecorated class -- that's how a typed client call recognizes "never
-    # registered" and raises a validation-kind `UNKNOWN_NAME` failure (spec §8).
+    # registered" and raises a validation-kind `UNKNOWN_NAME` failure.
     #
     # These MUST be read via `cls.__dict__.get(...)`, never plain attribute
     # access -- a normal lookup falls through to a base class's stamp on an
@@ -85,10 +85,10 @@ _T = TypeVar("_T", bound=OntologyObject)
 
 def hydrate(cls: type[_T], stored: StoredObject, consumer_kind: ConsumerKind) -> _T:
     """`cls.model_validate(stored.payload)` + set `_redacted_fields`/
-    `_lineage` (spec §6). `_redacted_fields` names properties whose
+    `_lineage`. `_redacted_fields` names properties whose
     declared `Sensitivity` is restricted for `consumer_kind` AND absent
     from the payload -- a *visible* optional property that happens to be
-    absent (sparse ingest) is NOT redacted, only `None`/default (spec §8).
+    absent (sparse ingest) is NOT redacted, only `None`/default.
     A `ValidationError` from a malformed stored value is wrapped in the
     validation kind, never left as a bare traceback.
     """
@@ -135,9 +135,8 @@ def hydrate(cls: type[_T], stored: StoredObject, consumer_kind: ConsumerKind) ->
 
 
 class ActionParams(BaseModel):
-    """Base class for typed action-params models (spec `typed-actions.md`
-    §6): plain scalar annotations reuse the same annotation->`PropertyType`
-    table as `OntologyObject`; `target(cls)`/`scope_ref(cls)` field markers
+    """Base class for typed action-params models:
+    plain scalar annotations reuse the same annotation->`PropertyType` table as `OntologyObject`; `target(cls)`/`scope_ref(cls)` field markers
     derive `refers_to`/`scope_semantics`. `extra="forbid"` matches the
     pipeline's own declared-shape validation, which already rejects an
     unknown parameter (`ActionExecutor._validate_params`) -- the class
@@ -208,9 +207,8 @@ class FunctionParams(BaseModel):
 
 
 def _class_stamp(cls: type[Any]) -> tuple[str | None, OntologyRegistry | None]:
-    """THE shared class/handle-resolution helper (spec `typed-actions.md`
-    §6): reads an author-decorated class's `_ontary_api_name`/
-    `_ontary_registry` stamps via `cls.__dict__` ONLY -- never plain
+    """THE shared class/handle-resolution helper:
+    reads an author-decorated class's `_ontary_api_name`/`_ontary_registry` stamps via `cls.__dict__` ONLY -- never plain
     attribute access, which would fall through to a base class's ClassVar
     on an undecorated SUBCLASS (`class Sub(Ticket): ...` inherits the
     stamps without being decorated itself) and silently resolve `Sub` as if

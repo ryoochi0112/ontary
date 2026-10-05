@@ -1,6 +1,6 @@
-"""The declarations value (spec `declared-contracts` §3 AC10, §6.6): a
+"""The declarations value: a
 single enumerable value stating this runtime's answers to the questions a
-consumer would otherwise have to trust prose (docstrings, this spec) for.
+consumer would otherwise have to trust prose (docstrings) for.
 
 `declarations(ontology)` combines the runtime's fixed answers -- true for
 every `OntologyClient`/MCP server this SDK builds, because they are baked
@@ -29,7 +29,7 @@ from ontary.ontology import OntologyDef
 class Declarations(BaseModel):
     """This runtime's answers to authority, capabilities, write-back,
     re-ingest, visibility, transaction-ownership, idempotency, audit-scope,
-    and min-N (spec AC10/AC15). Frozen: a `Declarations` value
+    and min-N. Frozen: a `Declarations` value
     is a read-only snapshot, not something a consumer can mutate and expect
     to change runtime behavior."""
 
@@ -70,7 +70,7 @@ class Declarations(BaseModel):
         "and always when a call releases a hidden field through the "
         "contributor exemption"
     )
-    """M8b tightened the first clause. It said "unscoped", which was true when a
+    """The first clause was tightened. It said "unscoped", which was true when a
     store served one tenant by construction; now a store is bound to a tenant and
     its audit log shows that tenant's entries only. Still administrative WITHIN a
     tenant -- no consumer scope, no redaction -- which is the part that matters for
@@ -83,7 +83,7 @@ class Declarations(BaseModel):
         "policies enforce the same boundary in the database (unless rls=False), "
         "and a superuser bypasses them by Postgres design"
     )
-    # Added by M10 (spec `multi-consumer-mcp` AC11), rewritten after a
+    # Rewritten after a
     # review caught clause 1 making an unscoped whole-SDK claim that is
     # false on `build_mcp_server`: that server has no verifier and refuses
     # NOTHING, so "a deployment with no configured verifier refuses every
