@@ -28,8 +28,6 @@ PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"原則"),
 )
 
-_PENDING: frozenset[str] = frozenset()
-
 _ROOT = Path(__file__).resolve().parent.parent
 _SRC_ROOT = _ROOT / "src" / "ontary"
 _SOURCE_FILES = tuple(sorted(_SRC_ROOT.rglob("*.py")))
@@ -140,18 +138,12 @@ def test_find_spec_ids_in_text_reports_line_numbers() -> None:
     ]
 
 
-def _assert_pending_ratchet(path: str, hits: list[tuple[int, str]]) -> None:
-    if path in _PENDING:
-        assert hits, f"{path}: now clean; remove it from _PENDING"
-        return
-    details = "\n".join(f"{path}:{line}: {token}" for line, token in hits)
-    assert not hits, details
-
-
 @pytest.mark.parametrize("path", _SOURCE_FILES, ids=lambda path: path.relative_to(_ROOT).as_posix())
 def test_src_has_no_spec_ids(path: Path) -> None:
     relative_path = path.relative_to(_ROOT).as_posix()
-    _assert_pending_ratchet(relative_path, find_spec_ids(path.read_text()))
+    hits = find_spec_ids(path.read_text())
+    details = "\n".join(f"{relative_path}:{line}: {token}" for line, token in hits)
+    assert not hits, details
 
 
 @pytest.mark.parametrize(
@@ -161,7 +153,9 @@ def test_src_has_no_spec_ids(path: Path) -> None:
 )
 def test_api_reference_has_no_spec_ids(path: Path) -> None:
     relative_path = path.relative_to(_ROOT).as_posix()
-    _assert_pending_ratchet(relative_path, find_spec_ids_in_text(path.read_text()))
+    hits = find_spec_ids_in_text(path.read_text())
+    details = "\n".join(f"{relative_path}:{line}: {token}" for line, token in hits)
+    assert not hits, details
 
 
 @pytest.mark.parametrize("multi_consumer", [False, True], ids=["single", "multi"])
