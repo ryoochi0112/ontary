@@ -1,6 +1,6 @@
 # Coming from Domain-Driven Design
 
-**English**
+[English](coming-from-ddd.md) · [日本語](coming-from-ddd.ja.md)
 
 *Explanation* — This page maps familiar terms to ontary. The [design guide](ontology-design.md) explains design choices, and [Getting started](getting-started.md) shows the code.
 

@@ -9,6 +9,7 @@ import ontary
 
 ROOT = Path(__file__).resolve().parent.parent
 EN_PAGE = ROOT / "docs" / "coming-from-ddd.md"
+JA_PAGE = ROOT / "docs" / "coming-from-ddd.ja.md"
 REQUIRED_TERMS = (
     "ubiquitous language",
     "bounded context",
@@ -29,10 +30,26 @@ REQUIRED_TERMS = (
 
 
 def _table_rows(md: str) -> list[list[str]]:
-    """Return data cells from the Term by term table, excluding its headings."""
-    section = md.split("## Term by term\n", 1)[1].split("\n## ", 1)[0]
-    lines = [line for line in section.splitlines() if line.startswith("|")]
-    return [[cell.strip() for cell in line.strip("|").split("|")] for line in lines[2:]]
+    """Return data cells from the page's term table, excluding its headings."""
+    lines = md.splitlines()
+    table_start = next(i for i, line in enumerate(lines) if line.startswith("|"))
+    table_lines: list[str] = []
+    for line in lines[table_start:]:
+        if not line.startswith("|"):
+            break
+        table_lines.append(line)
+    return [
+        [cell.strip() for cell in line.strip("|").split("|")]
+        for line in table_lines[2:]
+    ]
+
+
+def _page_path(target: str) -> str:
+    """Normalize a link to its English page path, ignoring any anchor."""
+    path = target.split("#", 1)[0]
+    if path.endswith(".ja.md"):
+        path = f"{path[:-len('.ja.md')]}.md"
+    return path
 
 
 def test_ddd_page_maps_every_required_term() -> None:
@@ -101,3 +118,22 @@ def test_ddd_page_links_design_guide_and_getting_started() -> None:
     assert "](getting-started.md)" in md
     assert "You do not need Domain-Driven Design (DDD) to use ontary." in md
     assert "## Related pages\n" in md
+
+
+def test_ddd_page_en_and_ja_have_the_same_rows_and_links() -> None:
+    en_rows = _table_rows(EN_PAGE.read_text())
+    ja_rows = _table_rows(JA_PAGE.read_text())
+
+    assert len(en_rows) == len(ja_rows)
+    for en_row, ja_row in zip(en_rows, ja_rows, strict=True):
+        assert re.fullmatch(re.escape(en_row[0]) + r"（[^）]+）", ja_row[0])
+
+        en_targets = re.findall(r"\]\(([^)]+)\)", " | ".join(en_row))
+        ja_targets = re.findall(r"\]\(([^)]+)\)", " | ".join(ja_row))
+        assert len(en_targets) == len(ja_targets)
+        assert sum("#" in target for target in en_targets) == sum(
+            "#" in target for target in ja_targets
+        )
+        assert [_page_path(target) for target in en_targets] == [
+            _page_path(target) for target in ja_targets
+        ]
