@@ -131,6 +131,12 @@ def main() -> None:
         "Traceback" not in message,
         "no traceback -- a first-contact message, not a crash",
     )
+    try:
+        ontary.MCPServer  # noqa: B018 -- the attribute access is the check
+    except ImportError as exc:
+        check("ontary[mcp]" in str(exc), "ontary.MCPServer names the extra to install")
+    else:
+        raise SystemExit("FAIL: ontary.MCPServer resolved without the mcp extra")
 
     print("5. the CLI entrypoint is installed")
     ontary_command = Path(sys.executable).with_name("ontary")

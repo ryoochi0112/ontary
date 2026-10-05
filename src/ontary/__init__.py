@@ -23,6 +23,7 @@ from __future__ import annotations
 
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _installed_version
+from typing import TYPE_CHECKING
 
 from ontary.actions import (
     ActionContext,
@@ -87,6 +88,11 @@ from ontary.store import (
 # and by the clean-install smoke script).
 from ontary.store.postgres import PostgresStore
 
+if TYPE_CHECKING:
+    # Type checkers see the real class; at runtime `__getattr__` below loads it
+    # on first access, so `import ontary` never imports the optional `mcp` extra.
+    from mcp.server.mcpserver import MCPServer as MCPServer
+
 try:
     __version__ = _installed_version("ontary")
 except PackageNotFoundError:  # pragma: no cover - only when run from a bare checkout
@@ -127,6 +133,7 @@ __all__ = [
     "InMemoryStore",
     "InternalError",
     "LinkHandle",
+    "MCPServer",
     "ObjectStore",
     "OntaryError",
     "Ontology",
@@ -154,3 +161,14 @@ __all__ = [
     "scope_ref",
     "target",
 ]
+
+
+def __getattr__(name: str) -> object:
+    """Load `MCPServer` (the `mcp` SDK class the builders return) on first
+    access. Without the `mcp` extra this raises the builders' own install hint
+    -- including for `from ontary import *`, which fetches every `__all__` name."""
+    if name == "MCPServer":
+        from ontary.mcp_server import _load_mcp_server
+
+        return _load_mcp_server()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

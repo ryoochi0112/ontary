@@ -60,6 +60,8 @@ from ontary.functions import BoundQuery
 from ontary.mcp_server import (
     DEFAULT_LIMIT,
     MAX_LIMIT,
+    MCP_EXTRA_HINT,
+    MCP_INCOMPATIBLE_HINT,
     _load_mcp_server,
     build_mcp_server,
     main,
@@ -1534,6 +1536,51 @@ def test_missing_mcp_extra_names_the_install_command() -> None:
     assert "unsupported" not in message
     # The cause is preserved, so the real import failure is still diagnosable.
     assert isinstance(exc_info.value.__cause__, ModuleNotFoundError)
+
+
+def test_root_reexports_the_mcp_server_class() -> None:
+    """`from ontary import MCPServer` is the class the builders return (#61)."""
+    import ontary
+
+    assert ontary.MCPServer is MCPServer
+    assert "MCPServer" in ontary.__all__
+
+
+def test_root_mcp_server_without_the_extra_names_the_install_command() -> None:
+    """Without `mcp`, only touching `ontary.MCPServer` fails, with the
+    builders' install hint (#61). A star import fetches every `__all__` name,
+    so in a core-only install it raises the same hint (accepted, documented)."""
+    import ontary
+
+    with _mcp_uninstalled():
+        with pytest.raises(ImportError) as attr_info:
+            ontary.MCPServer  # noqa: B018 -- the attribute access is the test
+        with pytest.raises(ImportError) as star_info:
+            exec("from ontary import *", {})
+
+    for exc_info in (attr_info, star_info):
+        assert str(exc_info.value) == MCP_EXTRA_HINT
+        assert isinstance(exc_info.value.__cause__, ModuleNotFoundError)
+
+
+def test_root_mcp_server_with_mcp_1x_layout_reports_incompatible_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import ontary
+
+    monkeypatch.setitem(sys.modules, "mcp.server.mcpserver", None)
+
+    with pytest.raises(ImportError) as exc_info:
+        ontary.MCPServer  # noqa: B018 -- the attribute access is the test
+
+    assert str(exc_info.value) == MCP_INCOMPATIBLE_HINT
+
+
+def test_root_getattr_keeps_the_normal_error_for_unknown_names() -> None:
+    import ontary
+
+    with pytest.raises(AttributeError, match="NoSuchName"):
+        ontary.NoSuchName  # noqa: B018 -- the attribute access is the test
 
 
 def test_entrypoint_reports_the_missing_extra_before_the_wiring_hint() -> None:

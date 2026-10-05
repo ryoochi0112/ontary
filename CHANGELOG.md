@@ -11,6 +11,11 @@ you**.
 
 ## [Unreleased]
 
+### Added
+
+- `MCPServer` is importable from the package root (`from ontary import MCPServer`), so code can annotate what `build_mcp_server` returns (#61). It is the `mcp` SDK's class and needs the `[mcp]` extra. `import ontary` still works without the extra; touching `MCPServer` raises the builders' install hint, and in a core-only install so does `from ontary import *`. `__all__` now has 46 names.
+- `docs/testing.md` (EN and JA) has a "Testing an MCP server in-process" section: drive the server through `httpx2.ASGITransport`, because a sync `TestClient` runs the app on another thread and the SQLite store then returns `INTERNAL_ERROR` for every tool call (#61).
+
 ### Removed
 
 - Dict-form Function handlers on `@ontology.function` and `FunctionRegistry` (#103), deprecated in 0.19.0. Declare a `FunctionParams` subclass, or take only `(query)`; any other handler raises `ValidationFailed` `ONTOLOGY_INVALID` at declaration.

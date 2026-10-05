@@ -4,7 +4,7 @@
 
 *Reference* — This page lists the public names of `ontary` for lookup, and [Getting started](getting-started.md) and [Testing your ontology](testing.md) show them in use.
 
-The curated front door of `ontary`: **45 names** in `__all__`. The rest of the
+The curated front door of `ontary`: **46 names** in `__all__`. The rest of the
 engine remains available from its canonical submodule (`ontary.meta`,
 `ontary.store`, and so on).
 
@@ -34,7 +34,7 @@ read, serve — start with the [README](../README.md).
 
 ## Front door
 
-`__all__` is sorted, duplicate-free, importable, and exactly 45 names. These
+`__all__` is sorted, duplicate-free, importable, and exactly 46 names. These
 are the names an ontology author should reach for without choosing an engine
 namespace.
 
@@ -48,8 +48,14 @@ namespace.
 ### Runtime entries
 
 `Declarations`, `EventRecord`, `Finding`, `InMemoryStore`, `ObjectStore`,
-`OntologyClient`, `Page`, `PostgresStore`, `ScopePolicy`, `TypedPage`,
+`MCPServer`, `OntologyClient`, `Page`, `PostgresStore`, `ScopePolicy`, `TypedPage`,
 `__version__`, `build_mcp_server`, and `declarations`.
+
+`MCPServer` is the `mcp` SDK's server class, re-exported because the MCP
+builders return it; it needs the `[mcp]` extra (`pip install 'ontary[mcp]'`).
+`import ontary` works without the extra, and only touching `MCPServer` raises
+an `ImportError` naming the install command. In a core-only install that
+includes `from ontary import *`, which fetches every `__all__` name.
 
 ### Error classes
 
@@ -57,7 +63,7 @@ namespace.
 `PermissionDenied`, `PreconditionFailed`, `ValidationFailed`, and
 `VisibilityError`.
 
-The 45-name count is asserted exactly by `tests/test_docs.py`, so a
+The 46-name count is asserted exactly by `tests/test_docs.py`, so a
 new root export cannot quietly expand this vocabulary.
 
 ```python

@@ -687,8 +687,8 @@ def test_ontary_all_is_sorted_unique_and_importable() -> None:
     # The front door is pinned EXACTLY, not to a ceiling: both references
     # publish this number in prose, so a name added or dropped without editing
     # them must fail here rather than drift under a budget.
-    assert len(all_names) == 45, (
-        "ontary.__all__ is no longer the documented 45 names: "
+    assert len(all_names) == 46, (
+        "ontary.__all__ is no longer the documented 46 names: "
         f"{len(all_names)} names -- update docs/api-reference{{,.ja}}.md too"
     )
     assert len(all_names) == len(set(all_names)), (
@@ -1113,8 +1113,36 @@ def test_testing_page_fences_form_one_passing_test_module() -> None:
     exec(compile("\n".join(fences), "docs/testing.md", "exec"), namespace)
     tests = [v for k, v in namespace.items() if k.startswith("test_") and callable(v)]
     assert len(tests) >= 3
+    # Each test is called synchronously below, so an `async def test_*` would
+    # return an un-awaited coroutine and pass without running (#61).
+    coroutines = [t.__name__ for t in tests if inspect.iscoroutinefunction(t)]
+    assert not coroutines, f"testing.md tests must be sync (use asyncio.run): {coroutines}"
     for test in tests:
         test()
+
+
+MCP_TESTING_SECTION = {
+    _DOCS / "testing.md": "## Testing an MCP server in-process",
+    _DOCS / "testing.ja.md": "## MCP サーバーをプロセス内でテストする",
+}
+
+
+def test_mcp_testing_section_names_the_thread_trap_and_is_identical_in_en_and_ja() -> None:
+    """The in-process MCP section (#61) names the trap and the fix, leaves
+    authentication to mcp-serving, and JA carries the EN code byte for byte
+    (only the EN fences run, in the test above)."""
+    fences = {}
+    for path, heading in MCP_TESTING_SECTION.items():
+        section = _markdown_section(path.read_text(), heading)
+        for term in ("TestClient", "ASGITransport", "INTERNAL_ERROR", "mcp-serving"):
+            assert term in section, f"{path.name}: MCP section does not mention {term}"
+        for term in ("AuthSettings", "TokenVerifier"):
+            assert term not in section, f"{path.name}: auth belongs in mcp-serving ({term})"
+        found = re.findall(r"```python\n(.*?)```", section, re.DOTALL)
+        assert len(found) == 1, f"{path.name}: expected one python fence"
+        fences[path] = found[0]
+    en, ja = fences.values()
+    assert en == ja
 
 
 # The one place the API reference states the date/datetime write rule (#57),

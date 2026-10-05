@@ -741,3 +741,17 @@ def test_event_emits_typing_surface() -> None:
         @ontology.action(InvalidParams, target=Record, roles=[], emits=[NotAnEvent])  # type: ignore[list-item]
         def invalid(ctx: ActionContext, params: InvalidParams) -> dict[str, Any]:
             return {}
+
+
+def test_root_mcp_server_types_the_builder_result() -> None:
+    """`ontary.MCPServer` is the builders' declared return type (#61)."""
+    ontology, store = build_ontology()
+    load_fixtures(store)
+    consumer = Consumer(
+        actor_id="agent-1", role="Agent", scope_level="queue", scope_id="q", kind="human"
+    )
+
+    server = ontary.build_mcp_server(ontology, store, consumer)
+
+    assert_type(server, ontary.MCPServer)
+    assert isinstance(server, ontary.MCPServer)
