@@ -10,6 +10,30 @@ import ontary
 ROOT = Path(__file__).resolve().parent.parent
 EN_PAGE = ROOT / "docs" / "coming-from-ddd.md"
 JA_PAGE = ROOT / "docs" / "coming-from-ddd.ja.md"
+BANNED_EN = (
+    r"\bDDD\b",
+    "domain-driven",
+    "aggregate root",
+    "bounded context",
+    "value object",
+    "domain event",
+    "ubiquitous language",
+    "anti-corruption",
+)
+BANNED_JA = (
+    "ドメイン駆動",
+    "集約ルート",
+    "境界づけられたコンテキスト",
+    "値オブジェクト",
+    "ドメインイベント",
+    "ユビキタス言語",
+    "腐敗防止",
+)
+ALLOWED_PAGES = (
+    "coming-from-ddd.md",
+    "coming-from-ddd.ja.md",
+    "roadmap.md",
+)
 REQUIRED_TERMS = (
     "ubiquitous language",
     "bounded context",
@@ -27,6 +51,19 @@ REQUIRED_TERMS = (
     "specification",
     "anti-corruption layer",
 )
+
+
+def _ddd_violations(text: str, *, readme: bool = False) -> list[str]:
+    """Return line-numbered matches for banned vocabulary in Markdown text."""
+    violations: list[str] = []
+    for line_number, line in enumerate(text.splitlines(), start=1):
+        if readme and "docs/coming-from-ddd" in line:
+            continue
+        visible_line = re.sub(r"\]\([^)]+\)", "]()", line)
+        for phrase in (*BANNED_EN, *BANNED_JA):
+            for match in re.finditer(phrase, visible_line, flags=re.IGNORECASE):
+                violations.append(f"{line_number}: {match.group(0)}")
+    return violations
 
 
 def _table_rows(md: str) -> list[list[str]]:
@@ -50,6 +87,47 @@ def _page_path(target: str) -> str:
     if path.endswith(".ja.md"):
         path = f"{path[:-len('.ja.md')]}.md"
     return path
+
+
+def test_no_other_page_uses_ddd_vocabulary() -> None:
+    paths = [ROOT / "README.md"]
+    paths.extend(
+        path
+        for path in sorted((ROOT / "docs").glob("*.md"))
+        if path.name not in ALLOWED_PAGES
+        and not path.read_text().startswith("<!-- site-page:")
+    )
+    failures = []
+    for path in paths:
+        violations = _ddd_violations(path.read_text(), readme=path.name == "README.md")
+        failures.extend(
+            f"{path.relative_to(ROOT)}:{violation}" for violation in violations
+        )
+    assert failures == [], "\n".join(failures)
+
+
+def test_ddd_matcher_catches_a_planted_phrase() -> None:
+    assert _ddd_violations("a bounded context") == ["1: bounded context"]
+    assert _ddd_violations("[x](coming-from-ddd.md)") == []
+    readme_line = "See [Coming from Domain-Driven Design](docs/coming-from-ddd.md)"
+    assert _ddd_violations(readme_line, readme=True) == []
+
+
+def test_design_guide_links_the_ddd_page() -> None:
+    guides = (
+        (ROOT / "docs" / "ontology-design.md", "coming-from-ddd.md"),
+        (ROOT / "docs" / "ontology-design.ja.md", "coming-from-ddd.ja.md"),
+    )
+    for path, target in guides:
+        text = path.read_text()
+        heading = "### Start from the domain's language"
+        assert heading in text, path.name
+        assert "### Domain-driven design" not in text, path.name
+        start = text.index(heading)
+        end = text.find("\n### ", start + len(heading))
+        section = text[start:] if end == -1 else text[start:end]
+        assert f"]({target})" in section, path.name
+        assert _ddd_violations(section) == [], path.name
 
 
 def test_ddd_page_maps_every_required_term() -> None:

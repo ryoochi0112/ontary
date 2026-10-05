@@ -13,6 +13,7 @@ you**.
 
 ### Added
 
+- A new explanation page maps Domain-Driven Design terms to ontary, including what it does not support, and a docs test keeps that vocabulary off every other page (#53).
 - The docs site now publishes `llms.txt`, a nav-ordered index with one-line page descriptions, and `llms-full.txt`, which puts every English page in one Markdown file with links made absolute. Both files are generated at build time from the nav (#59).
 - `MCPServer` is importable from the package root (`from ontary import MCPServer`), so code can annotate what `build_mcp_server` returns (#61). It is the `mcp` SDK's class and needs the `[mcp]` extra. `import ontary` still works without the extra; touching `MCPServer` raises the builders' install hint, and in a core-only install so does `from ontary import *`. `__all__` now has 46 names.
 - `docs/testing.md` (EN and JA) has a "Testing an MCP server in-process" section: drive the server through `httpx2.ASGITransport`, because a sync `TestClient` runs the app on another thread and the SQLite store then returns `INTERNAL_ERROR` for every tool call (#61).

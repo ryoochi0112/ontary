@@ -27,7 +27,7 @@ department chart, or user interface changes.
 
 ## Core principles
 
-### Domain-driven design
+### Start from the domain's language
 
 Start with the language and decisions of the domain, not the shape of an export.
 An `ObjectTypeDef` should represent a business concept with a stable identity; a
@@ -45,6 +45,8 @@ storage edit.
 
 Keep physical integration behind that model. A source column may inform a property,
 but it should not dictate an object boundary or public name.
+
+For a term-by-term mapping of these ideas to ontary, see [the explanation page](coming-from-ddd.md).
 
 *Source: Palantir, "Ontology design: Best practices".*
 

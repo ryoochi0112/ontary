@@ -89,7 +89,7 @@ RETIREMENT_DOTTED_IDENTIFIERS = frozenset(
 )
 
 _COVERAGE_INVENTORY = (
-    "Domain-driven design",
+    "Start from the domain's language",
     "Don't repeat yourself (rule of three)",
     "Open for extension, closed for modification",
     "Composition over deep hierarchies",
