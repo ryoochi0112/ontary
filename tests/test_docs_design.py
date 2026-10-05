@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -396,3 +397,102 @@ def test_design_guide_events_section_example_runs(path: Path) -> None:
         required += ("audit", "past tense", "*Event", "retention")
     missing = [phrase for phrase in required if phrase not in section]
     assert not missing, f"{path.name}: events section omits {missing}"
+
+
+def _relationship_section(path: Path) -> str:
+    match = re.search(
+        r"(?ms)^### Links and object-backed link types\n(.*?)(?=^### |^## |\Z)",
+        path.read_text(),
+    )
+    return "" if match is None else match.group(1)
+
+
+@pytest.mark.parametrize("path", DESIGN_GUIDES, ids=lambda path: path.name)
+def test_design_guide_relationship_section_phrases(path: Path) -> None:
+    """Each guide presents relationship objects as the chosen model."""
+    section = _relationship_section(path)
+    assert section, f"{path.name}: missing relationship section"
+    for phrase in ("Assignment", "owned=True", "SessionPlacement"):
+        assert phrase in section, f"{path.name}: relationship section omits {phrase!r}"
+    for stale in ("No equivalent yet", "nearest approximation", "同等物はまだありません", "最も近い近似"):
+        assert stale not in section, f"{path.name}: relationship section keeps {stale!r}"
+
+
+def test_design_guide_relationship_examples_match_translation() -> None:
+    """The English and Japanese relationship examples are the same code."""
+    english, japanese = (
+        re.findall(r"(?ms)^```python\n(.*?)^```", _relationship_section(p))
+        for p in DESIGN_GUIDES
+    )
+    assert english == japanese
+
+
+@pytest.mark.parametrize("path", DESIGN_GUIDES, ids=lambda path: path.name)
+def test_design_guide_relationship_object_example_runs(path: Path) -> None:
+    """The relationship object example creates both links and reads its placement."""
+    section = _relationship_section(path)
+    assert section, f"{path.name}: missing relationship section"
+    blocks = re.findall(r"(?ms)^```python\n(.*?)^```", section)
+    assert len(blocks) == 1, f"{path.name}: expected one python example"
+    namespace: dict[str, object] = {
+        "__name__": f"guide_relationship_{path.stem.replace('.', '_')}"
+    }
+    exec(compile(blocks[0], str(path), "exec", dont_inherit=True), namespace)
+
+    ontology = namespace["_ontology"]
+    assert isinstance(ontology, ontary.Ontology)
+    store = ontary.InMemoryStore(ontology.registry)
+    store.insert("Session", {"id": "session-1"}, source=_SOURCE)
+    store.insert("Room", {"id": "room-1"}, source=_SOURCE)
+    client = ontology.bind(store).for_consumer(
+        consumer(role="ops", scope_level="team", scope_id="team-1")
+    )
+
+    SessionPlacement = namespace["SessionPlacement"]
+    ScheduleSession = namespace["ScheduleSession"]
+    assert client.call_function(SessionPlacement(session_id="session-1")) is None
+
+    starts_at = datetime(2026, 10, 6, 9, tzinfo=timezone.utc)
+    ends_at = datetime(2026, 10, 6, 10, tzinfo=timezone.utc)
+    result = client.execute(
+        ScheduleSession(
+            session_id="session-1",
+            room_id="room-1",
+            starts_at=starts_at,
+            ends_at=ends_at,
+        )
+    )
+    assignment_id = result["assignment_id"]
+    assert store.links_from("assignment_session", assignment_id) == ["session-1"]
+    assert store.links_from("assignment_room", assignment_id) == ["room-1"]
+
+    placement = client.call_function(SessionPlacement(session_id="session-1"))
+    assert placement is not None
+    assert placement["room_id"] == "room-1"
+    # The Function returns datetime objects, so compare the aware UTC values directly.
+    assert placement["starts_at"] == starts_at
+    assert placement["ends_at"] == ends_at
+
+    assert ontology.registry.get_link_type("assignment_session").owned is True
+    assert ontology.registry.get_link_type("assignment_room").owned is True
+
+
+def test_roadmap_records_links_will_not_carry_properties() -> None:
+    roadmap = (_ROOT / "docs" / "roadmap.md").read_text()
+    assert "## Decided against" in roadmap
+    assert "## Later" in roadmap
+    assert roadmap.index("## Decided against") < roadmap.index("## Later")
+    section = roadmap.split("## Decided against", 1)[1].split("\n## ", 1)[0]
+    assert "Links will not carry properties" in section
+    assert "ontology-design.md#links-and-object-backed-link-types" in section
+
+
+def test_changelog_changed_list_mentions_relationship_objects() -> None:
+    """Version-agnostic: finds the release section that carries #58."""
+    changelog = (_ROOT / "CHANGELOG.md").read_text()
+    sections = re.findall(r"(?ms)^## \[[^\]]+\][^\n]*\n(.*?)(?=^## \[|\Z)", changelog)
+    matching = [section for section in sections if "(#58)" in section]
+    assert len(matching) == 1, "CHANGELOG must carry exactly one #58 release section"
+    changed_match = re.search(r"(?ms)^### Changed\n(.*?)(?=^### |\Z)", matching[0])
+    assert changed_match is not None, "the #58 section is missing ### Changed"
+    assert "#58" in changed_match.group(1)

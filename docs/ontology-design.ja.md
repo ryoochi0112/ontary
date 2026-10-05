@@ -264,16 +264,102 @@ interface 宣言がなく、二つの `ObjectTypeDef` インスタンスが互�
 
 ### Links and object-backed link types
 
-関係の意味が端点、方向、`Cardinality`、統制フラグで捉えられるときは `LinkTypeDef` を
-使います。関係にドメインから名前を付け、両端を検証し、ソースではなく Action がリンクを
-作るときは `owned` を宣言します。ドメインの例では、リンクによって通常の包含、
-同一性を明かす traverse、Action が所有する関係を区別できます。
+時間、役割、順位、出自など、独自の事実を持つ関係は、オブジェクトタイプとして表し、各参加者にリンクします。
+Foundry はこれを object-backed link type と呼びます。
 
-Foundry の object-backed link type は関係にプロパティを付けます。**同等物はまだありません。
-`LinkTypeDef` にはペイロードプロパティがなく、最も近い近似は、各参加者を `LinkTypeDef`
-でつなぐ明示的な関係 `ObjectTypeDef` です。** 役割、有効日、順位、出自など、関係自体に
-属する事実にはその形を使います。関係オブジェクトは、そのライフサイクルに `ActionTypeDef`
-が必要になるときの正しい対象にもなります。
+端点、方向、`Cardinality` が関係のすべてを表すときは、通常の `LinkTypeDef` を使います。
+関係に独自の事実やライフサイクルがあるときは、関係オブジェクトを使います。
+
+各リンクにはドメインの言葉で名前を付けます。
+ソースではなく Action がリンクを作るときは、`owned` を宣言します。
+
+```python
+from datetime import datetime
+from typing import Any
+
+from ontary import (
+    ActionContext,
+    ActionError,
+    ActionParams,
+    BoundQuery,
+    Cardinality,
+    FunctionParams,
+    LinkHandle,
+    Ontology,
+    OntologyObject,
+    prop,
+    ref,
+    target,
+)
+
+_ontology = Ontology("scheduling", scope_levels=["team"])
+
+
+@_ontology.object(layer="L0", scope="unscoped")
+class Session(OntologyObject):
+    id: str = prop(primary_key=True)
+
+
+@_ontology.object(layer="L0", scope="unscoped")
+class Room(OntologyObject):
+    id: str = prop(primary_key=True)
+
+
+@_ontology.object(layer="L0", scope="unscoped", owned=True)
+class Assignment(OntologyObject):
+    id: str = prop(primary_key=True)
+    starts_at: datetime
+    ends_at: datetime
+
+
+assignment_session: LinkHandle[Assignment, Session] = _ontology.link(
+    "assignment_session", Assignment, Session, Cardinality.MANY_TO_ONE, owned=True
+)
+assignment_room: LinkHandle[Assignment, Room] = _ontology.link(
+    "assignment_room", Assignment, Room, Cardinality.MANY_TO_ONE, owned=True
+)
+
+
+class ScheduleSession(ActionParams):
+    session_id: str = target(Session)
+    room_id: str = ref(Room)
+    starts_at: datetime
+    ends_at: datetime
+
+
+@_ontology.action(ScheduleSession, target=Session, roles=["ops"])
+def schedule_session(ctx: ActionContext, p: ScheduleSession) -> dict[str, str]:
+    session = ctx.get(Session, p.session_id)
+    if session is None:
+        raise ActionError("session does not exist", code="PRECONDITION_FAILED")
+    assignment = ctx.create(Assignment, starts_at=p.starts_at, ends_at=p.ends_at)
+    ctx.link(assignment_session, assignment, session)
+    ctx.link(assignment_room, assignment, p.room_id)
+    return {"assignment_id": assignment.id}
+
+
+class SessionPlacement(FunctionParams):
+    session_id: str = ref(Session)
+
+
+@_ontology.function(SessionPlacement)
+def session_placement(
+    query: BoundQuery, p: SessionPlacement
+) -> dict[str, Any] | None:
+    assignments = query.traverse(assignment_session, p.session_id, reverse=True)
+    if not assignments:
+        return None
+    assignment = assignments[0]
+    room = query.traverse(assignment_room, assignment.id)[0]
+    return {
+        "room_id": room.id,
+        "starts_at": assignment.starts_at,
+        "ends_at": assignment.ends_at,
+    }
+```
+
+部屋が不明な場合、ctx.link はそれを拒否し、Action 全体がロールバックされます。
+セッションの移動は、古い Assignment をリタイアする独自のビジネス Action です。
 
 同じ関連を、制約のない外部キープロパティとリンクの両方で独立にエンコードしないでください。
 プロパティがスコープや寄与者の解決に必要な場合を除きます。両方が必要なら、一つの

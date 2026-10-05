@@ -31,6 +31,7 @@ you**.
   with `isTicketEscalated`. `OpenEscalation` is merged into `EscalateTicket`,
   and `ResolveTicket` / `ArchiveTicket` are renamed to `ResolveEscalation` /
   `ArchiveEscalation`.
+- The design guide's "Links and object-backed link types" section (EN and JA) now defines relationships with facts as objects linked to participants. It shows a runnable Session, Room, and Assignment example that a doc test executes. The roadmap also records that links will not carry properties (#58).
 - `client.call_function` raises `ValidationFailed` `INVALID_PARAMS` (was `TypeError`) for an argument that is neither a function name nor a `FunctionParams` instance (#103).
 - The public `FunctionHandler` alias is now `Callable[..., Any]`, a `(query)` or `(query, params)` handler; it was `Callable[[BoundQuery, dict[str, Any]], Any]` (#103).
 - `FunctionRegistry.function(api_name, params_cls=None)` takes an optional params class, matching `FunctionRegistry.register` (#103).
