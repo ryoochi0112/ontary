@@ -15,7 +15,7 @@ import inspect
 import re
 import sys
 from pathlib import Path
-from typing import get_args, get_origin, get_type_hints
+from typing import Any, get_args, get_origin, get_type_hints
 
 import pytest
 from pydantic import BaseModel
@@ -1115,3 +1115,110 @@ def test_testing_page_fences_form_one_passing_test_module() -> None:
     assert len(tests) >= 3
     for test in tests:
         test()
+
+
+# The one place the API reference states the date/datetime write rule (#57),
+# and the write sites that must point at it. Anchors are hard-coded because
+# `mkdocs build --strict` does not validate `#anchor` links in this repo.
+DATETIME_RULE: dict[Path, dict[str, Any]] = {
+    _DOCS / "api-reference.md": {
+        "heading": "### Date and datetime values",
+        "anchor": "date-and-datetime-values",
+        "sites": (
+            "### The `Store` protocol",
+            "### `ActionContext`",
+            "## Bulk ingest",
+            "#### `ActionParams`",
+        ),
+        "hydration": "> **Hydration.**",
+    },
+    _DOCS / "api-reference.ja.md": {
+        "heading": "### date と datetime の値",
+        "anchor": "date-と-datetime-の値",
+        "sites": (
+            "### `Store` プロトコル",
+            "### `ActionContext`",
+            "## バルク取り込み",
+            "#### `ActionParams`",
+        ),
+        "hydration": "> **ハイドレーション。**",
+    },
+}
+
+
+def _markdown_section(text: str, heading: str) -> str:
+    """The lines under ``heading`` up to the next heading of the same or a
+    higher level, skipping `#` lines inside code fences."""
+    level = len(heading) - len(heading.lstrip("#"))
+    lines = text.splitlines()
+    assert heading in lines, f"heading {heading!r} is missing"
+    start = lines.index(heading) + 1
+    body: list[str] = []
+    in_fence = False
+    for line in lines[start:]:
+        if line.startswith("```"):
+            in_fence = not in_fence
+        if not in_fence and line.startswith("#"):
+            other = len(line) - len(line.lstrip("#"))
+            if other <= level and line[other : other + 1] == " ":
+                break
+        body.append(line)
+    return "\n".join(body)
+
+
+@pytest.mark.parametrize("path", list(DATETIME_RULE), ids=lambda p: p.name)
+def test_datetime_write_rule_is_stated_once_and_linked_from_every_write_site(
+    path: Path,
+) -> None:
+    """Strangers found the datetime write format by failing a test (#57). The
+    rule lives in one subsection; each write site and the Hydration note link
+    to it, and the Hydration note no longer restates the write half."""
+    rule = DATETIME_RULE[path]
+    text = path.read_text()
+    section = _markdown_section(text, rule["heading"])
+    for code in ("INVALID_RECORD", "INVALID_PARAMS"):
+        assert f"`{code}`" in section, f"{path.name}: subsection lacks {code}"
+    link = f"(#{rule['anchor']})"
+    for site in rule["sites"]:
+        assert link in _markdown_section(text, site), (
+            f"{path.name}: {site!r} does not link to {rule['heading']!r}"
+        )
+    hydration = next(
+        p for p in text.split("\n\n") if p.startswith(rule["hydration"])
+    )
+    assert link in hydration, f"{path.name}: Hydration note does not link the rule"
+    assert "naive" not in hydration, (
+        f"{path.name}: Hydration note still restates the write rule"
+    )
+
+
+def test_datetime_write_rule_anchors_match_the_mkdocs_slugs() -> None:
+    """The hard-coded anchors are what mkdocs.yml's `toc` slugify
+    (`pymdownx.slugs.slugify(case="lower")`) produces. For a heading with no
+    punctuation that is lowercase with spaces as `-`; that rule is spelled out
+    here because `pymdownx` lives in the `docs` group, which the verify job
+    does not install."""
+    for rule in DATETIME_RULE.values():
+        title = rule["heading"].lstrip("#").strip()
+        assert not re.search(r"[^\w\s]", title), f"{title!r} has punctuation"
+        assert title.lower().replace(" ", "-") == rule["anchor"]
+
+
+def test_datetime_write_rule_example_runs_and_is_identical_in_en_and_ja() -> None:
+    """The subsection's example is run as published, and JA carries the same
+    code byte for byte so the two languages cannot teach different rules."""
+    fences = {}
+    for path, rule in DATETIME_RULE.items():
+        section = _markdown_section(path.read_text(), rule["heading"])
+        found = re.findall(r"```python\n(.*?)```", section, re.DOTALL)
+        assert len(found) == 1, f"{path.name}: expected one python fence"
+        fences[path] = found[0]
+    en, ja = fences.values()
+    assert en == ja
+    namespace: dict[str, object] = {}
+    # `dont_inherit`: run it like a reader's own module, without this file's
+    # `from __future__ import annotations` turning `datetime` into a string.
+    code = compile(
+        en, "docs/api-reference.md#date-and-datetime-values", "exec", dont_inherit=True
+    )
+    exec(code, namespace)

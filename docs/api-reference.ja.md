@@ -420,6 +420,10 @@ class EscalateTicketParams(ActionParams):
     reason: str | None = None
 ```
 
+`date` / `datetime` 型のパラメータは [date と datetime の値](#date-と-datetime-の値) のプロパティの規則に従い、
+拒否されると `INVALID_PARAMS` になります。MCP の `execute_action` では値が JSON
+文字列なので、文字列の規則が適用されます。
+
 #### イベント: `Event`・`@ontology.event`・`emits=`・`ctx.emit`・`client.events`
 
 イベントは、Action が記録する業務上の事実です（たとえば「注文が出荷された」）。監査では
@@ -688,13 +692,9 @@ Function 集計の狭い例外は、下記の「フィルター」と「集計�
 
 > **ハイドレーション。** 型付き読み取りは `datetime` 型のプロパティを実際の
 > `datetime` にパースします（Pydantic 経由）。文字列 surface は保存されたままの
-> ISO-8601 文字列を返します。書き込み時は、ISO 文字列に加えて `date` オブジェクトと
-> オフセット付き（aware）の `datetime` オブジェクトも受け付け、その `isoformat()` の
-> 綴りをオフセットを保ったまま永続化します。naive な `datetime` オブジェクトは理由を
-> 示すメッセージ付きで拒否します（ストア・取り込み経路では `INVALID_RECORD`、Action
-> パラメータでは `INVALID_PARAMS`、`where` の operand では `OPERATOR_TYPE_MISMATCH`）。
-> naive な ISO *文字列* は従来どおり受け付けます。ストアが永続化する内容を書き換える
-> ことはありません — 型付きクライアントの取り出し時のハイドレーションだけがパースします。
+> ISO-8601 文字列を返します。ストアが永続化する内容を書き換えることはありません —
+> 型付きクライアントの取り出し時のハイドレーションだけがパースします。書き込みで
+> 受け付ける値は [date と datetime の値](#date-と-datetime-の値) を参照してください。
 
 > **リダクションの形。** リダクションされたフィールドは、型付き surface では `None`
 > として返り、名前が `redacted_fields` に載ります。しかし**文字列 surface と MCP では
@@ -941,6 +941,9 @@ Action は、型付きパラメータクラスと、
 | `.unlink(handle, from_, to)` | 1 本の live link を閉じる。端の渡し方は `link` と同じ |
 | `.traverse(handle, anchor) -> list[To]` | `anchor` からリンクされた `To` オブジェクト。`reverse=True` ならそこへリンクしている `From` オブジェクト |
 | `.retire(obj)` / `.retire(cls, obj_id)` | オブジェクトをリタイアし、接続するすべての有効なリンクを閉じる |
+
+`create` に渡す値や `save` 前に代入する値が `date` / `datetime` の場合は
+[date と datetime の値](#date-と-datetime-の値) に従います。拒否された値は `INVALID_RECORD` になります。
 
 型付きハンドラは、オブジェクトを読み、変更し、保存します。
 
@@ -1247,6 +1250,9 @@ capture_action_writes() -> ContextManager[list[WriteRecord]]
 インデックスでもこれを保証します。retire 済みのオブジェクトの id は再び insert
 でき、新しい有効な行が始まります。
 
+`insert` と `update` は `date` / `datetime` の値を、ISO-8601 文字列または `date` /
+オフセット付き `datetime` オブジェクトとして受け取ります。[date と datetime の値](#date-と-datetime-の値) を参照してください。
+
 `create_link` は両端に有効なオブジェクトを必要とします。各 id はリンク型が宣言する
 `from_type` / `to_type` で検索します。存在しない id、retire 済みの id、別の型としてのみ
 有効な id は `ValidationFailed`（code `LINK_ENDPOINT_NOT_FOUND`）で拒否し、リンク行は
@@ -1385,6 +1391,70 @@ cascade は行いません。`close_link` は 3 つの ID が一致する 1 本�
 `ActionContext.retire` の cascade は、ストアのオブジェクト retirement primitive
 の上位にあります。
 
+### date と datetime の値
+
+`date` / `datetime` 型のプロパティの値は、どの書き込み経路でも同じ方法で検査します。
+対象は `Store.insert` / `update`、`ActionContext.create` / `save`、`bulk_upsert` /
+`client.ingest`、Action パラメータ（MCP の `execute_action` を含む）です。
+
+| 書き込む値 | `date` プロパティ | `datetime` プロパティ |
+| --- | --- | --- |
+| `date` オブジェクト | `YYYY-MM-DD` として保存 | 拒否 |
+| オフセット付き（aware）の `datetime` オブジェクト | 拒否 | 自身の `isoformat()` の綴りで、オフセットを保って保存 |
+| naive な `datetime` オブジェクト（`tzinfo` なし） | 拒否 | 拒否 |
+| `"YYYY-MM-DD"` 文字列 | そのまま保存 | 拒否（時刻部分が必要） |
+| `"20261005"` などの別の ISO-8601 日付表記 | 拒否 | — |
+| 時刻を含む ISO-8601 文字列（オフセットの有無を問わず、`Z` を含む） | — | そのまま保存 |
+| その他の文字列 | 拒否 | 拒否 |
+
+- **正規化はしません。** ストアは綴りをそのまま保存します。オフセットを UTC に
+  変換せず、`Z` も `Z` のままです。`eq` と `in` のフィルターはこの綴りで一致を
+  判定します。比較演算子は時点（instant）で比較します
+  （[フィルター、順序、読み取り上限](#フィルター順序読み取り上限)を参照）。
+- **naive な文字列は受け付け、naive なオブジェクトは拒否します。** naive な ISO
+  *文字列* は書いたとおりに保存します。naive な `datetime` *オブジェクト* は拒否
+  します。どの時点を指すかは `tzinfo=` を付けて示す必要があるためです。naive な値と
+  オフセット付きの値を 1 つのプロパティに混在させないでください。両者の間に順序は
+  定義されていません。
+- **拒否時のコード。** 拒否された値は、`Store.insert` / `update` と
+  `ActionContext.create` / `save` では `ValidationFailed`（`INVALID_RECORD`）を
+  送出します。取り込みではレコードごとにレポートへ `INVALID_RECORD` が載ります。
+  Action パラメータはハンドラの実行前に `INVALID_PARAMS` で拒否されます。`where` の
+  operand は `OPERATOR_TYPE_MISMATCH` で拒否されます。
+
+```python
+from datetime import datetime, timedelta, timezone
+
+from ontary import InMemoryStore, Ontology, OntologyObject, Source, prop
+from ontary.errors import ValidationFailed
+
+ontology = Ontology("shifts", scope_levels=["org"], min_n=1)
+
+
+@ontology.object(layer="L0", scope="unscoped")
+class Shift(OntologyObject):
+    id: str = prop(primary_key=True)
+    starts_at: datetime
+
+
+ontology.validate()
+store = InMemoryStore(ontology.registry)
+source = Source(source_system="roster")
+jst = timezone(timedelta(hours=9))
+
+store.insert("Shift", {"id": "s1", "starts_at": datetime(2026, 10, 5, 9, tzinfo=jst)}, source)
+store.insert("Shift", {"id": "s2", "starts_at": "2026-10-05T00:00:00Z"}, source)
+assert store.read_current("Shift", "s1").payload["starts_at"] == "2026-10-05T09:00:00+09:00"
+assert store.read_current("Shift", "s2").payload["starts_at"] == "2026-10-05T00:00:00Z"
+
+try:
+    store.insert("Shift", {"id": "s3", "starts_at": datetime(2026, 10, 5, 9)}, source)
+except ValidationFailed as exc:
+    assert exc.code == "INVALID_RECORD"  # a naive datetime object
+else:
+    raise AssertionError("a naive datetime object must be refused")
+```
+
 ### スキーマバージョニング
 
 すべての SQLite ファイルは、作成時にエンジンの `SCHEMA_VERSION` を `PRAGMA
@@ -1430,6 +1500,10 @@ client.ingest_links(
 他のペアはそのまま登録されるため、オブジェクトをリンクより先に ingest してください。
 リンクの読み込みの再実行は冪等です。有効なリンクと同一のペアは no-op になり、
 `inserted_ids` にはそのまま含まれるため、2 回目の実行は 1 回目と同じレポートを返します。
+
+`date` / `datetime` の値は、ISO-8601 文字列または `date` / オフセット付き
+`datetime` オブジェクトとして書き込みます。naive な `datetime` オブジェクトは
+`INVALID_RECORD` で拒否されます。[date と datetime の値](#date-と-datetime-の値) を参照してください。
 
 ---
 
