@@ -29,7 +29,7 @@ Palantir Foundry の
 
 ## Core principles
 
-### Domain-driven design
+### Start from the domain's language
 
 ドメインの言語と意思決定から始め、エクスポートの形から始めないでください。
 `ObjectTypeDef` は安定した同一性を持つビジネス概念を表し、`PropertyDef` はその概念に
@@ -44,6 +44,8 @@ Palantir Foundry の
 
 物理的な統合はそのモデルの背後に置きます。ソース列がプロパティの根拠になり得ますが、
 オブジェクトの境界や公開名を支配してはいけません。
+
+用語ごとの対応は、[説明ページ](coming-from-ddd.ja.md)をご覧ください。
 
 *Source: Palantir, "Ontology design: Best practices".*
 

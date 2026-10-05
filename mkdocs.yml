@@ -63,6 +63,7 @@ nav:
       - Compatibility: compatibility.md
   - Explanation:
       - Ontology design: ontology-design.md
+      - Coming from DDD: coming-from-ddd.md
   - Project:
       - Roadmap: roadmap.md
       - Changelog: changelog.md

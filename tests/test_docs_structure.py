@@ -27,6 +27,7 @@ SECTION_OF: dict[str, str] = {
     "cli.md": "Reference",
     "compatibility.md": "Reference",
     "ontology-design.md": "Explanation",
+    "coming-from-ddd.md": "Explanation",
     "roadmap.md": "Project",
     "changelog.md": "Project",
     "releasing.md": "Project",
