@@ -14,9 +14,7 @@ built `OntologyDef` as `Ontology.definition` (+ `Ontology.validate()`).
 from __future__ import annotations
 
 import builtins
-import inspect
 import types
-import warnings
 from collections.abc import Callable, Mapping, Sequence
 from datetime import date, datetime
 from enum import Enum
@@ -43,7 +41,12 @@ from ontary.diagnose import (
     _stored_rule_findings,
 )
 from ontary.errors import ValidationFailed
-from ontary.functions import BoundQuery, FunctionHandler, FunctionRegistry
+from ontary.functions import (
+    BoundQuery,
+    FunctionRegistry,
+    _dict_handler_refusal,
+    _takes_query_only,
+)
 from ontary.meta import (
     ActionLint,
     ActionParameterDef,
@@ -529,11 +532,7 @@ _H = TypeVar("_H", bound=Callable[..., Any])
 
 
 class _NoClassFunctionDecorator(Protocol):
-    @overload
     def __call__(self, fn: Callable[[BoundQuery], _R]) -> Callable[[BoundQuery], _R]: ...
-
-    @overload
-    def __call__(self, fn: FunctionHandler) -> FunctionHandler: ...
 
 
 def _marker(
@@ -795,7 +794,6 @@ class Ontology:
             tuple[
                 Callable[..., Any],
                 type[FunctionParams] | None,
-                Literal["typed", "none", "legacy"],
             ],
         ] = {}
         self._definition: OntologyDef | None = None
@@ -1228,7 +1226,7 @@ class Ontology:
         audit: bool | None = None,
         accept: FunctionLint | Sequence[FunctionLint] | None = None,
     ) -> Any:
-        """Derives a `FunctionDef` and declares a typed, no-input, or legacy
+        """Derives a `FunctionDef` and declares a typed or no-input
         handler on this `Ontology`. `api_name` defaults to `fn.__name__`.
         The handler is bound onto the `OntologyDef`'s
         `FunctionRegistry` exactly once, lazily at `.definition` build time
@@ -1260,36 +1258,22 @@ class Ontology:
                         "function params class on another Ontology",
                         code="ONTOLOGY_INVALID",
                     )
-                for existing_name, (_, existing_cls, _) in self._function_handlers.items():
+                for existing_name, (_, existing_cls) in self._function_handlers.items():
                     if existing_cls is params_cls:
                         raise ValidationFailed(
                             f"{params_cls.__name__!r} is already declared as "
                             f"function {existing_name!r} (a params class may be declared once)",
                             code="ONTOLOGY_INVALID",
                         )
-                mode: Literal["typed", "none", "legacy"] = "typed"
-                parameters: list[ActionParameterDef] | None = _derive_params(
+                parameters: list[ActionParameterDef] = _derive_params(
                     params_cls, self.registry, owner="function"
                 )
             else:
-                try:
-                    signature = inspect.signature(fn)
-                    positional = [
-                        param for param in signature.parameters.values()
-                        if param.kind in (
-                            inspect.Parameter.POSITIONAL_ONLY,
-                            inspect.Parameter.POSITIONAL_OR_KEYWORD,
-                        )
-                    ]
-                    no_inputs = (
-                        len(signature.parameters) == 1
-                        and len(positional) == 1
-                        and positional[0].default is inspect.Parameter.empty
+                if not _takes_query_only(fn):
+                    raise ValidationFailed(
+                        _dict_handler_refusal(resolved_name), code="ONTOLOGY_INVALID"
                     )
-                except (TypeError, ValueError):
-                    no_inputs = False
-                mode = "none" if no_inputs else "legacy"
-                parameters = [] if no_inputs else None
+                parameters = []
             capability_names = self._capability_api_names(
                 capabilities, declared_on=f"function {resolved_name!r}"
             )
@@ -1305,19 +1289,11 @@ class Ontology:
                 audit=audit,
                 accept=_normalize_accept(accept),
             )
-            if mode == "legacy":
-                warnings.warn(
-                    f"function {resolved_name!r} takes a params dict; this form is deprecated "
-                    "since 0.19.0 and will be removed in 0.20.0 -- declare a "
-                    "FunctionParams class (@ontology.function(MyParams)) or a (query) handler",
-                    DeprecationWarning,
-                    stacklevel=2,
-                )
             self.registry.register_function(fn_def)  # dup api_name raises
             if params_cls is not None:
                 params_cls._ontary_api_name = resolved_name
                 params_cls._ontary_registry = self.registry
-            self._function_handlers[resolved_name] = (fn, params_cls, mode)
+            self._function_handlers[resolved_name] = (fn, params_cls)
             return fn
 
         return decorator
@@ -1393,8 +1369,8 @@ class Ontology:
         """
         if self._definition is None:
             functions = FunctionRegistry(self.registry)
-            for fn_name, (fn, params_cls, mode) in self._function_handlers.items():
-                functions.register(fn_name, fn, params_cls=params_cls, mode=mode)
+            for fn_name, (fn, params_cls) in self._function_handlers.items():
+                functions.register(fn_name, fn, params_cls=params_cls)
             self._definition = OntologyDef(
                 name=self.name,
                 registry=self.registry,

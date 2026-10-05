@@ -24,6 +24,7 @@ from conftest import raises_code
 from ontary.errors import PreconditionFailed, ValidationFailed, VisibilityError
 from ontary.functions import BoundQuery, FunctionRegistry
 from ontary.meta import (
+    ActionParameterDef,
     CapabilityDef,
     Cardinality,
     FunctionDef,
@@ -32,7 +33,7 @@ from ontary.meta import (
     OntologyRegistry,
     PropertyDef,
 )
-from ontary.model import LinkHandle
+from ontary.model import FunctionParams, LinkHandle
 from ontary.query import (
     _AUTHOR_DISPATCH,
     DEFAULT_READ_LIMIT,
@@ -191,7 +192,7 @@ def test_register_binds_handler_for_declared_function(
     registry = _functions_registry(make_registry)
     functions = FunctionRegistry(registry)
 
-    def _handler(query: BoundQuery, params: dict[str, Any]) -> int:
+    def _handler(query: BoundQuery) -> int:
         return len(query.list("Shelf", limit=None))
 
     functions.register("countShelves", _handler)
@@ -200,13 +201,40 @@ def test_register_binds_handler_for_declared_function(
     assert functions.call("countShelves", bound, {}) == 1
 
 
+
+@pytest.mark.parametrize("use_decorator", [False, True])
+def test_register_refuses_dict_handler(
+    make_registry: RegistryFactory, use_decorator: bool,
+) -> None:
+    functions = FunctionRegistry(_functions_registry(make_registry))
+
+    def dict_handler(query: BoundQuery, params: dict[str, Any]) -> None:
+        pass
+
+    with raises_code(ValidationFailed, "ONTOLOGY_INVALID") as exc_info:
+        if use_decorator:
+            functions.function("countShelves")(dict_handler)
+        else:
+            functions.register("countShelves", dict_handler)
+    message = str(exc_info.value)
+    assert "countShelves" in message
+    assert "FunctionParams" in message
+    assert "@ontology.function(MyParams)" in message
+    assert "(query)" in message
+
+    def query_handler(query: BoundQuery) -> None:
+        pass
+
+    functions.register("countShelves", query_handler)
+
+
 def test_register_rejects_undeclared_function_name(
     make_registry: RegistryFactory,
 ) -> None:
     registry = _functions_registry(make_registry)
     functions = FunctionRegistry(registry)
 
-    def _handler(query: BoundQuery, params: dict[str, Any]) -> int:
+    def _handler(query: BoundQuery) -> int:
         return 0
 
     with raises_code(PreconditionFailed, "FUNCTION_ERROR") as exc_info:
@@ -220,7 +248,7 @@ def test_register_rejects_double_registration(
     registry = _functions_registry(make_registry)
     functions = FunctionRegistry(registry)
 
-    def _handler(query: BoundQuery, params: dict[str, Any]) -> int:
+    def _handler(query: BoundQuery) -> int:
         return 0
 
     functions.register("countShelves", _handler)
@@ -238,11 +266,11 @@ def test_function_decorator_form_registers_and_returns_original_fn(
     functions = FunctionRegistry(registry)
 
     @functions.function("countShelves")
-    def _handler(query: BoundQuery, params: dict[str, Any]) -> int:
+    def _handler(query: BoundQuery) -> int:
         return 42
 
     # the decorator returns the original callable unchanged
-    assert _handler(cast(BoundQuery, None), {}) == 42
+    assert _handler(cast(BoundQuery, None)) == 42
 
     bound = _bound_query(registry, make_consumer, make_policy)
     assert functions.call("countShelves", bound, {}) == 42
@@ -273,7 +301,7 @@ def test_call_propagates_handler_exception_unchanged(
     registry = _functions_registry(make_registry)
     functions = FunctionRegistry(registry)
 
-    def _boom(query: BoundQuery, params: dict[str, Any]) -> int:
+    def _boom(query: BoundQuery) -> int:
         raise ValueError("handler blew up")
 
     functions.register("countShelves", _boom)
@@ -295,10 +323,17 @@ def test_call_passes_params_through_to_handler(
     functions = FunctionRegistry(registry)
     seen: dict[str, Any] = {}
 
-    def _handler(query: BoundQuery, params: dict[str, Any]) -> None:
-        seen.update(params)
+    class Params(FunctionParams):
+        limit: int
 
-    functions.register("countShelves", _handler)
+    registry.get_function("countShelves").parameters = [
+        ActionParameterDef(name="limit", type="int")
+    ]
+
+    def _handler(query: BoundQuery, params: Params) -> None:
+        seen.update(params.model_dump())
+
+    functions.register("countShelves", _handler, params_cls=Params)
     bound = _bound_query(registry, make_consumer, make_policy)
     functions.call("countShelves", bound, {"limit": 5})
     assert seen == {"limit": 5}
@@ -328,7 +363,7 @@ def test_dispatch_never_elevates_the_callers_bound_query(
     caller_bound = _bound_query(registry, make_consumer, make_policy)
     seen: dict[str, Any] = {}
 
-    def _handler(query: BoundQuery, params: dict[str, Any]) -> int:
+    def _handler(query: BoundQuery) -> int:
         seen["dispatched"] = query
         # The caller's object, mid-dispatch: neither authority has touched it.
         seen["caller_grant_during"] = caller_bound._author_dispatch
@@ -438,7 +473,7 @@ def test_function_list_reduces_over_the_whole_selection_not_one_page(
     )
     seen: dict[str, Any] = {}
 
-    def _mean(query: BoundQuery, params: dict[str, Any]) -> float:
+    def _mean(query: BoundQuery) -> float:
         rows = query.list("Reading")
         seen["rows"] = len(rows)
         seen["count"] = query.count("Reading")

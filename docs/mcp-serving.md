@@ -49,8 +49,7 @@ The twelve tools are registered with these MCP safety hints:
 `list_functions` publishes each Function's declared `parameters` alongside its
 descriptions. Typed Functions list each parameter's name, type, choices,
 structured fields, required status, and referenced ontology type. A Function
-with no inputs publishes `parameters: []`; a legacy dict-form Function publishes
-`parameters: null` because its input shape is not declared.
+with no inputs publishes `parameters: []`. It never publishes `parameters: null`.
 
 `query_objects` accepts `where`, `order_by`, `limit`, and `after`. Its `where` grammar uses
 bare scalars for equality and `gt`/`gte`/`lt`/`lte`/`in`/`ne`/`contains` operator

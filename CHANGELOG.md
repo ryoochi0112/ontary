@@ -11,6 +11,18 @@ you**.
 
 ## [Unreleased]
 
+### Removed
+
+- Dict-form Function handlers on `@ontology.function` and `FunctionRegistry` (#103), deprecated in 0.19.0. Declare a `FunctionParams` subclass, or take only `(query)`; any other handler raises `ValidationFailed` `ONTOLOGY_INVALID` at declaration.
+- `FunctionRegistry.register` no longer takes `mode` (#103).
+- `FunctionDef.parameters` no longer accepts `None`, and MCP `list_functions` never publishes `parameters: null` (#103). A no-input function has `[]`.
+
+### Changed
+
+- `client.call_function` raises `ValidationFailed` `INVALID_PARAMS` (was `TypeError`) for an argument that is neither a function name nor a `FunctionParams` instance (#103).
+- The public `FunctionHandler` alias is now `Callable[..., Any]`, a `(query)` or `(query, params)` handler; it was `Callable[[BoundQuery, dict[str, Any]], Any]` (#103).
+- `FunctionRegistry.function(api_name, params_cls=None)` takes an optional params class, matching `FunctionRegistry.register` (#103).
+
 ## [0.19.0] — 2026-10-04
 
 ```bash
