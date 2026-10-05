@@ -141,6 +141,7 @@ exit codes: [CLI reference](docs/cli.md).
 | Compatibility | [Compatibility](docs/compatibility.md) |
 | **Explanation** | |
 | Authoring an ontology | [Ontology design guide](docs/ontology-design.md) · [日本語](docs/ontology-design.ja.md) |
+| Coming from Domain-Driven Design | [Coming from DDD](docs/coming-from-ddd.md) |
 | **Project** | |
 | What is planned | [Roadmap](docs/roadmap.md) |
 | Change history | [CHANGELOG.md](CHANGELOG.md) |
