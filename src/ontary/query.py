@@ -1,18 +1,17 @@
 """Guarded query layer: the only public read path over the object store.
 
-Generalized replacement for `dso.query.GuardedQuery` (see
-specs/ontary-platform.md §3 AC6/AC7, §5, §7). Enforces scope
+Generalized replacement for `dso.query.GuardedQuery`. Enforces scope
 visibility, sensitivity redaction (`ai_usable` / `human_visible`), and the
 min-N aggregation guard for ANY ontology declared via `ontary.meta` +
 `ontary.scope.ScopePolicy`. `Store.read_current`/`read_all`/`links_from`/
 `links_to` remain engine-internal raw reads; `GuardedQuery` is the public
-seam every human/AI consumer must go through (AC7).
+seam every human/AI consumer must go through.
 
 What changed relative to the prototype, and why each hardcoded DSO piece
 went away:
 
-- `query._UNSCOPED_TYPES` (a fixed set of DSO L0 type names) -> declarative
-  `ScopePolicy.unscoped_types`.
+- `query._UNSCOPED_TYPES` (a fixed set of unscoped DSO type names) ->
+  declarative `ScopePolicy.unscoped_types`.
 - The prototype's *two* scope resolvers -- `resolve_owning_scope` (for the
   `_CHAIN_SCOPED_TYPES` allowlist) and this module's own
   `_resolve_team_id`/`_resolve_company_id`/`_resolve_person_id` fallback
@@ -59,7 +58,7 @@ went away:
   withheld`'s exact outcomes into one such predicate on `EngagementScore
   Snapshot`; a domain-specific ontology can use the same pattern for its own
   row-visibility predicate.
-- The prototype's `_contributor_count` (T4 review debt, closed here in T8):
+- The prototype's `_contributor_count`:
   de-duplicated contributors via a hardcoded `person_id` property /
   `byPerson` link (a Response/Person-specific anti-gaming rule). The
   generalized replacement is `ScopePolicy.contributor_rules` -- a per-type,
@@ -320,8 +319,9 @@ class _ReadDisclosure:
 
     ``where`` is the caller mapping snapshotted once. ``where_fields`` keeps
     each predicate's supplied/learned classification beside that snapshot,
-    so field gates never re-derive it. ``narrows_population`` is the D4 rule
-    consumed by the hidden aggregate-value exemption.
+    so field gates never re-derive it. ``narrows_population`` records whether
+    the selection narrows the population; the hidden aggregate-value exemption
+    consumes this flag.
     """
 
     where: _NormalizedWhere | None
@@ -466,14 +466,13 @@ def _refuse_page_walk(what: str) -> NoReturn:
 
 
 class Page(BaseModel):
-    """A page of `get_objects(..., limit=...)` results (spec pagination-
-    hardening AC3/AC4/AC7): `items` holds exactly `limit` `StoredObject`s
-    whenever that many visible rows remain, and `next_cursor` is the
-    opaque key of the last row actually KEPT -- never a payload primary
-    key, never read off a row (`StoredObject`/`Lineage` carry no row
-    identity, AC8) -- or `None` iff the store was exhausted before the
-    page filled. Frozen, like every other read-model value this layer
-    returns."""
+    """A page of `get_objects(..., limit=...)` results: `items` holds
+    exactly `limit` `StoredObject`s whenever that many visible rows remain,
+    and `next_cursor` is the opaque key of the last row actually KEPT --
+    never a payload primary key, never read off a row
+    (`StoredObject`/`Lineage` carry no row identity) -- or `None` iff the
+    store was exhausted before the page filled. Frozen, like every other
+    read-model value this layer returns."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -522,9 +521,8 @@ class Page(BaseModel):
 
 class TypedPage(BaseModel, Generic[_T]):
     """The typed-client counterpart to `Page`: `items` holds hydrated `T`
-    instances (spec pagination-hardening AC7) instead of raw
-    `StoredObject`s; `next_cursor` has the exact same opaque-cursor
-    contract as `Page.next_cursor`."""
+    instances instead of raw `StoredObject`s; `next_cursor` has the exact
+    same opaque-cursor contract as `Page.next_cursor`."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -564,14 +562,14 @@ def _scope_key_fields(policy: ScopePolicy, obj_type: str) -> set[str]:
     type in `policy.rules`. Property names are not globally unique across
     an ontology's object types: a broader-scoped consumer querying type B
     must not inherit an exemption that only makes sense because type A
-    declared a `DirectProperty` rule with the same field name. Reviewer P1
-    (T4): pooling this set globally meant declaring
-    `DirectProperty("person_id")` on ONE type (e.g. Team, where a
+    declared a `DirectProperty` rule with the same field name. Pooling this
+    set globally meant declaring `DirectProperty("person_id")` on ONE type
+    (e.g. Team, where a
     team-scoped consumer legitimately supplies its own `person_id`-shaped
     routing key) silently exempted `person_id` on EVERY OTHER type too --
     including a type where `person_id` is a `human_visible=False` identity
     field, re-opening exactly the de-anonymization oracle the prototype's
-    own reviewer history (see `dso.query._SCOPE_KEY_FIELDS`'s P0 comment)
+    own reviewer history (see the comment on `dso.query._SCOPE_KEY_FIELDS`)
     had to close: a broader-scoped human loops
     `where={"person_id": pid}` per candidate id and joins the (visible)
     rows that come back to learn who is behind otherwise-hidden data. Any
@@ -1470,7 +1468,7 @@ class GuardedQuery:
         """Count rows in the consumer's visible selection.
 
         The explicit unbounded read is the canonical selection path: field
-        gates, T7 operator compilation, scope, and row visibility therefore
+        gates, operator compilation, scope, and row visibility therefore
         cannot drift from ``get_objects``. It uses that same path with only
         payload redaction disabled, after the visibility decision, because the
         count never returns a payload. This is ordinary visible-row counting
@@ -1701,11 +1699,11 @@ class GuardedQuery:
         from this docstring rather than discover it from a reviewer.
 
         Closing it properly needs release-set evaluation (complementary
-        suppression over the set of cells a caller has been shown), which is
-        SDK M12 -- not something this method can do while answering one
-        query at a time. `test_count_contributors_complement_differencing_is_a_known_residual`
-        pins the residual so the claim and the behaviour have to move
-        together the day M12 lands.
+        suppression over the set of cells a caller has been shown) -- not
+        something this method can do while answering one query at a time.
+        `test_count_contributors_complement_differencing_is_a_known_residual`
+        pins the residual so the claim and the behaviour have to move together
+        the day release-set evaluation lands.
         """
         # Same first gates as `_aggregate`, and for the parity reason this
         # method exists to hold: an unregistered type must refuse as one on
@@ -1807,13 +1805,13 @@ class GuardedQuery:
         _author_dispatch: _AuthorDispatch | None,
         disclosure: _ReadDisclosure,
     ) -> bool:
-        """Refuse a hidden `value_field`, or report that the AC10 exemption is
-        what allowed it.
+        """Refuse a hidden `value_field`, or report that the contributor
+        exemption is what allowed it.
 
         The exemption is a release for the complete visible population only.
         Any non-empty ``where`` or any ``group_by`` narrows that population,
-        so D4 refuses it here regardless of predicate operator or field
-        visibility. The immutable disclosure scope is minted by the same
+        so this gate refuses it here regardless of predicate operator or
+        field visibility. The immutable disclosure scope is minted by the same
         choke point every public read reaches.
 
         Returns `True` only when the field IS hidden from this consumer and
@@ -1900,14 +1898,15 @@ class GuardedQuery:
         # author-provenance-gated: only an author-declared Function may release
         # `mean` or `count` for that otherwise-hidden field over the complete
         # visible population (e.g. DSO's `deriveCurrentState` over >= min_n
-        # distinct contributors -- AC10). A direct consumer selection is
+        # distinct contributors). A direct consumer selection is
         # refused even when the same type has contributor rules. `min` and
         # `max` directly release boundary individuals, while `sum` is exactly
         # `mean * count`; all three remain outside the positive exemption.
-        # D4 removes caller-selected second populations by refusing narrowed
-        # or grouped hidden-field reads. The complete visible population can
-        # still drift over time or vary across consumer scopes, so repeated
-        # unnarrowed mean/count releases retain a differencing residual.
+        # This gate removes caller-selected second populations by refusing
+        # narrowed or grouped hidden-field reads. The complete visible
+        # population can still drift over time or vary across consumer scopes,
+        # so repeated unnarrowed mean/count releases retain a differencing
+        # residual.
         #
         # Provenance is an engine-minted GRANT compared by identity, never a
         # value the caller supplies (see `_AuthorDispatch`). It used to be an
@@ -1959,7 +1958,7 @@ class GuardedQuery:
                 code="VISIBILITY_DENIED",
             )
 
-        # Declared-type check (AC7): only reached once every visibility/
+        # Declared-type check: only reached once every visibility/
         # redaction gate above has already passed, so a denial a consumer
         # isn't entitled to see never gets pre-empted/leaked by a type
         # error about a field they couldn't aggregate anyway. Checked
@@ -1976,7 +1975,7 @@ class GuardedQuery:
         # name. A declared-but-hidden `value_field` passes this check and
         # still reaches `VISIBILITY_DENIED` unchanged -- answering
         # `UNKNOWN_FIELD` for it would leak "no such field" about a field that
-        # exists AND make that gate unreachable (Track B's M9, for `group_by`).
+        # exists AND make that gate unreachable (for `group_by`).
         #
         # For a supplied field, `None` means "no such declared property": the
         # unregistered-type case `_property_type` also swallows is already
@@ -2181,9 +2180,8 @@ class GuardedQuery:
         obj_type: str,
         group_rows: list[StoredObject],
     ) -> int:
-        """Count distinct contributors backing a group of rows (T4 review
-        debt; see module docstring for what replaced the prototype's
-        hardcoded `_contributor_count`).
+        """Counts distinct contributors per row group; see the module docstring
+        for how the prototype's hardcoded `_contributor_count` was replaced.
 
         Falls back to a plain row count when `obj_type` has no
         `contributor_rules` declared at all -- that type never opted into

@@ -103,19 +103,18 @@ class TableSpec:
 _OBJECTS_PREFIX: DialectText = {
     "sqlite": (
         "\n"
-        "-- `page_token` (pagination-hardening T2 amendment, spec §5): a\n"
-        "-- fresh uuid4 hex written on EVERY row insert (including the\n"
-        "-- new version `update`'s close-old-insert-new writes) -- the\n"
-        "-- opaque cursor `read_page` hands out, resolved back to\n"
-        "-- `row_id` via `idx_objects_page_token` below. This IS a schema\n"
-        "-- change from the T1 shape; T4's `SCHEMA_VERSION` stamp must\n"
-        "-- cover it (see that task).\n"
+        "-- `page_token`: a fresh uuid4 hex written on EVERY row insert\n"
+        "-- (including the new version `update`'s close-old-insert-new\n"
+        "-- writes) -- the opaque cursor `read_page` hands out, resolved\n"
+        "-- back to `row_id` via `idx_objects_page_token` below. This IS a\n"
+        "-- schema change from the previous shape; the `SCHEMA_VERSION`\n"
+        "-- stamp must cover it.\n"
     ),
     "postgres": "\n",
 }
 _TENANT_COLUMN_PREFIX: DialectText = {
     "sqlite": (
-        "    -- Which tenant owns this row (M8b). NOT NULL with a default so the\n"
+        "    -- Which tenant owns this row. NOT NULL with a default so the\n"
         "    -- single-tenant case needs no ceremony and a migrated row is never\n"
         '    -- ownerless: a NULL tenant would read as "belongs to everybody",\n'
         "    -- which is precisely wrong for an isolation column.\n"
@@ -124,8 +123,8 @@ _TENANT_COLUMN_PREFIX: DialectText = {
 }
 _AUDIT_PRINCIPAL_PREFIX: DialectText = {
     "sqlite": (
-        "    -- The principal that authenticated the call this entry audits (M10,\n"
-        '    -- spec `multi-consumer-mcp` AC8/AC10). NULL for every pre-M10 row --\n'
+        "    -- The principal that authenticated the call this entry audits.\n"
+        '    -- NULL for every row written before principal tracking --\n'
         '    -- which means "we do not know who authenticated", never "nobody did",\n'
         "    -- so no default is correct here.\n"
     ),
@@ -426,7 +425,7 @@ def _render_index(index: IndexSpec, dialect: Dialect) -> str:
 
 
 def render_schema(dialect: Dialect, *, table_specs: Sequence[TableSpec] | None = None) -> str:
-    """Render the complete schema from one table-spec source."""
+    """Render the complete schema from one set of table specs."""
     tables = tuple(TABLE_SPECS if table_specs is None else table_specs)
     ddl: list[tuple[int, str]] = []
     for table in tables:

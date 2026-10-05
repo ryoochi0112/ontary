@@ -75,7 +75,7 @@ def _event_payload_to_storage(event: Event, event_def: EventTypeDef) -> dict[str
 
 class ActionContext:
     """Per-call handle a typed action handler receives instead of closing
-    over the store (spec §6/AC3).
+    over the store.
 
     Constructed by `ActionExecutor.execute` inside the transaction +
     write-capture block, wrapping `(store, source, consumer)`. Writes are
@@ -229,7 +229,7 @@ class ActionContext:
         -- `ctx.capability(LLM)` narrows to
         `LLMClient` with no cast at the call site.
 
-        Fail-closed in three ways (AC8): a handle from another `Ontology` ->
+        Fail-closed in three ways: a handle from another `Ontology` ->
         `ValidationFailed` code `UNKNOWN_NAME`; a capability this ACTION did
         not declare -> `ValidationFailed` code `UNDECLARED_CAPABILITY`, **even when a provider for it happens to be
         bound** (declaration is the gate, not availability); a declared
@@ -248,16 +248,14 @@ class ActionContext:
         the call happens afterwards on that object.
 
         The provider is returned unwrapped -- the engine adds nothing and
-        inspects nothing (spec §8 R1: providers are the same trust tier as
-        handlers).
+        inspects nothing (providers are the same trust tier as handlers).
 
-        **Cost to be aware of (spec §5 Q5 / §8 R5):** a handler calls its
-        capability INSIDE the engine-owned store transaction, so a slow outside
-        call holds the SQLite write lock for its whole duration. That is allowed
-        rather than forbidden -- a handler that must decide *based on* an outside
-        read has nowhere else to do it -- but a long call here blocks every other
-        writer. DSO's own LLM use is entirely in Functions, which have no
-        transaction.
+        **Cost to be aware of:** a handler calls its capability INSIDE the
+        engine-owned store transaction, so a slow outside call holds the
+        SQLite write lock for its whole duration. That is allowed rather
+        than forbidden -- a handler that must decide *based on* an outside
+        read has nowhere else to do it -- but a long call here blocks every
+        other writer. Functions have no transaction; LLM calls belong there.
         """
         provider = resolve_capability(
             handle,
@@ -579,13 +577,13 @@ class ActionExecutor:
         params_cls: type[BaseModel] | None = None,
     ) -> None:
         """Register `fn` for `api_name`, optionally paired with a typed
-        params class (`fn` then receives `(ActionContext, params_cls
-        instance)` instead of the legacy `(consumer, params dict)`).
-        Private: the only registration entry point (AC7 removed the old
-        public `register_handler`/`.handler` surface) -- `Ontology.action()`
-        and `OntologyRuntime` call this directly; a legacy
-        `(consumer, dict) -> dict[str, Any]` handler still registers fine
-        by passing `params_cls=None`."""
+        params class. Then `fn` receives `(ActionContext, params_cls instance)`
+        instead of the legacy `(consumer, params dict)` arguments.
+        Private: the only registration entry point; the old public
+        `register_handler`/`.handler` surface was removed. `Ontology.action()`
+        and `OntologyRuntime` call this directly. A legacy handler still
+        registers when `params_cls=None`, using the
+        `(consumer, dict) -> dict[str, Any]` signature."""
         try:
             self._registry.get_action_type(api_name)
         except ValidationFailed as exc:
@@ -612,9 +610,9 @@ class ActionExecutor:
         ts: datetime,
         **extra: Any,
     ) -> AuditEntry:
-        """THE one literal `AuditEntry(...)` construction in the executor
-        (C4 of the staged refactor) -- every denied/error/pending/follow-up
-        entry goes through here, so the consumer -> actor/role/principal
+        """THE one literal `AuditEntry(...)` construction in the executor --
+        every denied/error/pending/follow-up entry goes through here, so the
+        consumer -> actor/role/principal
         stamping cannot drift between sites (and the audit-principal AST
         guard has one site to verify instead of seven). `target_id` is
         resolved here from the declared target parameter, so a denied or
@@ -667,11 +665,10 @@ class ActionExecutor:
         instant: datetime,
         unscoped_params: list[str],
     ) -> BaseModel | None:
-        """Typed-invocation path (spec §6/AC5): a params class turns the
-        already-validated dict into a model instance BEFORE the
-        transaction, so a `model_validate` failure is audited/raised
-        exactly like the declared-shape validation failures before it --
-        never inside the txn/capture block, never reaching the handler."""
+        """Typed-invocation path: a params class turns the already-validated
+        dict into a model instance BEFORE the transaction. A `model_validate`
+        failure is audited/raised exactly like declared-shape validation
+        failures before the txn/capture block opens or the handler runs."""
         if params_cls is None:
             return None
         if isinstance(params, params_cls):
@@ -748,7 +745,7 @@ class ActionExecutor:
         declared-shape validation and audit trail).
         """
         if self._store.in_transaction:
-            # AC9/§5: refuse FIRST, before any audit write -- an audit row
+            # Refuse FIRST, before any audit write -- an audit row
             # written inside the caller's own transaction could itself be
             # rolled back with it, so this refusal is deliberately NOT
             # audited.
@@ -843,7 +840,7 @@ class ActionExecutor:
             # Audit write happens after any transaction rollback so it
             # persists regardless of the exception type (ActionError,
             # a store-layer conflict, KeyError, etc.). Nothing
-            # committed, so `writes` stays empty (AC11/§8). Kept HERE, not
+            # committed, so `writes` stays empty. Kept HERE, not
             # inside `_run_transaction`, so `capability_accesses`' scoping --
             # accesses recorded before the rollback survive onto this entry --
             # stays exactly as it was.
@@ -886,8 +883,8 @@ class ActionExecutor:
         unscoped_params: list[str],
     ) -> dict[str, Any]:
         """The engine-owned transaction: handler call under write capture
-        and the "ok" audit entry -- all inside ONE store transaction (spec
-        AC2/§7). Every handler call runs inside a store transaction here,
+        and the "ok" audit entry -- all inside ONE store transaction. Every
+        handler call runs inside a store transaction here,
         so a handler that raises partway through its own writes rolls back
         ALL of them even if the handler body never called
         `store.transaction()` itself (`transaction()` is reentrant). The
@@ -1180,7 +1177,7 @@ class ActionExecutor:
         invocation_id: str | None,
         instant: datetime,
     ) -> None:
-        """AC12: refuse (as `INVALID_PARAMS`, audited) params that cannot be
+        """Refuse (as `INVALID_PARAMS`, audited) params that cannot be
         faithfully round-tripped through JSON -- the audit log persists
         params as JSON, so a value that survives declared-type validation
         but not a JSON round-trip (e.g. NaN, a custom object smuggled past
@@ -1247,7 +1244,7 @@ class ActionExecutor:
     def _resolve_target_id(
         action_def: ActionTypeDef, params: dict[str, Any]
     ) -> str | None:
-        """Every action audit entry's `target_id` (AC11, #49): the value of the
+        """Every action audit entry's `target_id` (#49): the value of the
         action's declared target parameter -- the `ActionParameterDef` with
         `scope_semantics="target"`, else the first param whose `refers_to`
         matches `action_def.target_type` -- never a guess at the handler's
@@ -1328,7 +1325,7 @@ class ActionExecutor:
                 # match its declared `type`, so a scope-bearing param can
                 # only reach here as a non-str if `_validate_params` didn't
                 # already reject it (defense in depth) -- never silently
-                # skip the scope gate on type confusion (spec §7).
+                # skip the scope gate on type confusion.
                 self._deny(
                     consumer,
                     action_name,

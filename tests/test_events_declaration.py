@@ -136,7 +136,7 @@ def test_restricted_fields_must_be_optional(sensitivity: Sensitivity) -> None:
     assert exc.value.code == "ONTOLOGY_INVALID"
     assert str(exc.value) == (
         "Fact.value: restricted sensitivity (human_visible=False or ai_usable=False) "
-        "requires an Optional annotation (AC6)"
+        "requires an Optional annotation"
     )
 
 

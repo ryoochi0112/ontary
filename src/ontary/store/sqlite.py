@@ -93,7 +93,7 @@ class ObjectStore(SqliteSchemaGate):
         tenant: str = DEFAULT_TENANT,
         busy_timeout: float = 5.0,
     ) -> None:
-        """`tenant` scopes EVERY read and write this store performs (M8b). Two
+        """`tenant` scopes EVERY read and write this store performs. Two
         stores on the same file with different tenants cannot see each other's
         objects, links, or audit entries. It is a constructor
         argument rather than a per-call one on purpose: a tenant passed per call
@@ -177,7 +177,7 @@ class ObjectStore(SqliteSchemaGate):
         finally:
             self._txn_depth -= 1
 
-    # -- authority / write capture (declared-contracts §3 AC2) -----------
+    # -- authority / write capture -----------------------------------------
 
     @property
     def in_transaction(self) -> bool:
@@ -373,7 +373,7 @@ class ObjectStore(SqliteSchemaGate):
 
     def read_current(self, obj_type: str, obj_id: str) -> StoredObject | None:
         """Public but *trusted-caller-only* raw read of a single object's
-        current row (AC10 finding 5's sanctioned seam).
+        current row.
 
         This is NOT the guarded consumer read path -- it returns the full,
         unredacted payload with no scope/sensitivity/min-N checks applied.
@@ -384,7 +384,7 @@ class ObjectStore(SqliteSchemaGate):
         authoring/loader code have a public method to call. It must never
         be handed to, or called on behalf of, a CONSUMER (human/AI client,
         MCP tool, Function body): `GuardedQuery` remains the only read path
-        a consumer may use (AC7) -- that invariant is about there being no
+        a consumer may use -- that invariant is about there being no
         *ungated* read path a consumer can reach, not about `ObjectStore`
         having zero public methods.
         """
@@ -414,12 +414,12 @@ class ObjectStore(SqliteSchemaGate):
 
     def read_all(self, obj_type: str) -> list[StoredObject]:
         """Raw (unredacted, unscoped) read of every current row of
-        `obj_type`, ordered by the same per-row identity as `read_page`
-        (spec AC2). Its OWN single query/pass -- NOT a `read_page` loop:
-        looping would re-scan and re-sort per batch (measured 6-18x slower,
-        superlinear, at 20k-40k rows), and a batch-boundary loop is exactly
-        what silently dropped tied rows under the old payload-pk-keyed
-        cursor design this task replaces."""
+        `obj_type`, ordered by the same per-row identity as `read_page`. Its
+        OWN single query/pass -- NOT a `read_page` loop: looping would
+        re-scan and re-sort per batch (measured 6-18x slower, superlinear,
+        at 20k-40k rows), and a batch-boundary loop is exactly what silently
+        dropped tied rows under the old payload-pk-keyed cursor design this
+        replaces."""
         rows = _sql.execute(
             self._conn,
             _sql.render(_sql.OBJECT_ALL_SELECT_TEMPLATE, "sqlite"),
@@ -465,13 +465,12 @@ class ObjectStore(SqliteSchemaGate):
         SQLite's physical ROWID: a real, already-indexed column (see
         `idx_objects_type_rowid`), so no `json_extract`, no `CAST`, and no
         registry lookup is needed (unlike a payload-pk-keyed cursor, which
-        also can't express the ties the store allows among current rows --
-        spec pagination-hardening §5's amended decision). `row_id` itself
-        never leaves this method except resolved-into internally: the
-        CURSOR a caller actually receives, `PagedRow.key`, is a random
-        per-row page token instead (spec §5's T2 amendment -- see
-        `PagedRow`'s docstring for why), resolved back to `row_id` via
-        `_resolve_page_token` when it comes back as `after_key`."""
+        also can't express the ties the store allows among current rows).
+        `row_id` itself never leaves this method except resolved-into
+        internally: the CURSOR a caller actually receives, `PagedRow.key`,
+        is a random per-row page token instead (see `PagedRow`'s docstring
+        for why), resolved back to `row_id` via `_resolve_page_token` when
+        it comes back as `after_key`."""
         check_read_page_batch(batch)
         after = (
             None
@@ -645,10 +644,9 @@ class ObjectStore(SqliteSchemaGate):
     # -- audit ---------------------------------------------------------
 
     def append_audit(self, entry: AuditEntry) -> None:
-        """Persist one audit entry. Never raises (declared-contracts §3
-        AC12): params/writes that fail JSON encoding are recorded as
-        placeholders via `_safe_json_dumps` rather than lost or crashing
-        the audit write itself."""
+        """Persist one audit entry. Never raises: params/writes that fail
+        JSON encoding are recorded as placeholders via `_safe_json_dumps`
+        rather than lost or crashing the audit write itself."""
         fields = encode_audit_entry(entry)
         with self.transaction() as conn:
             _sql.execute(

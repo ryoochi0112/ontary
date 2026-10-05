@@ -1,5 +1,5 @@
 """Single source of truth for `PropertyType` -> accepted-Python-type scalar
-validation (spec `m35-sdk-refactor` §6 AC6).
+validation.
 
 This is a leaf module: it imports nothing but stdlib/pydantic, so `meta`,
 `ingest`, and `actions` can all depend on it with no cycle risk. Previously

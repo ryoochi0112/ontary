@@ -7,11 +7,11 @@ Given one `OntologyDef` (the authored registry + policy + functions) plus a
 - **reads** -- `get`/`list`/`count`/`exists`/`traverse`/`aggregate`/`aggregate_by`: thin delegation to a
   `GuardedQuery` bound with this client's `consumer`. Every read goes
   through `GuardedQuery`; nothing here ever touches `Store.read_current`/
-  `read_all` directly (spec AC6/AC7).
+  `read_all` directly.
 - **writes** -- `execute` (-> `client.actions`, the governed action
   pipeline: role/scope/precondition/audit) and `ingest`/`ingest_links` (->
   `ontary.ingest`). Ingest is a schema-validated but guard-INDEPENDENT
-  bulk-load surface (spec AC9): it deliberately does not go through this
+  bulk-load surface: it deliberately does not go through this
   client's `consumer` role/scope, mirroring the prototype's connector path
   (data *loading*, not a consumer-facing query/action) -- it still never
   bypasses schema validation (unknown type/missing pk/wrong property type
@@ -25,13 +25,13 @@ Legacy (descriptor-authoring) action handlers are registered on
 `client.actions` via the internal `_register` seam, NOT on `OntologyDef`
 -- see `ontary.ontology`'s docstring for why (handlers close over a
 concrete `Store`, which only exists once a `Store` is bound). The old
-public `register_handler`/`.handler` surface was removed (AC7 clean
+public `register_handler`/`.handler` surface was removed (clean
 break). Class-authored (`Ontology.action(...)`)
-handlers, by contrast, ARE declared on the `Ontology` (spec
-`typed-actions.md` §6) and are auto-bound to every runtime built from it --
+handlers, by contrast, ARE declared on the `Ontology` and are auto-bound
+to every runtime built from it --
 see `OntologyRuntime` below.
 
-`OntologyRuntime` (spec `typed-actions.md` AC6) holds the shared, consumer-
+`OntologyRuntime` holds the shared, consumer-
 free machinery for one `(ontology, store)` pair -- ONE `GuardedQuery` + ONE
 `ActionExecutor`, with all of the ontology's declared action handlers bound
 exactly once at construction. `runtime.for_consumer(consumer)` is a cheap
@@ -40,14 +40,14 @@ identity, with only `consumer` swapped -- so many consumers share one
 executor/handler table without re-wiring. `Ontology.bind(store)` is the
 one typed entry point that builds a runtime with its declared handlers
 auto-bound; direct `OntologyClient(ontology, store, consumer)` construction
-(kept working, spec AC6) builds a single-use `OntologyRuntime` internally
+(kept working) builds a single-use `OntologyRuntime` internally
 -- auto-binding therefore lives in EXACTLY ONE code path: `OntologyRuntime.
 __init__`.
 
 Every `OntologyClient`/`OntologyRuntime` is fully instance-scoped: no
 module-global registry, policy, handler table, or store anywhere in this
 file, so two `OntologyDef`s/`Ontology`s (+ stores + clients + runtimes)
-coexist in one process without cross-talk (spec §7).
+coexist in one process without cross-talk.
 """
 
 from __future__ import annotations
@@ -114,14 +114,14 @@ def _checked_provider_map(
     keys whose `registry` was not this one, and the author was told
     `CAPABILITY_NOT_PROVIDED` -- "you bound no provider" -- for a capability they
     had visibly just bound. Two ontologies declaring the same api_name (which
-    spec AC1 explicitly permits) made this easy to hit and near-impossible to
+    is explicitly permitted) made this easy to hit and near-impossible to
     diagnose from the message.
 
-    AC8 already says a handle from another registry is `UNKNOWN_NAME`; that was
+    A handle from another registry is `UNKNOWN_NAME`; that was
     enforced at ACCESS time (`ctx.capability(foreign)`) but not at BIND time, so
     the check now runs where the mistake is actually made. Fail-closed and early:
     a mis-bound provider is a wiring bug, and the copy is also what keeps a later
-    mutation of the caller's dict from mattering (AC5).
+    mutation of the caller's dict from mattering.
     """
     if provided is None:
         return {}
@@ -152,9 +152,8 @@ def _checked_provider_map(
 
 
 class OntologyRuntime:
-    """Shared, consumer-free machinery for one `(ontology, store)` pair
-    (spec `typed-actions.md` §6/AC6): ONE `GuardedQuery` + ONE
-    `ActionExecutor`, with every ontology-declared action handler bound
+    """Shared, consumer-free machinery for one `(ontology, store)` pair:
+    ONE `GuardedQuery` + ONE `ActionExecutor`, with every ontology-declared action handler bound
     exactly once, at construction.
 
     `ontology` may be an `Ontology` (class authoring -- its
@@ -211,7 +210,7 @@ class OntologyRuntime:
         capabilities: Mapping[CapabilityHandle[Any], object] | None = None,
     ) -> "OntologyClient":
         """Cheap per-consumer view: a new `OntologyClient` sharing this
-        runtime's `query`/`actions` BY IDENTITY (spec AC6) -- only
+        runtime's `query`/`actions` BY IDENTITY -- only
         `consumer` differs between views built from the same runtime."""
         # Overrides are registry-checked here too, not only at bind: a foreign
         # handle passed to `for_consumer` would otherwise slip past the runtime
@@ -235,9 +234,8 @@ class OntologyClient(_TypedReadMixin):
 
     Accepts either a plain `OntologyDef` (descriptor authoring -- no
     ontology-declared handlers exist; wire them onto `client.actions` via
-    the internal `_register` seam) or an `Ontology` (class authoring,
-    spec AC6): passing the
-    latter directly auto-binds every `@ontology.action(...)`-declared
+    the internal `_register` seam) or an `Ontology` (class authoring):
+    passing the latter directly auto-binds every `@ontology.action(...)`-declared
     handler with zero manual wiring, identical to going through
     `ontology.bind(store).for_consumer(consumer)`. Internally this always
     builds a (possibly single-use) `OntologyRuntime` -- see that class's
@@ -696,7 +694,7 @@ class OntologyClient(_TypedReadMixin):
         only recorded successes would say otherwise.
 
         **One condition is not the declaration's to make.** A call that
-        actually released a hidden field through the AC10 contributor
+        actually released a hidden field through the contributor
         exemption (`GuardedQuery._aggregate`) appends an entry whatever
         `FunctionDef.audited` says, `audit=False` included. `audited` answers
         "can this function reach outside the process?"; that question is now
@@ -747,7 +745,7 @@ class OntologyClient(_TypedReadMixin):
         accesses: builtins.list[CapabilityAccessRecord] | None = [] if audited else None
         # Always a real list, even for a function this ontology declared as
         # unaudited: it is what the guarded read layer appends to when the
-        # AC10 exemption releases a hidden field, and that release is audited
+        # contributor exemption releases a hidden field, and that release is audited
         # on its own terms below.
         disclosures: builtins.list[tuple[str, str]] = []
 
@@ -823,7 +821,7 @@ class OntologyClient(_TypedReadMixin):
 
     @property
     def declarations(self) -> Declarations:
-        """This runtime's declared answers (spec AC10) -- authority model,
+        """This runtime's declared answers -- authority model,
         write-back/re-ingest/visibility/transaction-ownership/idempotency
         stance, audit scope, and this ontology's own `min_n`."""
         return declarations(self._ontology)

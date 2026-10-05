@@ -1,6 +1,6 @@
 """The storage seam: `Store` protocol, value models, errors, and backends.
 
-Compatibility front door (B2 of the staged refactor): this package replaced
+Compatibility front door: this package replaced
 the single `ontary/store.py` module, and every name that module exposed is
 re-exported here explicitly, so `from ontary.store import X` keeps working
 for all of them. The pieces now live in:

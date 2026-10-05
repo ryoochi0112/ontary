@@ -1,4 +1,4 @@
-"""Postgres `Store` implementation (M8a).
+"""Postgres `Store` implementation.
 
 The third backend, and the one that makes the storage seam worth having: the
 roadmap called a Postgres backend "a fill-in rather than a rewrite" because
@@ -10,7 +10,7 @@ Written from scratch against the protocol, NOT by subclassing `ObjectStore` --
 the same decision `InMemoryStore` documents. A shared base class would let the
 conformance suite pass by exercising inherited SQLite helpers through a different
 name, which proves nothing about the seam. Refinement of that rule: pure
-CONTRACT logic the spec requires to be byte-identical across backends
+CONTRACT logic that must be byte-identical across backends
 (refusal checks, validation, codecs) is shared via `ontary.store._shared`
 -- see that module's doctrine docstring -- while all storage mechanics
 remain from-scratch here, so the conformance suite still proves the seam.
@@ -97,7 +97,7 @@ Same reasoning as `MCP_EXTRA_HINT`: `from ontary.store.postgres import
 PostgresStore` is one line away from any deployment guide, and a bare
 `ModuleNotFoundError: No module named 'psycopg'` does not mention that an extra
 exists. Found the same way too -- by installing the core package and importing
-this module (M6's `package` CI job now runs that path).
+this module (the `package` CI job now runs that path).
 """
 
 
@@ -117,7 +117,7 @@ _SCHEMA_SQL = _sql.render_schema("postgres")
 
 _RLS_SQL = """
 -- Row-level security: the DATABASE enforces tenant isolation, not just the
--- engine (M8b). This is defense in depth in the literal sense -- every query
+-- engine. This is defense in depth in the literal sense -- every query
 -- this backend issues already carries `AND tenant = %s`, and these policies are
 -- what catches the day one of them does not.
 --
@@ -188,7 +188,7 @@ class PostgresStore:
         rls: bool = True,
     ) -> None:
         """`tenant` scopes every read and write; `rls` additionally has the
-        DATABASE enforce that (M8b).
+        DATABASE enforce that.
 
         Both layers, on purpose. The engine's `AND tenant = %s` on every statement
         is the primary mechanism; the RLS policies are what catch the day someone
@@ -262,7 +262,7 @@ class PostgresStore:
             # the stamp. The latter is refused rather than adopted -- an unstamped
             # `objects` table was created by something that is not this engine,
             # and stamping it would be the "lying stamp" the SQLite backend's
-            # AC11 exists to rule out.
+            # schema check exists to rule out.
             cur.execute(
                 "SELECT 1 FROM information_schema.tables "
                 "WHERE table_schema = current_schema() AND table_name = 'objects'"
@@ -756,8 +756,8 @@ class PostgresStore:
 
     def append_audit(self, entry: AuditEntry) -> None:
         """Persist one audit entry. Never raises for an unencodable value
-        (declared-contracts AC12) -- `_safe_json_dumps` degrades it to a
-        placeholder, exactly as the other backends do."""
+        -- `_safe_json_dumps` degrades it to a placeholder, exactly as the
+        other backends do."""
         fields = encode_audit_entry(entry)
         with self.transaction() as conn:
             _sql.execute(

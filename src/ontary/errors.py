@@ -11,10 +11,10 @@ carries must be registered here, and every registered code must (eventually)
 be carried by some exception class, unless explicitly marked
 reserved-for-later.
 
-Convention note (D of the staged refactor): registry getters participate in
-this taxonomy directly: an unknown public lookup raises `ValidationFailed`
-with its catalogued code rather than leaking a bare `KeyError`. The backends'
-constructors still raise `ValueError` for an empty tenant.
+Convention note: registry getters participate in this taxonomy directly:
+an unknown public lookup raises `ValidationFailed` with its catalogued code
+rather than leaking a bare `KeyError`. The backends' constructors still
+raise `ValueError` for an empty tenant.
 """
 
 from __future__ import annotations
@@ -64,7 +64,7 @@ class OntaryError(Exception):
         # (e.g. `ActionError(code="UNKNOWN_ACTION")` is kind `validation`,
         # not the class's default `precondition`) so a caller distinguishes
         # taxonomy from `.kind` alone, never the message text. An
-        # unregistered (author-supplied, AC7) code leaves `kind` at the class
+        # unregistered (author-supplied) code leaves `kind` at the class
         # default -- there is no catalog entry to consult.
         info = ERROR_CODES.get(code)
         if info is not None:
@@ -99,7 +99,7 @@ def _rebuild_error(
     because rebuilding runs the SAME constructor with the SAME code and so
     reproduces whatever that constructor did the first time -- the
     catalogued kind for a registered code, the class default for an
-    unregistered AC7 one. So for any instance whose `kind` was never touched
+    unregistered one. So for any instance whose `kind` was never touched
     after construction this line is a no-op, and only a mutated `kind`
     distinguishes carried from re-derived.
     """
@@ -213,7 +213,7 @@ ERROR_CODES: dict[str, ErrorCodeInfo] = {
             "unknown. `after_key` is UNTRUSTED input: it reaches the store from "
             "an MCP client via a later page-filling loop, round-tripped from a "
             "previous page's cursor without any guarantee the caller did not "
-            "tamper with it. As amended 2026-07-25 (T2 review, spec §5), it is a "
+            "tamper with it. As amended 2026-07-25, it is a "
             "random per-row PAGE TOKEN (`objects.page_token`, uuid4 hex), not a "
             "decimal row id. Resolving token to row id through the unique index "
             "is the ONLY way to turn a cursor into row identity, so every string "
@@ -223,7 +223,7 @@ ERROR_CODES: dict[str, ErrorCodeInfo] = {
             "`OverflowError`/silent-empty-page divergence. A token issued for a "
             "row since superseded by `update` still resolves because lookup uses "
             "`row_id` independently of `valid_to`, so an in-flight cursor remains "
-            "a valid resume point (spec §8)."
+            "a valid resume point."
         ),
     ),
     "STALE_CURSOR": ErrorCodeInfo(
@@ -238,7 +238,7 @@ ERROR_CODES: dict[str, ErrorCodeInfo] = {
         description=(
             "An action's precondition failed; the message names it. The "
             "conventional code for `ActionError` (kind precondition); an "
-            "author may attach their own stable code instead (AC7), e.g. "
+            "author may attach their own stable code instead, e.g. "
             "`raise ActionError(\"...\", code=\"GAP_NOT_ACKNOWLEDGED\")`. It "
             "is also used with overridden codes for unregistered/unhandled "
             "actions (`UNKNOWN_ACTION`) and parameter-validation failures "
@@ -421,12 +421,12 @@ ERROR_CODES: dict[str, ErrorCodeInfo] = {
         description=(
             "Raised when `ActionExecutor.execute()` (or an ingest entry point, a "
             "later task) is called while the caller has already opened a "
-            "`store.transaction()` block (declared-contracts §3 AC9). "
+            "`store.transaction()` block. "
             "`transaction()` is reentrant, so a caller-owned outer transaction "
             "could roll back an action after the executor reported success and "
             "audited `ok`. The engine must own the transaction/audit boundary and "
-            "refuses to nest inside the caller's. Deliberately NOT audited (spec "
-            "§5): an audit row inside the caller's transaction could itself be "
+            "refuses to nest inside the caller's. Deliberately NOT audited: an "
+            "audit row inside the caller's transaction could itself be "
             "rolled back, so the refusal is raised before any audit write."
         ),
     ),
@@ -454,7 +454,7 @@ ERROR_CODES: dict[str, ErrorCodeInfo] = {
             "carries the SAME `INVALID_RECORD` code that `bulk_upsert` already "
             "reports: from a caller's point of view, a record not matching the "
             "declaration is one failure regardless of which write path noticed. "
-            "This closes the M9 hole where only ingest checked: "
+            "This closes the hole where only ingest checked: "
             "`Store.insert`/`update` and therefore `ActionContext.insert`/`update` "
             "could commit a row missing a required property or carrying a wrong-"
             "typed value, report success, and leave the typed reader unable to "
@@ -472,12 +472,12 @@ ERROR_CODES: dict[str, ErrorCodeInfo] = {
         kind="validation",
         description=(
             "A typed `get`/`list` call named a key that is not one of the target "
-            "class's declared properties (spec typed-authoring AC7). The "
+            "class's declared properties. The "
             "existence-only check runs client-side before the guarded read "
             "layer; a hidden-but-declared key still reaches the visibility kind "
             "unchanged, and the string-form surface keeps its silent-non-match "
-            "behavior (AC8). The error lives here since C3 of the staged "
-            "refactor (previously `ontary.functions`, which re-exports it)."
+            "behavior. The error lives here (previously `ontary.functions`, "
+            "which re-exports it)."
         ),
     ),
     "UNKNOWN_NAME": ErrorCodeInfo(
@@ -486,9 +486,8 @@ ERROR_CODES: dict[str, ErrorCodeInfo] = {
             "A typed `BoundQuery`/`OntologyClient` call named an unregistered "
             "object, link, action, or function -- e.g. an undecorated class, a "
             "class/`LinkHandle` registered on a different `Ontology`, or a link "
-            "api_name absent from this registry (typed-authoring AC7 / "
-            "typed-actions AC8). Typed lookup failures use the validation kind "
-            "and live here since C3 of the staged refactor so `ontary._typed_api` "
+            "api_name absent from this registry. Typed lookup failures use the "
+            "validation kind and live here so `ontary._typed_api` "
             "can raise them below the runtime modules."
         ),
     ),
@@ -517,9 +516,8 @@ ERROR_CODES: dict[str, ErrorCodeInfo] = {
             "non-numeric `PropertyType` (anything other than `int`/`float`, "
             "such as str/json/datetime/bool). It is checked against the "
             "declared type before rows are iterated or coerced, so values that "
-            "merely look numeric cannot bypass the type contract (spec "
-            '`m35-sdk-refactor` §6 AC7). `func="count"` is exempt and accepts '
-            "any declared type."
+            'merely look numeric cannot bypass the type contract. `func="count"` '
+            "is exempt and accepts any declared type."
         ),
     ),
     "PAGE_NOT_ITERABLE": ErrorCodeInfo(
@@ -586,8 +584,8 @@ ERROR_CODES: dict[str, ErrorCodeInfo] = {
         kind="validation",
         description=(
             "`GuardedQuery.get_objects`'s (or `OntologyClient.list`'s) "
-            "`after` was given without `limit` (pagination-hardening T2 review "
-            "P1) -- the unpaginated `Store.read_all` path has no page to resume, "
+            "`after` was given without `limit` -- the unpaginated "
+            "`Store.read_all` path has no page to resume, "
             "so ignoring `after` would let a caller that lost track of its "
             "limit silently re-read every visible row and duplicate work; a "
             "caller that genuinely wants everything passes no `after` at all."

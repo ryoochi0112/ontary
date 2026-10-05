@@ -12,6 +12,8 @@ Release metadata: version
 
 Documentation: **https://ryoochi0112.github.io/ontary/** (English / 日本語).
 
+For AI coding assistants: [`llms.txt`](https://ryoochi0112.github.io/ontary/llms.txt) indexes the docs and [`llms-full.txt`](https://ryoochi0112.github.io/ontary/llms-full.txt) holds every English page in one file.
+
 ## Install
 
 From PyPI:

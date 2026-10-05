@@ -1,14 +1,13 @@
 """Generic MCP server: exposes any `OntologyDef` to an MCP client (e.g. a
-Claude agent). Two builders share one implementation (spec
-`multi-consumer-mcp.md` §4.3 "one tool body, two servers"):
+Claude agent). Two builders share one implementation:
 
 - `build_mcp_server(ontology, store, consumer)` -- one server process bound
-  to exactly one `Consumer` (spec §5, AC8/AC12), for a single-consumer
+  to exactly one `Consumer`, for a single-consumer
   stdio deployment. Unchanged, byte-identically, by everything below.
 - `build_multi_consumer_mcp_server(ontology, store, resolve_consumer=...)`
   -- one server process serving MANY proven identities: each tool
   invocation resolves its own `Consumer` from that request's verified MCP
-  `AccessToken` (spec `multi-consumer-mcp.md` §3 AC1-AC9).
+  `AccessToken`.
 
 Every tool here delegates to a single `OntologyClient` built from the
 `(ontology, store, consumer)` triple this module is handed -- there is no
@@ -19,8 +18,8 @@ mirrors `OntologyClient`'s own guarantee (see `ontary.client`'s docstring)
 one layer further out.
 
 All twelve tool bodies are registered exactly once, by `_register_tools`,
-against a `resolve_client: Callable[[], OntologyClient]` seam (spec
-`multi-consumer-mcp.md` §4.3) instead of each tool closing directly over an
+against a `resolve_client: Callable[[], OntologyClient]` seam instead of
+each tool closing directly over an
 already-built client. `build_mcp_server` below passes a constant
 `lambda: client` that never raises, so its own behavior is unchanged --
 this module still builds exactly one `OntologyClient` per server, up
@@ -32,9 +31,9 @@ is classified by the exact same `_try`/`_run` machinery an `OntaryError` from
 inside a tool body already goes through, so the fail-closed envelope is not
 a bespoke try/except of its own.
 
-Deliberately NOT exposed: `client.ingest`/`client.ingest_links`. Spec §5
-scopes the MCP surface to introspection + query/traverse/execute/call --
-bulk data-loading is an unguarded, lineage-stamped bulk-upsert path (AC9),
+Deliberately NOT exposed: `client.ingest`/`client.ingest_links`. The MCP
+surface is scoped to introspection + query/traverse/execute/call --
+bulk data-loading is an unguarded, lineage-stamped bulk-upsert path,
 not a consumer-facing read/act surface, and exposing it here would let any
 MCP caller write arbitrary rows bypassing every guard this module otherwise
 enforces.
@@ -47,8 +46,7 @@ with the stable `code` identifying the specific refusal -- plus the two
 bare-Python unknown-name errors
 (`KeyError`/`ValueError`) and returns a structured `{"error": {"type": ...,
 "message": ..., "code": ..., "kind": ...}}` payload -- never a partial
-result, never a raw traceback (spec §7 "MCP server with a mis-scoped
-consumer" edge case; declared-contracts §3 AC8: the `code` is the same
+result, never a raw traceback (the `code` is the same
 stable code the Python client surfaces for the same refusal, for EVERY
 `kind`, not just visibility/permission/precondition). An `OntaryError` whose
 `kind` is `internal` (e.g. the `STORE_ERROR` fallback) is deliberately routed
@@ -93,18 +91,18 @@ if TYPE_CHECKING:
 # already exists to avoid for `MCPServer` itself.
 ConsumerResolver = Callable[["AccessToken"], "Consumer | None"]
 """Maps one request's verified `AccessToken` to the `Consumer` it should act
-as, or `None` if nothing maps it (spec `multi-consumer-mcp.md` §4.1). Must be
+as, or `None` if nothing maps it. Must be
 SYNCHRONOUS -- the twelve tool handlers are `async def`, so the resolver is
 called on the event loop inside the request's task. It must therefore be a
 plain synchronous callable that does not block (no network round-trips that
 stall the loop -- a slow resolver stalls every in-flight request), and an
 `async` resolver is not accepted because the tool bodies call it
-synchronously; see `build_multi_consumer_mcp_server`'s docstring (§4.4).
+synchronously; see `build_multi_consumer_mcp_server`'s docstring.
 
 If this callback raises a deliberate `OntaryError` (rather than returning
 `None`), that error's `.message` IS echoed verbatim in the tool's error
 envelope -- unlike any OTHER exception type, which is re-typed to a
-message-free `RuntimeError` before it can reach a caller (AC6). A resolver
+message-free `RuntimeError` before it can reach a caller. A resolver
 that raises `OntaryError` for its own refusals must therefore keep the
 verified token, or anything derived from it, out of that message."""
 
@@ -128,7 +126,7 @@ MCP_EXTRA_HINT = (
 first-contact failure: before this existed, `pip install ontary` followed
 by `ontary-mcp` produced a bare `ModuleNotFoundError: No module named 'mcp'`
 with no indication that an extra exists. Found by installing the wheel into an
-empty venv, which nothing in CI had ever done (M6 step 3).
+empty venv, which nothing in CI had ever done.
 
 Deliberately an `ImportError`, not an `OntaryError`. `ERROR_CODES` catalogues
 refusals a CONSUMER can receive from a running runtime -- over MCP, that means
@@ -232,7 +230,7 @@ _KIND_NAMES: dict[str, str] = {
 
 
 def _code_and_kind(exc: Exception) -> tuple[str, str]:
-    """Classify `exc` into a stable `(code, kind)` pair (spec AC8): every
+    """Classify `exc` into a stable `(code, kind)` pair: every
     engine exception is already an `OntaryError` carrying its own `.code`/
     `.kind`; the two bare-Python exception types `_KNOWN_ERRORS` also
     catches defensively (`KeyError`/`ValueError`, for any unwrapped
@@ -337,7 +335,7 @@ def _tool_optional_string(name: str, value: Any) -> str | None:
 
 def _serialize(obj: StoredObject | None) -> dict[str, Any] | None:
     """Serialize a `StoredObject` to its MCP wire shape: `{"payload": ...,
-    "lineage": ...}` (spec m35-sdk-refactor §6 AC8) -- `model_dump(mode=
+    "lineage": ...}` -- `model_dump(mode=
     "json")` so both halves round-trip as plain JSON-safe values, with no
     magic `_`-prefixed keys smuggled into `payload`."""
     return None if obj is None else obj.model_dump(mode="json")
@@ -347,8 +345,8 @@ def _try(fn: Callable[[], Any]) -> tuple[Any, dict[str, Any] | None]:
     """Run `fn`, returning `(result, None)` on success or `(None, envelope)`
     on a caught failure -- the classification shared by `_run` (nests a
     success under `"result"`) and `_run_unwrapped` (returns it at the top
-    level, for the introspection tools -- spec `multi-consumer-mcp.md`
-    §4.3). Extracted so both callers, and any future caller that resolves
+    level, for the introspection tools). Extracted so both callers, and
+    any future caller that resolves
     a client/identity before running the tool body, get the SAME failure
     handling rather than a second hand-written copy of it.
     """
@@ -409,7 +407,7 @@ def _run_unwrapped(fn: Callable[[], dict[str, Any]]) -> dict[str, Any]:
     *ontology-controlled* key from colliding with `"error"`; introspection's
     top-level keys (`object_types`, `link_types`, ...) are fixed by this
     module, not by any ontology, so there is nothing for them to collide
-    with (spec `multi-consumer-mcp.md` §4.3). Failure classification is
+    with. Failure classification is
     identical to `_run` -- both share `_try`.
     """
     result, error = _try(fn)
@@ -510,8 +508,7 @@ def _aggregate_objects(
     checked_group_by = _tool_optional_string("group_by", group_by)
     checked_where = _tool_optional_object("where", where)
     checked_func = cast(AggregateFunc, _tool_string("func", func))
-    # `value_field` is optional only for func="count" (spec
-    # `count-min-n-discoverability.md` §2 item 2); for every other func a
+    # `value_field` is optional only for func="count"; for every other func a
     # `None` value_field is invalid and must reach the engine's
     # `INVALID_PARAMS` refusal rather than be rejected here. The typed
     # `OntologyClient.aggregate(_by)` overloads narrow `value_field` to
@@ -714,8 +711,7 @@ def _register_tools(
     resolve_client: Callable[[], OntologyClient],
 ) -> None:
     """Register all twelve tools onto `server`, ONE tool body each, shared by
-    both `build_mcp_server` and `build_multi_consumer_mcp_server` (spec
-    `multi-consumer-mcp.md` §4.3: "one tool body, two servers").
+    both `build_mcp_server` and `build_multi_consumer_mcp_server`.
 
     Every tool obtains its `OntologyClient` by CALLING `resolve_client()`
     at invocation time rather than closing over an already-built client --
@@ -734,7 +730,7 @@ def _register_tools(
     registry` for their payload -- that part is schema, not consumer data,
     and untouched by who's asking. They call `resolve_client()` too, so
     that identity is proven -- and a raising resolver refused -- before
-    ANY tool answers, introspection included (spec §3 AC4). A raising
+    ANY tool answers, introspection included. A raising
     resolver is classified by `_try` into the identical structured
     envelope an `OntaryError` already produces (see `_run_unwrapped`/`_run`),
     so introspection fails exactly like every other tool rather than
@@ -805,7 +801,7 @@ def _register_tools(
 
     @server.tool(annotations=read_only)
     async def get_declarations() -> dict[str, Any]:
-        """This runtime's declared contracts (spec AC10): authority model,
+        """This runtime's declared contracts: authority model,
         write-back/re-ingest/visibility/transaction-ownership/idempotency
         stance, audit scope, and this ontology's `min_n` -- identical to
         `client.declarations`."""
@@ -817,8 +813,8 @@ def _register_tools(
     ) -> dict[str, Any]:
         """Fetch one object by type + id, through the guarded read layer.
 
-        `client.get` returns a `StoredObject` (payload/lineage split, spec
-        m35-sdk-refactor §6 AC8); the wire result is that model's
+        `client.get` returns a `StoredObject` (payload/lineage split); the
+        wire result is that model's
         `model_dump(mode="json")` -- `{"payload": {...}, "lineage": {...}}`
         -- so a caller sees the object's own properties and its storage/
         provenance metadata (object_type, object_id, valid_from/to,
@@ -929,7 +925,7 @@ def _register_tools(
         """Count objects visible to this consumer after applying ``where``.
 
         This delegates to ``OntologyClient.count`` so the Python and MCP
-        surfaces share field gates, the T7 operator evaluator, scope, and row
+        surfaces share field gates, the operator evaluator, scope, and row
         visibility. A fully scoped-away selection returns zero.
 
         This is a visible-row count and is not min-N-gated: it reveals only
@@ -1004,17 +1000,16 @@ def build_mcp_server(
     capabilities: Mapping[CapabilityHandle[Any], object] | None = None,
 ) -> MCPServer:
     """Build an `MCPServer` bound to exactly one `(ontology, store,
-    consumer)` triple -- one server process, one Consumer identity (spec
-    §5).
+    consumer)` triple -- one server process, one Consumer identity.
 
     `ontology` accepts either a plain `OntologyDef` (descriptor authoring)
-    or an `Ontology` (class authoring, spec `typed-actions.md` §6) -- same
+    or an `Ontology` (class authoring) -- same
     as `OntologyClient`'s own constructor, which this function delegates
     to internally. Handlers arrive pre-bound: an `Ontology`'s
     `@ontology.action(...)`/`@ontology.function(...)`-declared handlers
-    auto-bind to the internal `OntologyClient` this server builds (spec
-    AC7 removed the old `register_handlers` callback parameter -- there is
-    no per-server registration step left to perform here). A descriptor-
+    auto-bind to the internal `OntologyClient` this server builds (the old
+    `register_handlers` callback parameter was removed -- there is no
+    per-server registration step left to perform here). A descriptor-
     authored `OntologyDef` passed here has no declared handlers to
     auto-bind, so its actions are unregistered (`UNKNOWN_ACTION`) unless
     it is migrated to class authoring -- see `ontary.client`'s docstring.
@@ -1022,7 +1017,7 @@ def build_mcp_server(
     Delegates tool registration to `_register_tools` with a constant
     `resolve_client` that always returns the one client built here and
     never raises -- so this function's own behavior is unchanged by the
-    shared-registration refactor (spec `multi-consumer-mcp.md` AC12).
+    shared-registration refactor.
     """
     client = OntologyClient(
         ontology,
@@ -1048,8 +1043,8 @@ def build_multi_consumer_mcp_server(
     auth: AuthSettings | None = None,
 ) -> MCPServer:
     """Build an `MCPServer` serving MANY proven identities over one
-    `(ontology, store)` pair -- no `consumer` parameter (spec
-    `multi-consumer-mcp.md` §3 AC1). Each tool invocation resolves its own
+    `(ontology, store)` pair -- no `consumer` parameter. Each tool
+    invocation resolves its own
     `Consumer` from that request's verified MCP `AccessToken`, via the
     caller-supplied `resolve_consumer`.
 
@@ -1086,7 +1081,7 @@ def build_multi_consumer_mcp_server(
     once at `initialize`, and `tests/test_mcp_multi_consumer.py` pins both
     session modes at the ASGI boundary.
 
-    **One runtime, many views (AC7).** Exactly one `OntologyRuntime` -- one
+    **One runtime, many views.** Exactly one `OntologyRuntime` -- one
     `GuardedQuery`, one `ActionExecutor`, every ontology-declared handler
     bound once -- is built here, at construction, same as `build_mcp_server`
     builds one `OntologyClient` once. Every call goes through `runtime.
@@ -1094,22 +1089,21 @@ def build_multi_consumer_mcp_server(
     identity; two different identities' calls therefore see `client.actions`
     as the same object, not two independent copies of a role/scope guard.
 
-    **Resolution is never cached (AC2).** The `resolve_client` seam
+    **Resolution is never cached.** The `resolve_client` seam
     `_register_tools` calls PER INVOCATION does the full read-token/
     resolve/stamp/`for_consumer` sequence below every single time -- there
     is no memoization keyed on the token, so a revoked or re-scoped token
     cannot be served from a stale binding, and two interleaved calls from
     different identities on this one server object never share any mutable
-    per-call state (AC3).
+    per-call state.
 
-    **Fail-closed sequence, per invocation, ALL twelve tools (AC4/AC13):**
+    **Fail-closed sequence, per invocation, ALL twelve tools:**
 
     1. No verified `AccessToken` on the request (`get_access_token()`
        returns `None` -- true for stdio, or HTTP with no `token_verifier`
        configured) -> `PermissionDenied` with code `UNAUTHENTICATED`. This is
        the FIRST thing a
-       misconfigured deployment hits, so its message names the fix (spec
-       §3's golden sample).
+       misconfigured deployment hits, so its message names the fix.
     2. `resolve_consumer(token)` returns `None` -> `PermissionDenied` with code
        `CONSUMER_UNRESOLVED` -- a verified principal exists, but nothing maps
        it to a `Consumer`.
@@ -1119,7 +1113,7 @@ def build_multi_consumer_mcp_server(
        `_try`/`_run` classify it exactly like an `OntaryError` raised from
        inside a tool body.
     4. `resolve_consumer(token)` raises anything else -> re-raised as a
-       plain `RuntimeError` carrying NO part of the original message (AC6):
+       plain `RuntimeError` carrying NO part of the original message:
        `_try`'s classification keys off exception TYPE, and `KeyError`/
        `ValueError` are two of the types it already echoes verbatim for
        tool-body failures (`UNKNOWN_NAME`/`INVALID_PARAMS`) -- a resolver
@@ -1129,7 +1123,7 @@ def build_multi_consumer_mcp_server(
        has no special case for and therefore routes to the generic
        `INTERNAL_ERROR` envelope.
 
-    **The principal cannot be forged by author code (AC9).** After
+    **The principal cannot be forged by author code.** After
     `resolve_consumer` returns a `Consumer`, THIS function -- not the
     resolver -- overwrites `principal` from the verified token:
     `token.subject or token.client_id` (`client_id` is non-optional on
@@ -1168,8 +1162,7 @@ def build_multi_consumer_mcp_server(
         try:
             consumer = resolve_consumer(token)
         except OntaryError:
-            # A resolver's own deliberate refusal (spec §6 "resolver
-            # raises a deliberate OntaryError") -- surfaced unchanged so
+            # A resolver's own deliberate refusal -- surfaced unchanged so
             # `_try` classifies it exactly like any other `OntaryError`.
             raise
         except Exception as exc:
@@ -1178,7 +1171,7 @@ def build_multi_consumer_mcp_server(
             # tool-body failure -- is re-typed to a plain `RuntimeError`
             # with a message that names nothing about the original
             # failure, so `_try`'s generic (message-free) `INTERNAL_ERROR`
-            # branch is the only one that can possibly match (AC6: the
+            # branch is the only one that can possibly match (the
             # resolver's message may embed token material and must never
             # be echoed).
             raise RuntimeError(

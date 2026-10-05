@@ -43,13 +43,12 @@ class Consumer(BaseModel):
     # identity for this call: direct Python use, or the single-consumer stdio
     # server (`build_mcp_server`), where the process itself is the only proof
     # there is. This field is meant to be a CARRIER, not an input author code
-    # is trusted to set: the intent (spec `multi-consumer-mcp` AC9) is for a
-    # multi-consumer MCP server to overwrite it, after `resolve_consumer`
-    # returns, from the verified access token's `subject` (falling back to
-    # `client_id`) -- so that a resolver cannot forge who authenticated.
-    # That overwrite is the multi-consumer server's job (M10 T6), not this
-    # model's, and until it lands this field is UNENFORCED: any caller can
-    # set it to whatever it wants.
+    # is trusted to set: the intent is for a multi-consumer MCP server to
+    # overwrite it, after `resolve_consumer` returns, from the verified access
+    # token's `subject` (falling back to `client_id`) -- so that a resolver
+    # cannot forge who authenticated. That overwrite is the multi-consumer
+    # server's job, not this model's, and until it lands this field is
+    # UNENFORCED: any caller can set it to whatever it wants.
     principal: str | None = None
 
 

@@ -1,4 +1,4 @@
-"""Function registry: derived-value calls over the guarded read layer (AC3).
+"""Function registry: derived-value calls over the guarded read layer.
 
 A Function is a declared `FunctionDef` (`ontary.meta`) plus a registered
 Python callable. `FunctionRegistry.register`/`function` refuse to bind a
@@ -11,11 +11,11 @@ Functions receive a `BoundQuery`, never a raw `GuardedQuery` with a
 separately-passed `Consumer`, and never the `ObjectStore`:
 
 - No store handle reaches the function body, so a function cannot write the
-  ontology, only derive values from already-guarded reads (原則1 / spec AC3).
-  It is given no outward-write path either (spec AC4). That is a guarantee
+  ontology, only derive values from already-guarded reads.
+  It is given no outward-write path either. That is a guarantee
   about what the SDK PROVIDES, not a sandbox -- a capability provider is
   unsandboxed author code, so `query.capability(...)` can itself write outward
-  with no audit row (spec §11, `Declarations.writeback`).
+  with no audit row (`Declarations.writeback`).
 - The `Consumer` is fixed at construction (by whichever `OntologyClient`
   built the `BoundQuery`), not accepted as a per-call argument the function
   body could vary -- a function cannot read AS a different consumer than
@@ -33,13 +33,13 @@ separately-passed `Consumer`, and never the `ObjectStore`:
 
 `BoundQuery` exposes the same read surface as `GuardedQuery`
 (`get`/`list`/`traverse`/`aggregate`/`aggregate_by`) with
-`consumer` already applied -- no new guard logic lives here, it is a thin closure over an
-already-guarded `GuardedQuery`. Spec `typed-actions.md` §6/AC8 additionally
-gives `get`/`list`/`traverse` M4a-style typed overloads
+`consumer` already applied -- no new guard logic lives here, it is a thin
+closure over an already-guarded `GuardedQuery`. It additionally gives
+`get`/`list`/`traverse` typed overloads
 (`type[T]`/`LinkHandle` in place of a string `api_name`), resolved via the
 SAME `_class_stamp` identity-stamp helper `client.OntologyClient` uses
 (`ontary.model`, which sits below this module -- the old function-body
-imports from `authoring` are gone since C1 of the staged refactor).
+imports from `authoring` are gone).
 Typed lookup failures use the validation kind, which keeps both `client.py`
 and this module below the same import cycle.
 """
@@ -134,13 +134,13 @@ class BoundQuery(_TypedReadMixin):
         # place that hands either of them out -- see `_for_author_dispatch`.
         self._author_dispatch = None
         # Capability providers ONLY -- a Function is given no outward-write
-        # path (spec AC4). This withholds a PATH; it is not a sandbox -- see
-        # the module docstring and AC4's scope note.
+        # path. This withholds a PATH; it is not a sandbox -- see the module
+        # docstring.
         self._capability_providers = dict(capability_providers or {})
         self._capability_accesses = capability_accesses
-        # Where the guarded read layer records that the AC10 exemption -- and
-        # only the exemption -- let this dispatch read a hidden field. See
-        # `_TypedReadMixin._disclosures` and `OntologyClient.call_function`.
+        # Where the guarded read layer records that the contributor exemption
+        # -- and only the exemption -- let this dispatch read a hidden field.
+        # See `_TypedReadMixin._disclosures` and `OntologyClient.call_function`.
         self._disclosures = disclosures
 
     def _for_author_dispatch(self, declared: frozenset[str]) -> BoundQuery:
@@ -181,7 +181,7 @@ class BoundQuery(_TypedReadMixin):
         -- so `query.capability(LLM)` narrows to
         `LLMClient` with no cast at the call site.
 
-        Fail-closed in three ways (AC8), all before any provider is returned:
+        Fail-closed in three ways, all before any provider is returned:
         a handle from another `Ontology` -> `ValidationFailed` code
         `UNKNOWN_NAME`; a capability this FUNCTION did not declare ->
         `ValidationFailed` code `UNDECLARED_CAPABILITY`, **even when a
@@ -190,8 +190,8 @@ class BoundQuery(_TypedReadMixin):
         `PreconditionFailed` code `CAPABILITY_NOT_PROVIDED`.
 
         The returned object is the author's provider, unwrapped -- the engine
-        adds nothing and inspects nothing (spec §8 R1: providers are the same
-        trust tier as handlers).
+        adds nothing and inspects nothing (providers are the same trust tier
+        as handlers).
 
         Accesses ARE recorded now, on the same terms as
         `ActionContext.capability`: `count` counts provider *retrievals*, not
@@ -393,7 +393,7 @@ class FunctionRegistry:
 
     Constructed against one `OntologyRegistry` so `register`/`function` can
     refuse to bind an undeclared `api_name`; holds no store, no consumer, no
-    module-global state (spec §7) -- instance-scoped like every other engine
+    module-global state -- instance-scoped like every other engine
     layer, so it is safe to share across many `OntologyClient`s bound to the
     same `OntologyDef`.
     """

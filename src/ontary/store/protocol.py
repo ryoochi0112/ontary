@@ -1,7 +1,7 @@
 """The `Store` protocol.
 
-Moved verbatim from the original `ontary/store.py` (B2 of the staged
-refactor). This is the storage seam the engine is written against.
+Moved verbatim from the original `ontary/store.py`. This is the storage
+seam the engine is written against.
 """
 
 from __future__ import annotations
@@ -162,7 +162,7 @@ class Store(Protocol):
 
     def read_all(self, obj_type: str) -> list[StoredObject]:
         """Raw (unredacted, unscoped) read of every current row of
-        `obj_type`, ordered the same way as `read_page` (spec AC2).
+        `obj_type`, ordered the same way as `read_page`.
         Engine-internal / trusted-caller-only -- see the protocol
         docstring's layering rule."""
         ...
@@ -172,8 +172,7 @@ class Store(Protocol):
     ) -> list[PagedRow]:
         """Raw (unredacted, unscoped) read of current rows of `obj_type`,
         ordered by the store's own per-row identity -- NOT the payload
-        primary key: spec pagination-hardening §5's amended decision
-        explains why a payload-pk-keyed cursor silently drops rows -- and
+        primary key: a payload-pk-keyed cursor silently drops rows -- and
         starting strictly AFTER `after_key` (or from the beginning when
         `None`), capped at `batch` rows.
 
@@ -182,13 +181,12 @@ class Store(Protocol):
         placed on `StoredObject`/`Lineage` itself (it would let a narrow
         consumer infer how many rows its scope hid, or another tenant's
         write volume, by gap arithmetic -- see `Lineage`'s docstring), so a
-        random per-row PAGE TOKEN travels OUT-OF-BAND, per row, instead
-        (spec §5's T2 amendment -- see `PagedRow`'s docstring for why the
-        token, not the row id itself, and why per-row rather than one key
-        for the whole batch). Exhaustion has NO separate flag: fewer than
-        `batch` rows back means the walk is exhausted (mirroring `read_all`
-        -- there is nothing left to fetch), exactly `batch` rows means
-        there may be more.
+        random per-row PAGE TOKEN travels OUT-OF-BAND, per row, instead (see
+        `PagedRow`'s docstring for why the token, not the row id itself, and
+        why per-row rather than one key for the whole batch). Exhaustion has
+        NO separate flag: fewer than `batch` rows back means the walk is
+        exhausted (mirroring `read_all` -- there is nothing left to fetch),
+        exactly `batch` rows means there may be more.
 
         Raises `ValidationFailed(code=INVALID_BATCH)` if `batch < 1`, and
         `ValidationFailed(code=INVALID_CURSOR)` if `after_key`
@@ -199,14 +197,13 @@ class Store(Protocol):
         A keyset walk driven by repeated `read_page` calls never SKIPS a
         row, but MAY REPEAT one that was updated mid-walk: the store is
         close-old-insert-new, so an update's new current version gets a
-        higher order key and can re-enter the walk behind the cursor (spec
-        pagination-hardening §8). Engine-internal / trusted-caller-only --
-        see the protocol docstring's layering rule."""
+        higher order key and can re-enter the walk behind the cursor.
+        Engine-internal / trusted-caller-only -- see the protocol docstring's
+        layering rule."""
         ...
 
     def append_audit(self, entry: AuditEntry) -> None:
-        """Persist one audit entry. Never raises (declared-contracts §3
-        AC12)."""
+        """Persist one audit entry. Never raises."""
         ...
 
     def audit_entries(self) -> list[AuditEntry]:

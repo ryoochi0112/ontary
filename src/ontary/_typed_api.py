@@ -1,4 +1,4 @@
-"""Shared typed-API helpers (C3 of the staged refactor).
+"""Shared typed-API helpers.
 
 The fail-closed resolution/validation logic that `OntologyClient`,
 `BoundQuery`, and `ActionContext` each used to carry as verbatim (or
@@ -109,7 +109,7 @@ def validate_where_keys(
     cls: type[OntologyObject], where: dict[str, Any] | None
 ) -> None:
     """Existence-only check of `where=` keys against `cls.model_fields`
-    for a TYPED call (spec AC7) -- unknown key -> `ValidationFailed` code
+    for a TYPED call -- unknown key -> `ValidationFailed` code
     `UNKNOWN_FIELD`. A
     hidden-but-declared key passes this check unchanged and still hits
     `GuardedQuery`'s `VISIBILITY_DENIED` visibility gate downstream.
@@ -328,7 +328,7 @@ class _TypedReadMixin:
     _registry: OntologyRegistry | None
     _typed_owner: str
     _disclosures: list[tuple[str, str]] | None = None
-    """Sink for reads the AC10 exemption -- and only the exemption -- allowed.
+    """Sink for reads the contributor exemption -- and only the exemption -- allowed.
 
     `None` on every façade except the throwaway `BoundQuery` that
     `FunctionRegistry.call` builds for one declared-Function dispatch, which
@@ -355,7 +355,7 @@ class _TypedReadMixin:
 
     def _api_name_for(self, cls: type[OntologyObject]) -> str:
         """Resolves a decorated `OntologyObject` subclass to its registered
-        `api_name` (stamped on the class by `Ontology.object()` -- spec §6)
+        `api_name` (stamped on the class by `Ontology.object()`)
         -- `ValidationFailed` code `UNKNOWN_NAME` (same code the string path's
         lookups carry) for an
         undecorated class, OR one registered on a different `Ontology`.
@@ -398,7 +398,7 @@ class _TypedReadMixin:
     ) -> None:
         """Existence-only check of a single field name (`value_field`/
         `group_by`) against `cls.model_fields` for a TYPED `aggregate`
-        call (spec AC7) -- unknown name -> `ValidationFailed` code
+        call -- unknown name -> `ValidationFailed` code
         `UNKNOWN_FIELD`. A hidden-but-
         declared field passes this check unchanged and still hits
         `GuardedQuery`'s own gates (`VISIBILITY_DENIED`/`MIN_N_VIOLATION`)
@@ -716,9 +716,8 @@ def resolve_capability(
     accesses: list[CapabilityAccessRecord] | None,
     subject: str,
 ) -> object:
-    """The shared four-step fail-closed capability accessor (spec
-    `governed-effects` AC6/AC8) behind `ActionContext.capability` and
-    `BoundQuery.capability`: foreign registry -> `ValidationFailed` code
+    """The shared four-step fail-closed capability accessor behind
+    `ActionContext.capability` and `BoundQuery.capability`: foreign registry -> `ValidationFailed` code
     `UNKNOWN_NAME`; undeclared -> `ValidationFailed` code
     `UNDECLARED_CAPABILITY` (even when a provider happens to be bound --
     declaration is the gate, not availability); declared-but-unbound ->
