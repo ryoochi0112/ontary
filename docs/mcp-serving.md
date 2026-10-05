@@ -100,29 +100,151 @@ receives the MCP transport's already-verified `AccessToken`, calls your
 `resolve_consumer` callback, and creates a cheap consumer view over the shared
 runtime.
 
+Here is a complete server you can run as it stands. It declares a one-type
+ontology, seeds one ticket, and serves it to one authenticated agent:
+
 ```python
+from mcp.server.auth.provider import AccessToken
 from mcp.server.auth.settings import AuthSettings
-from ontary import Consumer
-from ontary.mcp_server import (
-    ConsumerResolver,
-    build_multi_consumer_mcp_server,
+from pydantic import AnyHttpUrl
+
+from ontary import (
+    Consumer, DirectProperty, ObjectStore, Ontology, OntologyObject, Source, prop,
+)
+from ontary.mcp_server import build_multi_consumer_mcp_server
+
+ontology = Ontology(name="support", scope_levels=["queue"])
+
+
+@ontology.object(
+    layer="L0", scope=[DirectProperty(level="queue", property_name="queue_id")]
+)
+class Ticket(OntologyObject):
+    id: str = prop(primary_key=True)
+    subject: str
+    queue_id: str = prop(scope_level="queue")
+
+
+ontology.validate()
+store = ObjectStore(ontology.registry)  # SQLite, in memory
+store.insert(
+    "Ticket",
+    {"id": "ticket-1", "subject": "Invoice mismatch", "queue_id": "billing"},
+    Source(source_system="demo"),
 )
 
 
-def resolve_consumer(token) -> Consumer | None:
-    # Map token.subject (or token.client_id) through your directory.
-    return directory.lookup(token.subject)
+class StaticTokenVerifier:
+    """A stand-in for your identity provider's verifier: a fixed token map."""
+
+    def __init__(self, tokens: dict[str, AccessToken]) -> None:
+        self._tokens = tokens
+
+    async def verify_token(self, token: str) -> AccessToken | None:
+        return self._tokens.get(token)  # None = not authenticated (HTTP 401)
+
+
+verifier = StaticTokenVerifier({
+    "token-alice": AccessToken(
+        token="token-alice", client_id="support-agent", scopes=[], subject="alice"
+    ),
+})
+
+consumers = {
+    "alice": Consumer(
+        actor_id="alice", role="Agent", scope_level="queue", scope_id="billing",
+        kind="human",
+    ),
+}
+
+
+def resolve_consumer(token: AccessToken) -> Consumer | None:
+    return consumers.get(token.subject or "")
 
 
 server = build_multi_consumer_mcp_server(
     ontology,
     store,
     resolve_consumer=resolve_consumer,
-    token_verifier=my_token_verifier,
-    auth=AuthSettings(issuer_url=..., resource_server_url=...),
+    token_verifier=verifier,
+    auth=AuthSettings(
+        issuer_url=AnyHttpUrl("https://auth.example.com"),
+        resource_server_url=AnyHttpUrl("http://localhost:8000"),
+    ),
 )
-server.run(transport="streamable-http")
+
+if __name__ == "__main__":
+    server.run(transport="streamable-http", stateless_http=True, json_response=True)
 ```
+
+`StaticTokenVerifier` is a stand-in that only makes the example run offline. A
+deployment replaces it with its identity provider's verifier, for example JWT
+validation against the provider's JWKS or OAuth token introspection. The
+verifier must be an `async def verify_token` that returns an `AccessToken`, or
+`None` to refuse the token. `AuthSettings` names the issuer that minted the
+token and this server's own URL. Running the file serves
+`http://localhost:8000/mcp`.
+
+An agent calls a tool with its bearer token:
+
+```http
+POST /mcp HTTP/1.1
+Host: localhost:8000
+Authorization: Bearer token-alice
+Accept: application/json, text/event-stream
+Content-Type: application/json
+
+{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "query_objects", "arguments": {"obj_type": "Ticket"}}}
+```
+
+The server answers `200 OK` with the rows that alice's `billing` queue scope
+allows. `content` carries the same result as text for clients that do not read
+`structuredContent`; `valid_from` is the time the row was inserted:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "content": [{"type": "text", "text": "<the structuredContent below, as JSON text>"}],
+    "isError": false,
+    "structuredContent": {
+      "result": [
+        {
+          "payload": {"id": "ticket-1", "subject": "Invoice mismatch", "queue_id": "billing"},
+          "lineage": {
+            "object_type": "Ticket",
+            "object_id": "ticket-1",
+            "valid_from": "<insert time>",
+            "valid_to": null,
+            "source_system": "demo",
+            "source_id": null,
+            "extracted_at": null
+          }
+        }
+      ],
+      "next_cursor": null
+    }
+  }
+}
+```
+
+The same request without the `Authorization` header, or with a token the
+verifier does not know, is refused with `401 Unauthorized`. The MCP transport
+refuses it before ontary resolves a consumer, so no `resolve_consumer` call and
+no audit entry happens:
+
+```http
+HTTP/1.1 401 Unauthorized
+Content-Type: application/json
+WWW-Authenticate: Bearer error="invalid_token", error_description="Authentication required", resource_metadata="http://localhost:8000/.well-known/oauth-protected-resource"
+
+{"error": "invalid_token", "error_description": "Authentication required"}
+```
+
+The `200` body above is what `json_response=True` returns. Without it, the server
+streams the same JSON-RPC message as a server-sent event. The `401` is the same in
+both modes.
 
 The resolver is application code. It may look up a database row or an organization
 directory, but it is not a token verifier and it is not a security proxy supplied by
@@ -141,7 +263,10 @@ The SDK verifies no token and issues none. Pass the deployer's `token_verifier` 
 The callback receives an `AccessToken` that MCP has already verified.
 
 If a request has no verified token, the server raises `PermissionDenied` with code
-`UNAUTHENTICATED`. If a verified principal has no mapped `Consumer`, it raises
+`UNAUTHENTICATED`. With `token_verifier` and `AuthSettings` configured, a missing or
+unknown bearer token never gets this far: the transport answers with the `401`
+shown above. `UNAUTHENTICATED` is what a server built without them, or run over
+stdio, returns. If a verified principal has no mapped `Consumer`, the server raises
 `PermissionDenied` with code `CONSUMER_UNRESOLVED`. These are distinct recovery
 paths: configure authentication for the first and map the principal for the
 second. Both happen before an `OntologyClient` exists, so neither is audited as an
