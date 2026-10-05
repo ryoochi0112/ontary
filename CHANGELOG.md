@@ -20,6 +20,8 @@ you**.
 ### Changed
 
 - `client.call_function` raises `ValidationFailed` `INVALID_PARAMS` (was `TypeError`) for an argument that is neither a function name nor a `FunctionParams` instance (#103).
+- The public `FunctionHandler` alias is now `Callable[..., Any]`, a `(query)` or `(query, params)` handler; it was `Callable[[BoundQuery, dict[str, Any]], Any]` (#103).
+- `FunctionRegistry.function(api_name, params_cls=None)` takes an optional params class, matching `FunctionRegistry.register` (#103).
 
 ## [0.19.0] — 2026-10-04
 
