@@ -46,6 +46,10 @@ The twelve tools are registered with these MCP safety hints:
 | `aggregate_objects` | `readOnlyHint=True` |
 | `execute_action` | `destructiveHint=True` |
 
+Each tool's required and optional arguments are listed in the
+[MCP server reference](api-mcp.md#mcp-server). `execute_action` and
+`call_function` take `api_name` plus one `params` object keyed by parameter name.
+
 `list_functions` publishes each Function's declared `parameters` alongside its
 descriptions. Typed Functions list each parameter's name, type, choices,
 structured fields, required status, and referenced ontology type. A Function

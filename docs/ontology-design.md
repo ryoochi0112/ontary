@@ -393,6 +393,13 @@ def session_placement(
 If the room is unknown, ctx.link refuses it and the whole action rolls back.
 Moving a session is its own business action that retires the old Assignment.
 
+The engine scope-checks a `target()` parameter, but not a `ref()` parameter.
+This sketch is unscoped, so that is safe here. Once Session and Room are
+scoped, a caller could pass a room from another scope. Check in the handler that
+the room shares the session's scope, and refuse with `PRECONDITION_FAILED`
+otherwise. [examples/room_booking](../examples/room_booking/README.md) shows the
+same-building check.
+
 Do not encode the same association independently as an unconstrained foreign-key
 property and a link unless the property is required for scope or contributor
 resolution. If both are necessary, treat them as one invariant and populate them

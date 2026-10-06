@@ -35,6 +35,25 @@ server = build_mcp_server(ontology, store, consumer, *, name=None,
 | `execute_action` | Action の実行 | `destructiveHint=True` |
 | `call_function` | Function の呼び出し | `readOnlyHint=True` |
 
+ツールの引数。公開される入力スキーマはすべての引数を任意としています。各ツールが自分で引数を
+検証するためです。必須の引数がないと `INVALID_PARAMS`（`missing required tool parameter`）で
+拒否されます。`aggregate_objects` は、`func` が `"count"` 以外のとき `value_field` も必要です。
+ない場合、エンジンが `INVALID_PARAMS`（`value_field is required`）で拒否します。`execute_action` と
+`call_function` は、Action や Function のパラメータをパラメータ名をキーとする 1 つの `params`
+オブジェクトで受け取ります。パラメータがなくても `{}` を渡してください。`list_action_types` と
+`list_functions` は各パラメータの名前・型・必須かどうかを公開します。
+
+| ツール | 必須の引数 | 任意の引数 |
+| --- | --- | --- |
+| `list_object_types`, `list_link_types`, `list_action_types`, `list_functions`, `get_declarations` | — | — |
+| `get_object` | `obj_type`, `obj_id` | — |
+| `query_objects` | `obj_type` | `where`, `order_by`, `limit`, `after` |
+| `count_objects` | `obj_type` | `where` |
+| `aggregate_objects` | `obj_type` | `value_field`, `group_by`, `where`, `func` （既定値 `"mean"`） |
+| `traverse_links` | `obj_type`, `obj_id`, `link_api_name` | `reverse` （既定値 `false`） |
+| `execute_action` | `api_name`, `params` | — |
+| `call_function` | `api_name`, `params` | — |
+
 `list_object_types` はすべてのプロパティに `transitions` キーを含めます。グラフがない場合は
 `null`、ある場合は完全な `initial` 状態リストと `moves` の対応を返します。各オブジェクト型には
 `rules` リストもあり、各ルールの `name` と `message` を含みます。ルールのコードは含まれません。

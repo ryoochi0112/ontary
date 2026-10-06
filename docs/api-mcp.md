@@ -35,6 +35,26 @@ tools carry `ToolAnnotations(readOnlyHint=True)`; `execute_action` carries
 | `execute_action` | Run an action | `destructiveHint=True` |
 | `call_function` | Call a function | `readOnlyHint=True` |
 
+Tool arguments. The published input schema marks every argument optional,
+because each tool validates its own arguments: a missing required one is refused
+with `INVALID_PARAMS` (`missing required tool parameter`). `aggregate_objects`
+also needs `value_field` for every `func` except `"count"`; without it the engine
+refuses with `INVALID_PARAMS` (`value_field is required`). `execute_action` and `call_function`
+take the action's or Function's parameters as one `params` object, keyed by
+parameter name, even when it is empty (`{}`). `list_action_types` and
+`list_functions` publish each parameter's name, type, and required status.
+
+| Tool | Required arguments | Optional arguments |
+| --- | --- | --- |
+| `list_object_types`, `list_link_types`, `list_action_types`, `list_functions`, `get_declarations` | — | — |
+| `get_object` | `obj_type`, `obj_id` | — |
+| `query_objects` | `obj_type` | `where`, `order_by`, `limit`, `after` |
+| `count_objects` | `obj_type` | `where` |
+| `aggregate_objects` | `obj_type` | `value_field`, `group_by`, `where`, `func` (default `"mean"`) |
+| `traverse_links` | `obj_type`, `obj_id`, `link_api_name` | `reverse` (default `false`) |
+| `execute_action` | `api_name`, `params` | — |
+| `call_function` | `api_name`, `params` | — |
+
 `list_object_types` includes a `transitions` key on every property. Its value is
 `null` when the property has no graph, or an object with the complete `initial`
 state list and `moves` mapping when it does. Each object type also has a `rules`

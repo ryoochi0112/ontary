@@ -33,6 +33,11 @@
 | `ontology.diagnose(store=None)` | 例外も凍結もせず全 `Finding` を返す。ストアを渡すと行もスイープ |
 | `ontology.bind(store, ...)` | `OntologyRuntime` を構築 |
 
+Action の `api_name` の既定値は、ハンドラ名ではなく params クラス名です。
+`@ontology.action(ShipOrder, ...)` は `ShipOrder` として登録されます。`execute(name, dict)`、
+監査エントリ、MCP の `execute_action` はこの名前を使います。別の名前にするには
+`api_name="ship_order"` を渡してください。一方、Function の `api_name` の既定値はハンドラ名です。
+
 `validate()`（および `.definition` への接触）はオントロジーを凍結します。以降の
 `object`/`link`/`action`/`function` 呼び出しは例外になります。すべての宣言を終えた
 あとに 1 回だけ呼んでください。
