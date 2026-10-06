@@ -13,6 +13,7 @@ you**.
 
 ### Added
 
+- `examples/bill_of_materials/` is a fourth reference app: a parts master (Supplier, Part, BomLine) loaded with `OntologyClient.ingest` in object-then-link order under one `Source`, a reload that commits valid rows and reports bad ones, `explode_bom` / `where_used` / `parts_from_supplier` Functions built from single-hop `traverse` with a per-path cycle guard (cycles returned as data), no actions, every type unscoped, an MCP server, with end-to-end tests and a README whose Python blocks are executed by a test (#55).
 - `examples/room_booking/` is a third reference app: room booking with an owned `Booking` relationship object that carries `starts_at`/`ends_at`, half-open time ranges queried with `where`, an overlap check in the booking action, reschedule as retire + create, one scope level and an MCP server, with end-to-end tests and a README whose Python blocks are executed by a test (#55).
 - `examples/maintenance_desk/` is a second reference app: a work-order desk that shows transitions, rules, `Sensitivity`, scope, a snapshot type, `min_n`, events and an MCP server in one ontology, with end-to-end tests and a README whose Python blocks are executed by a test (#55).
 - A new explanation page maps Domain-Driven Design terms to ontary, including what it does not support, and a docs test keeps that vocabulary off every other page (#53).

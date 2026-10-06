@@ -66,3 +66,31 @@ def test_given_a_failing_block_when_the_harness_runs_then_the_failure_names_its_
 
     with pytest.raises(AssertionError, match=r"block 2 under heading 'Broken section'"):
         run_blocks(markdown, "synthetic.md")
+
+
+ROOT = Path(__file__).resolve().parent.parent
+_SILOS_HEADING = "### System Silos"
+
+
+@pytest.mark.parametrize(
+    ("relative", "link", "section"),
+    [
+        ("README.md", "(examples/bill_of_materials/README.md)", None),
+        ("docs/getting-started.md", "(../examples/bill_of_materials/README.md)", None),
+        ("docs/getting-started.ja.md", "(../examples/bill_of_materials/README.md)", None),
+        ("docs/ontology-design.md", "(../examples/bill_of_materials/README.md)", _SILOS_HEADING),
+        (
+            "docs/ontology-design.ja.md",
+            "(../examples/bill_of_materials/README.md)",
+            _SILOS_HEADING,
+        ),
+    ],
+)
+def test_bill_of_materials_is_linked_from_docs(relative: str, link: str, section: str | None) -> None:
+    text = (ROOT / relative).read_text(encoding="utf-8")
+    if section is not None:
+        assert section in text, f"{relative}: missing heading {section!r}"
+        text = text.split(section, 1)[1].split("\n### ", 1)[0]
+    assert link in text, f"{relative}: missing link {link}" + (
+        f" inside {section!r}" if section else ""
+    )

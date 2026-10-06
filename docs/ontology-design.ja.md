@@ -469,6 +469,8 @@ min-N のために異なる候補者を数えることができます。これ�
 抽出物の形をそのまま通してはいけません。系譜を残すには `Source` を使い、`owned`
 宣言でソース由来の事実とオントロジー所有の状態を分けます。
 
+`OntologyClient.ingest` でソースデータを読み込み、`Source` で系譜を保つ具体的な動作例は [examples/bill_of_materials](../examples/bill_of_materials/README.md) を参照してください。
+
 *Source: Palantir, "Ontology design: Anti-patterns".*
 
 ### The Kitchen Sink

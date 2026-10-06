@@ -487,6 +487,8 @@ rather than letting the extract's own shape through. Use `Source` to preserve
 lineage, and use `owned` declarations to keep source-backed facts separate from
 ontology-owned state.
 
+For a worked example of loading source data through `OntologyClient.ingest` with `Source` lineage, see [examples/bill_of_materials](../examples/bill_of_materials/README.md).
+
 *Source: Palantir, "Ontology design: Anti-patterns".*
 
 ### The Kitchen Sink
