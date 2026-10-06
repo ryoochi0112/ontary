@@ -420,8 +420,8 @@ def test_given_seeded_bookings_when_availability_is_requested_then_exactly_overl
         session = coordinator.get(Session, row["session_id"])
         assert booking is not None and session is not None
         assert (row["starts_at"], row["ends_at"], row["title"]) == (
-            booking.starts_at,
-            booking.ends_at,
+            booking.starts_at.isoformat(),
+            booking.ends_at.isoformat(),
             session.title,
         )
 
@@ -446,7 +446,11 @@ def test_given_bookings_created_out_of_time_order_when_scheduled_then_only_that_
         world.bookings["a_planning"],
         world.bookings["a_review"],
     ]
-    assert [row["starts_at"] for row in rows] == [at(8), at(9), at(10)]
+    assert [row["starts_at"] for row in rows] == [
+        at(8).isoformat(),
+        at(9).isoformat(),
+        at(10).isoformat(),
+    ]
     assert (
         coordinator.call_function(
             RoomSchedule(room_id=room_id, day=at(0).date() + timedelta(days=1))
