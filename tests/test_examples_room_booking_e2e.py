@@ -29,6 +29,14 @@ def test_given_the_ontology_when_validated_then_it_has_no_diagnostics_and_min_n_
     assert ontology.min_n == 2
 
 
+def test_given_the_ontology_when_actions_are_registered_then_they_use_business_api_names() -> None:
+    assert set(ontology.registry.action_types) == {
+        "book_session",
+        "reschedule_session",
+        "cancel_booking",
+    }
+
+
 def test_given_booking_when_inspecting_the_model_then_only_it_owns_the_placement_times() -> None:
     booking_type = ontology.registry.get_object_type("Booking")
 

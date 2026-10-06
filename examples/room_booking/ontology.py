@@ -114,7 +114,7 @@ def _check_overlap(
             )
 
 
-@ontology.action(BookSession, target=Session, roles=["Coordinator"])
+@ontology.action(BookSession, api_name="book_session", target=Session, roles=["Coordinator"])
 def book_session(ctx: ActionContext, p: BookSession) -> dict[str, str]:
     session = ctx.get(Session, p.session_id)
     room = ctx.get(Room, p.room_id)
@@ -138,7 +138,9 @@ def book_session(ctx: ActionContext, p: BookSession) -> dict[str, str]:
     return {"booking_id": booking.id}
 
 
-@ontology.action(RescheduleSession, target=Session, roles=["Coordinator"])
+@ontology.action(
+    RescheduleSession, api_name="reschedule_session", target=Session, roles=["Coordinator"]
+)
 def reschedule_session(ctx: ActionContext, p: RescheduleSession) -> dict[str, str]:
     session = ctx.get(Session, p.session_id)
     if session is None:
@@ -165,7 +167,7 @@ def reschedule_session(ctx: ActionContext, p: RescheduleSession) -> dict[str, st
     return {"booking_id": booking.id}
 
 
-@ontology.action(CancelBooking, target=Session, roles=["Coordinator"])
+@ontology.action(CancelBooking, api_name="cancel_booking", target=Session, roles=["Coordinator"])
 def cancel_booking(ctx: ActionContext, p: CancelBooking) -> dict[str, str]:
     session = ctx.get(Session, p.session_id)
     if session is None:

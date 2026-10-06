@@ -58,7 +58,7 @@ def test_given_an_existing_room_booking_when_an_overlapping_booking_is_attempted
         server,
         "execute_action",
         {
-            "api_name": "BookSession",
+            "api_name": "book_session",
             "params": {
                 "session_id": world.ids["session_a_workshop_id"],
                 "room_id": world.ids["room_a_hall_id"],
