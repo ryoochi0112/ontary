@@ -11,6 +11,23 @@ you**.
 
 ## [Unreleased]
 
+## [0.20.0] — 2026-10-06
+
+```bash
+uv add "ontary @ git+https://github.com/ryoochi0112/ontary@v0.20.0"
+```
+
+This is the M2 release, "Examples and docs". Four reference apps now ship in
+`examples/`: the reworked tickets desk, `maintenance_desk`, `room_booking` and
+`bill_of_materials`, each with end-to-end tests and a README whose Python
+blocks run under `make verify`. The docs site gains the Domain-Driven Design
+page, `llms.txt` / `llms-full.txt`, an authenticated multi-consumer MCP
+example, and in-process MCP testing notes. `MCPServer` is importable from the
+package root and `BoundQuery.now()` reads the bound clock. **Dict-form Function
+handlers, deprecated in 0.19.0, are removed**; `FunctionHandler` and the
+`call_function` bad-argument error change with them. The store schema stays at
+v14, so a 0.19.0 store needs no re-ingest.
+
 ### Added
 
 - `examples/bill_of_materials/` is a fourth reference app: a parts master (Supplier, Part, BomLine) loaded with `OntologyClient.ingest` in object-then-link order under one `Source`, a reload that commits valid rows and reports bad ones, `explode_bom` / `where_used` / `parts_from_supplier` Functions built from single-hop `traverse` with a per-path cycle guard (cycles returned as data), no actions, every type unscoped, an MCP server, with end-to-end tests and a README whose Python blocks are executed by a test (#55).
