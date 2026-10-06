@@ -3690,7 +3690,7 @@ def _prose_corpus() -> list[Path]:
     never rewritten to match today's canonical. The copy of this region inside
     the 0.8.0 entry is therefore frozen history, not a live site. The live
     sites this instrument governs are `src/ontary/scope.py` and the two
-    `docs/api-reference` pages; a new site still joins by glob.
+    `docs/api-stores` pages; a new site still joins by glob.
     """
     return sorted(
         {
@@ -3760,10 +3760,10 @@ def _interstitial(path: Path) -> str:
 _SCOPE_INTERSTITIAL_DIGESTS: dict[str, str] = {
     # `CHANGELOG.md` is absent by design: `_prose_corpus` leaves it out, because
     # its released sections are frozen history rather than a live prose site.
-    "docs/api-reference.ja.md": (
+    "docs/api-stores.ja.md": (
         "f921ef55b3f3f812fa454db4673bd63325d30eb7d6d7ca8a6e0d24aa6c4fd4df"
     ),
-    "docs/api-reference.md": (
+    "docs/api-stores.md": (
         "5ed033e51ded3f0452a18f42bcd328f18018bfbd0150325e71cc565386ed71a2"
     ),
     "src/ontary/scope.py": (

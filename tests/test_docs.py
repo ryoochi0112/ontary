@@ -1154,30 +1154,55 @@ def test_mcp_testing_section_names_the_thread_trap_and_is_identical_in_en_and_ja
 
 
 # The one place the API reference states the date/datetime write rule (#57),
-# and the write sites that must point at it. Anchors are hard-coded because
-# `mkdocs build --strict` does not validate `#anchor` links in this repo.
+# and the write sites that must point at it. Anchors are hard-coded so this
+# pin also runs offline in `make verify`; `validation.anchors: warn` with
+# `mkdocs build --strict` validates them on the EN build.
 DATETIME_RULE: dict[Path, dict[str, Any]] = {
-    _DOCS / "api-reference.md": {
+    _DOCS / "api-stores.md": {
         "heading": "### Date and datetime values",
         "anchor": "date-and-datetime-values",
         "sites": (
-            "### The `Store` protocol",
-            "### `ActionContext`",
-            "## Bulk ingest",
-            "#### `ActionParams`",
+            (_DOCS / "api-stores.md", "### The `Store` protocol", "(#date-and-datetime-values)"),
+            (
+                _DOCS / "api-reference.md",
+                "### `ActionContext`",
+                "(api-stores.md#date-and-datetime-values)",
+            ),
+            (_DOCS / "api-stores.md", "## Bulk ingest", "(#date-and-datetime-values)"),
+            (
+                _DOCS / "api-reference.md",
+                "#### `ActionParams`",
+                "(api-stores.md#date-and-datetime-values)",
+            ),
         ),
-        "hydration": "> **Hydration.**",
+        "hydration": (
+            _DOCS / "api-reference.md",
+            "> **Hydration.**",
+            "(api-stores.md#date-and-datetime-values)",
+        ),
     },
-    _DOCS / "api-reference.ja.md": {
+    _DOCS / "api-stores.ja.md": {
         "heading": "### date と datetime の値",
         "anchor": "date-と-datetime-の値",
         "sites": (
-            "### `Store` プロトコル",
-            "### `ActionContext`",
-            "## バルク取り込み",
-            "#### `ActionParams`",
+            (_DOCS / "api-stores.ja.md", "### `Store` プロトコル", "(#date-と-datetime-の値)"),
+            (
+                _DOCS / "api-reference.ja.md",
+                "### `ActionContext`",
+                "(api-stores.ja.md#date-と-datetime-の値)",
+            ),
+            (_DOCS / "api-stores.ja.md", "## バルク取り込み", "(#date-と-datetime-の値)"),
+            (
+                _DOCS / "api-reference.ja.md",
+                "#### `ActionParams`",
+                "(api-stores.ja.md#date-と-datetime-の値)",
+            ),
         ),
-        "hydration": "> **ハイドレーション。**",
+        "hydration": (
+            _DOCS / "api-reference.ja.md",
+            "> **ハイドレーション。**",
+            "(api-stores.ja.md#date-と-datetime-の値)",
+        ),
     },
 }
 
@@ -1214,14 +1239,12 @@ def test_datetime_write_rule_is_stated_once_and_linked_from_every_write_site(
     section = _markdown_section(text, rule["heading"])
     for code in ("INVALID_RECORD", "INVALID_PARAMS"):
         assert f"`{code}`" in section, f"{path.name}: subsection lacks {code}"
-    link = f"(#{rule['anchor']})"
-    for site in rule["sites"]:
-        assert link in _markdown_section(text, site), (
-            f"{path.name}: {site!r} does not link to {rule['heading']!r}"
+    for page, site, link in rule["sites"]:
+        assert link in _markdown_section(page.read_text(), site), (
+            f"{page.name}: {site!r} does not link to {rule['heading']!r}"
         )
-    hydration = next(
-        p for p in text.split("\n\n") if p.startswith(rule["hydration"])
-    )
+    page, prefix, link = rule["hydration"]
+    hydration = next(p for p in page.read_text().split("\n\n") if p.startswith(prefix))
     assert link in hydration, f"{path.name}: Hydration note does not link the rule"
     assert "naive" not in hydration, (
         f"{path.name}: Hydration note still restates the write rule"
@@ -1255,6 +1278,6 @@ def test_datetime_write_rule_example_runs_and_is_identical_in_en_and_ja() -> Non
     # `dont_inherit`: run it like a reader's own module, without this file's
     # `from __future__ import annotations` turning `datetime` into a string.
     code = compile(
-        en, "docs/api-reference.md#date-and-datetime-values", "exec", dont_inherit=True
+        en, "docs/api-stores.md#date-and-datetime-values", "exec", dont_inherit=True
     )
     exec(code, namespace)
