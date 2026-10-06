@@ -11,6 +11,12 @@
 これは調べ物のためのドキュメントです。「宣言する → バインドする → 読む → 配信する」
 という流れの解説は [README](../README.md) から始めてください。
 
+このページは API リファレンスの索引です。各項目の詳細は次の 7 ページにあります。
+[オントロジーの宣言](api-authoring.ja.md)、[ランタイムとクライアント](api-runtime.ja.md)、
+[読み取り](api-reading.ja.md)、[Action と Function](api-actions-functions.ja.md)、
+[ストアとバルク取り込み](api-stores.ja.md)、[MCP サーバー](api-mcp.ja.md)、
+[エラーコード](api-errors.ja.md)。
+
 **目次**
 
 - [フロントドア](#フロントドア)

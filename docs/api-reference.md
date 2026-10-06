@@ -11,6 +11,12 @@ engine remains available from its canonical submodule (`ontary.meta`,
 This is a lookup document. For the narrative walkthrough — author, declare, bind,
 read, serve — start with the [README](../README.md).
 
+This page is the index of the API reference. The full entries live on seven pages:
+[Authoring](api-authoring.md), [Runtime & clients](api-runtime.md),
+[Reading](api-reading.md), [Actions & Functions](api-actions-functions.md),
+[Stores & ingest](api-stores.md), [MCP server](api-mcp.md), and
+[Error codes](api-errors.md).
+
 **Contents**
 
 - [Front door](#front-door)

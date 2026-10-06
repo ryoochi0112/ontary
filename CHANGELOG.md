@@ -11,6 +11,13 @@ you**.
 
 ## [Unreleased]
 
+### Changed
+
+- **The API reference is split into seven pages under Reference**:
+  `api-authoring`, `api-runtime`, `api-reading`, `api-actions-functions`,
+  `api-stores`, `api-mcp` and `api-errors`, each with a `.ja.md` twin.
+  `docs/api-reference.md` stays as the index and keeps every linked anchor.
+
 ## [0.20.0] — 2026-10-06
 
 ```bash
