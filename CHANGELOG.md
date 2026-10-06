@@ -11,6 +11,18 @@ you**.
 
 ## [Unreleased]
 
+## [0.21.0] — 2026-10-07
+
+```bash
+uv add "ontary @ git+https://github.com/ryoochi0112/ontary@v0.21.0"
+```
+
+A minor release with one breaking change to the MCP wire shape: read results now
+say when the caller's view is limited by scope or redaction. Clients that check
+exact keys on MCP read results must accept the new `scope_limited` and
+`redacted_fields` keys. The Python surface is unchanged. The store schema stays at
+v14, so a 0.20.3 store needs no re-ingest.
+
 ### Changed
 
 - **MCP read results carry scope and redaction marks (breaking for clients that
