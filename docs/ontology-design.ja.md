@@ -383,6 +383,8 @@ def session_placement(
 プロパティがスコープや寄与者の解決に必要な場合を除きます。両方が必要なら、一つの
 不変条件として扱い、一緒に埋めます。
 
+このパターンの完全な動作例は [examples/room_booking](../examples/room_booking/README.md) を参照してください。
+
 *Source: Palantir, "Ontology design: Structural guidance".*
 
 ### Naming conventions
