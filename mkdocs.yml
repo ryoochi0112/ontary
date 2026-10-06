@@ -63,6 +63,7 @@ nav:
       - MCP serving: mcp-serving.md
   - Reference:
       - API reference: api-reference.md
+      - Authoring: api-authoring.md
       - Stores & ingest: api-stores.md
       - Error codes: api-errors.md
       - CLI reference: cli.md

@@ -32,6 +32,7 @@ README = Path(__file__).resolve().parent.parent / "README.md"
 CHANGELOG = Path(__file__).resolve().parent.parent / "CHANGELOG.md"
 _DOCS = Path(__file__).resolve().parent.parent / "docs"
 ERROR_REFERENCES = (_DOCS / "api-errors.md", _DOCS / "api-errors.ja.md")
+AUTHORING_REFERENCES = (_DOCS / "api-authoring.md", _DOCS / "api-authoring.ja.md")
 HUB_REFERENCES = (_DOCS / "api-reference.md", _DOCS / "api-reference.ja.md")
 EXPECTED_PRE_080_ERROR_CODES = frozenset(
     {
@@ -665,7 +666,7 @@ def test_event_error_codes_have_validation_kind_and_spec_meanings() -> None:
         assert ERROR_CODES[code].description == meaning
 
 
-@pytest.mark.parametrize("path", HUB_REFERENCES, ids=lambda p: p.name)
+@pytest.mark.parametrize("path", AUTHORING_REFERENCES, ids=lambda p: p.name)
 def test_api_reference_declarations_prose_names_every_declarations_field(
     path: Path,
 ) -> None:
@@ -680,8 +681,8 @@ def test_api_reference_declarations_prose_names_every_declarations_field(
     """
     text = path.read_text()
     start = text.index("Declarations`**")
-    end = text.index("\n## ", start)
-    section = text[start:end]
+    end = text.find("\n## ", start)
+    section = text[start:] if end == -1 else text[start:end]
     for field_name in Declarations.model_fields:
         assert f"`{field_name}`" in section, (
             f"{path.name}: Declarations field {field_name!r} has no "
@@ -1170,7 +1171,7 @@ DATETIME_RULE: dict[Path, dict[str, Any]] = {
             ),
             (_DOCS / "api-stores.md", "## Bulk ingest", "(#date-and-datetime-values)"),
             (
-                _DOCS / "api-reference.md",
+                _DOCS / "api-authoring.md",
                 "#### `ActionParams`",
                 "(api-stores.md#date-and-datetime-values)",
             ),
@@ -1193,7 +1194,7 @@ DATETIME_RULE: dict[Path, dict[str, Any]] = {
             ),
             (_DOCS / "api-stores.ja.md", "## バルク取り込み", "(#date-と-datetime-の値)"),
             (
-                _DOCS / "api-reference.ja.md",
+                _DOCS / "api-authoring.ja.md",
                 "#### `ActionParams`",
                 "(api-stores.ja.md#date-と-datetime-の値)",
             ),
