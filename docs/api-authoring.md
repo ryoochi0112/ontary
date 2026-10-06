@@ -33,6 +33,12 @@ Declaration methods, all decorators except `link`:
 | `ontology.diagnose(store=None)` | Return every `Finding` without raising or freezing; with a store, also sweep its rows |
 | `ontology.bind(store, ...)` | Build an `OntologyRuntime` |
 
+An action's `api_name` defaults to the params class name, not the handler's
+name: `@ontology.action(ShipOrder, ...)` registers `ShipOrder`. That name is what
+`execute(name, dict)`, the audit entry, and MCP `execute_action` use. Pass
+`api_name="ship_order"` to choose another. A Function's `api_name` defaults to
+the handler's name instead.
+
 `validate()` (and touching `.definition`) freezes the ontology — any later
 `object`/`link`/`action`/`function` call raises. Call it once, after every
 declaration.

@@ -32,7 +32,9 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import re
 import sys
+from pathlib import Path
 from typing import Any, Protocol
 
 import pytest
@@ -1667,3 +1669,68 @@ def test_try_fails_closed_when_envelope_construction_itself_raises() -> None:
         assert envelope is not None
         assert envelope["error"]["code"] == "INTERNAL_ERROR"
         assert envelope["error"]["kind"] == "internal"
+
+
+# -- documented tool arguments ---------------------------------------------------
+
+_DOCS = Path(__file__).resolve().parents[1] / "docs"
+
+
+def _documented_tool_arguments(
+    page: str,
+) -> dict[str, tuple[set[str], set[str], dict[str, Any]]]:
+    """Parse the api-mcp arguments table: tool -> (required, optional, defaults)."""
+    text = (_DOCS / page).read_text()
+    rows: dict[str, tuple[set[str], set[str], dict[str, Any]]] = {}
+    for line in text.splitlines():
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) != 3 or not re.fullmatch(r"`\w+`(, `\w+`)*", cells[0]):
+            continue
+        if cells[1] != "—" and not cells[1].startswith("`"):
+            continue
+        required = set(re.findall(r"`(\w+)`", cells[1]))
+        # Only names that open the cell or follow a comma are arguments; a
+        # backticked value inside "(default ...)" is that argument's default.
+        optional = set(re.findall(r"(?:^|, )`(\w+)`", cells[2]))
+        defaults = {
+            name: json.loads(value)
+            for name, value in re.findall(r"`(\w+)` [(（][^`]*`([^`]+)`[)）]", cells[2])
+        }
+        for tool in re.findall(r"`(\w+)`", cells[0]):
+            assert tool not in rows, f"{page}: {tool} appears in two rows"
+            rows[tool] = (required, optional, defaults)
+    return rows
+
+
+@pytest.mark.parametrize("page", ["api-mcp.md", "api-mcp.ja.md"])
+def test_documented_tool_arguments_match_the_server(page: str) -> None:
+    """The api-mcp arguments table lists every tool and its schema arguments.
+    Each required argument is refused when missing; the optional ones may be
+    omitted; documented defaults equal the schema's."""
+    server, _store = _build_server(_librarian())
+    documented = _documented_tool_arguments(page)
+    tools = asyncio.run(server.list_tools())
+    assert set(documented) == {t.name for t in tools}
+
+    def only(names: set[str]) -> dict[str, Any]:
+        return {name: ({} if name in ("params", "where") else "x") for name in names}
+
+    for tool in tools:
+        required, optional, defaults = documented[tool.name]
+        properties = tool.input_schema.get("properties", {})
+        assert required | optional == set(properties), tool.name
+        assert not required & optional, tool.name
+        for name, value in defaults.items():
+            assert name in optional, (tool.name, name)
+            assert properties[name].get("default") == value, (tool.name, name)
+        for name in optional:
+            if "default" in properties[name] and properties[name]["default"] is not None:
+                assert name in defaults, f"{page}: {tool.name}.{name} default undocumented"
+
+        error = _call(server, tool.name, only(required)).get("error")
+        message = "" if error is None else error["message"]
+        assert "missing required tool parameter" not in message, (tool.name, message)
+        for missing in required:
+            error = _call(server, tool.name, only(required - {missing}))["error"]
+            assert error["code"] == "INVALID_PARAMS", (tool.name, missing)
+            assert f"missing required tool parameter {missing!r}" in error["message"]

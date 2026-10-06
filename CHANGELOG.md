@@ -11,6 +11,23 @@ you**.
 
 ## [Unreleased]
 
+### Documentation
+
+- **The design guide warns that `ref()` parameters are not scope-checked.**
+  The `schedule_session` sketch (EN and JA) now says to check that a referenced
+  room shares the session's scope once the types are scoped, and points to
+  `examples/room_booking`
+  ([#169](https://github.com/ryoochi0112/ontary/issues/169)).
+- **The MCP reference lists each tool's required and optional arguments**, and
+  says `execute_action` and `call_function` take one `params` object. A test
+  checks the table against the live server's arguments, defaults and refusals
+  ([#157](https://github.com/ryoochi0112/ontary/issues/157), F18).
+- **Action and Function names, and ingest's type argument, are documented.**
+  An action's `api_name` defaults to the params class name, and a Function's to
+  the handler name (F13). `client.ingest` takes the type name as a string,
+  while typed reads take the class (F12)
+  ([#157](https://github.com/ryoochi0112/ontary/issues/157)).
+
 ### Fixed
 
 - **`ontary validate` and `ontary serve` import a module from the current

@@ -271,6 +271,12 @@ client.ingest_links(
 ) -> IngestReport
 ```
 
+`client.ingest` はオブジェクト型の名前を文字列（`"Ticket"`）で受け取り、`client.ingest_links` は
+リンクの `api_name` を受け取ります。型付きの読み取り（`get`、`list`、`traverse`）はクラスまたは
+`LinkHandle` を受け取ります。ingest が型名を受け取るのは、レコードが通常ソースシステムから
+素の dict として届き、型付きモデルより先に存在することが多いためです。クラスが手元にある場合は
+`Ticket.__name__` を渡してください。宣言した `api_name` が異なる場合はそちらを渡します。
+
 `bulk_upsert` と `bulk_link` はエンジン層であり、常に `IngestReport` を返します。
 クライアントのメソッドはバッチを最後まで処理するため、別のレコードが失敗しても
 有効なレコードはコミットされたままです。クライアントはデフォルトで失敗時に

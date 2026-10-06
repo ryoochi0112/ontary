@@ -276,6 +276,13 @@ client.ingest_links(
 ) -> IngestReport
 ```
 
+`client.ingest` takes the object type's name as a string (`"Ticket"`), and
+`client.ingest_links` takes the link's `api_name`. The typed reads (`get`, `list`,
+`traverse`) take the class or `LinkHandle` instead. Ingest names the type because
+records usually arrive from a source system as plain dicts, often before any
+typed model exists. With a class in hand, pass `Ticket.__name__`, or its
+declared `api_name` when that differs.
+
 `bulk_upsert` and `bulk_link` are the engine layer and always return an
 `IngestReport`. The client methods run the complete batch first, so valid
 records remain committed even when another record fails. By default, a failed
