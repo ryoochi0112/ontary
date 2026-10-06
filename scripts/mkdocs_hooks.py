@@ -10,6 +10,7 @@ run in the dev environment, which does not install the `docs` group.
 
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import Iterator, Mapping
 from pathlib import Path
@@ -73,6 +74,19 @@ def rewrite_links(markdown: str, src_path: str, site_url: str) -> str:
     if src_path.endswith(".ja.md"):
         markdown = _ENGLISH_TOGGLE.sub(rf"[English]({site_url}\1/)", markdown)
     return _LINK.sub(rewrite, markdown)
+
+
+def on_config(config: Any) -> None:
+    """Relax anchors for translated builds with English-only fallback pages."""
+    i18n = config.plugins.get("i18n")
+    if i18n is not None and i18n.current_language != "en":
+        # MkDocs propagates the YAML shorthand into validation.links at load time.
+        validation = getattr(config.validation, "links", config.validation)
+        validation.anchors = logging.INFO
+
+
+# Run after i18n's -100 on_config hook, without importing the docs dependency.
+on_config.__dict__["mkdocs_priority"] = -101
 
 
 def on_page_markdown(markdown: str, page: Any, config: Any, files: Any) -> str:

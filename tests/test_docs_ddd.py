@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from docs_corpus import api_reference_text
+
 import ontary
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -143,7 +145,7 @@ def test_ddd_page_maps_every_required_term() -> None:
 
 
 def test_ddd_page_names_only_real_constructs() -> None:
-    reference = (ROOT / "docs" / "api-reference.md").read_text()
+    reference = api_reference_text("en")
     identifiers = re.findall(
         r"`([^`]+)`", "\n".join(" | ".join(row) for row in _table_rows(EN_PAGE.read_text()))
     )

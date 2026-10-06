@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
+from docs_corpus import api_reference_text
 
 from ontary import (
     BoundQuery,
@@ -117,13 +118,17 @@ def test_directly_built_bound_query_uses_the_default_clock() -> None:
     assert query.now() == instant
 
 
-@pytest.mark.parametrize("name", ["api-reference.md", "api-reference.ja.md"])
+@pytest.mark.parametrize("name", ["api-actions-functions.md", "api-actions-functions.ja.md"])
 def test_api_reference_documents_query_now(name: str) -> None:
     text = (Path(__file__).resolve().parent.parent / "docs" / name).read_text()
     section = text.split("### `BoundQuery`", 1)[1].split("\n### ", 1)[0]
     assert "`.now()`" in section
     assert "query.now()" in section
-    capability_line = next(line for line in text.splitlines() if "ctx.now()" in line and (
-        "not a capability" in line or "Capability ではなく" in line
-    ))
+    lang = "ja" if name.endswith(".ja.md") else "en"
+    capability_line = next(
+        line for line in api_reference_text(lang).splitlines()
+        if "ctx.now()" in line and (
+            "not a capability" in line or "Capability ではなく" in line
+        )
+    )
     assert "query.now()" in capability_line

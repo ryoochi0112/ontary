@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
+from docs_corpus import api_reference_text
 
 import ontary
 from ontary import OntologyObject, Sensitivity, Source
@@ -242,7 +243,8 @@ def test_design_guide_explains_rules_and_transitions(path: Path) -> None:
 )
 def test_api_reference_documents_transitions_rules_and_mcp_schema(path: Path) -> None:
     """Both API references document the public authoring and MCP contracts."""
-    text = path.read_text()
+    lang = "ja" if path.name.endswith(".ja.md") else "en"
+    text = api_reference_text(lang)
     required = [
         "prop(transitions=...",
         "Ontology.rule",

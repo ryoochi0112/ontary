@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, get_args, get_origin, get_type_hints
 
 import pytest
+from docs_corpus import API_REFERENCE_PAGES
 from pydantic import BaseModel
 
 import ontary
@@ -30,7 +31,9 @@ from ontary.errors import ERROR_CODES
 README = Path(__file__).resolve().parent.parent / "README.md"
 CHANGELOG = Path(__file__).resolve().parent.parent / "CHANGELOG.md"
 _DOCS = Path(__file__).resolve().parent.parent / "docs"
-API_REFERENCES = (_DOCS / "api-reference.md", _DOCS / "api-reference.ja.md")
+ERROR_REFERENCES = (_DOCS / "api-errors.md", _DOCS / "api-errors.ja.md")
+AUTHORING_REFERENCES = (_DOCS / "api-authoring.md", _DOCS / "api-authoring.ja.md")
+HUB_REFERENCES = (_DOCS / "api-reference.md", _DOCS / "api-reference.ja.md")
 EXPECTED_PRE_080_ERROR_CODES = frozenset(
     {
         "AFTER_WITHOUT_LIMIT",
@@ -180,11 +183,11 @@ def _cli_text_example_ontology() -> Ontology:
 def test_queries_document_visible_row_count_disclosure_reasoning() -> None:
     """The visible-row-count reasoning moved out of the deleted queries page.
 
-    It now lives in the API reference's Reading section; the reasoning itself is
+    It now lives in the Reading reference page; the reasoning itself is
     still pinned verbatim, because "why `count`/`exists` are not min-N-gated" is
     a disclosure argument, not a description of an implementation detail.
     """
-    text = (_DOCS / "api-reference.md").read_text()
+    text = (_DOCS / "api-reading.md").read_text()
 
     assert "post-visibility" in text
     assert "can already enumerate the same rows" in text
@@ -204,9 +207,9 @@ def test_count_objects_not_min_n_gated_points_to_aggregate_count() -> None:
     en_marker = "not min-N-gated"
     ja_marker = "min-N の対象外"
     for path, marker in (
-        (_DOCS / "api-reference.md", en_marker),
+        (_DOCS / "api-mcp.md", en_marker),
         (_DOCS / "mcp-serving.md", en_marker),
-        (_DOCS / "api-reference.ja.md", ja_marker),
+        (_DOCS / "api-mcp.ja.md", ja_marker),
     ):
         text = path.read_text()
         paragraphs = text.split("\n\n")
@@ -423,7 +426,8 @@ def test_new_pages_do_not_reintroduce_removed_or_renamed_api_names() -> None:
     # The API references document some still-live engine and MCP names.  Only
     # the BoundQuery section is the renamed Python surface, so keep this check
     # scoped there instead of exempting `get_object` by name everywhere.
-    for path in API_REFERENCES:
+    bound_query_languages: set[str] = set()
+    for path in API_REFERENCE_PAGES["en"] + API_REFERENCE_PAGES["ja"]:
         text = path.read_text()
         other_stale = [
             name
@@ -438,7 +442,9 @@ def test_new_pages_do_not_reintroduce_removed_or_renamed_api_names() -> None:
             r"(?ms)^### `BoundQuery`\n.*?(?=^### |\Z)",
             text,
         )
-        assert section_match is not None, f"{path.name} is missing the BoundQuery section"
+        if section_match is None:
+            continue
+        bound_query_languages.add("ja" if path.name.endswith(".ja.md") else "en")
         bound_query_stale = [
             name for name in BOUND_QUERY_STALE_NAMES if name in section_match.group()
         ]
@@ -446,6 +452,9 @@ def test_new_pages_do_not_reintroduce_removed_or_renamed_api_names() -> None:
             f"{path.name} under ### `BoundQuery` contains removed/renamed name: {name}"
             for name in bound_query_stale
         )
+
+    for lang in ("en", "ja"):
+        assert lang in bound_query_languages, f"{lang} reference is missing the BoundQuery section"
 
     assert not violations, "stale documentation names:\n" + "\n".join(violations)
 
@@ -568,7 +577,7 @@ def _parse_api_reference_error_rows(text: str) -> dict[str, str]:
     return rows
 
 
-@pytest.mark.parametrize("path", API_REFERENCES, ids=lambda p: p.name)
+@pytest.mark.parametrize("path", ERROR_REFERENCES, ids=lambda p: p.name)
 def test_api_reference_error_table_matches_error_codes_exactly(path: Path) -> None:
     """The API references' error tables are generated from `ERROR_CODES`;
     pin the sole published tables so a new/renamed code can never leave a stale
@@ -595,7 +604,7 @@ def test_api_reference_error_table_matches_error_codes_exactly(path: Path) -> No
         )
 
 
-@pytest.mark.parametrize("path", API_REFERENCES, ids=lambda p: p.name)
+@pytest.mark.parametrize("path", ERROR_REFERENCES, ids=lambda p: p.name)
 def test_api_reference_error_summary_matches_error_codes(path: Path) -> None:
     """The summary line derives both published counts from the live catalog."""
     text = path.read_text()
@@ -657,7 +666,7 @@ def test_event_error_codes_have_validation_kind_and_spec_meanings() -> None:
         assert ERROR_CODES[code].description == meaning
 
 
-@pytest.mark.parametrize("path", API_REFERENCES, ids=lambda p: p.name)
+@pytest.mark.parametrize("path", AUTHORING_REFERENCES, ids=lambda p: p.name)
 def test_api_reference_declarations_prose_names_every_declarations_field(
     path: Path,
 ) -> None:
@@ -672,8 +681,8 @@ def test_api_reference_declarations_prose_names_every_declarations_field(
     """
     text = path.read_text()
     start = text.index("Declarations`**")
-    end = text.index("\n## ", start)
-    section = text[start:end]
+    end = text.find("\n## ", start)
+    section = text[start:] if end == -1 else text[start:end]
     for field_name in Declarations.model_fields:
         assert f"`{field_name}`" in section, (
             f"{path.name}: Declarations field {field_name!r} has no "
@@ -912,7 +921,7 @@ def test_examples_import_front_door_names_from_ontary() -> None:
     assert root_imports, "examples AST scan found no front-door imports"
 
 
-@pytest.mark.parametrize("path", API_REFERENCES, ids=lambda p: p.name)
+@pytest.mark.parametrize("path", HUB_REFERENCES, ids=lambda p: p.name)
 def test_api_reference_export_coverage(path: Path) -> None:
     """Both references list the complete root and demoted engine surfaces.
 
@@ -1006,7 +1015,7 @@ def _parse_api_reference_error_kinds(text: str) -> dict[str, str]:
     return kinds
 
 
-@pytest.mark.parametrize("path", API_REFERENCES, ids=lambda p: p.name)
+@pytest.mark.parametrize("path", ERROR_REFERENCES, ids=lambda p: p.name)
 def test_api_reference_files_each_code_under_its_declared_kind(path: Path) -> None:
     """Catch a code drifting from the kind heading it is grouped under.
 
@@ -1146,30 +1155,55 @@ def test_mcp_testing_section_names_the_thread_trap_and_is_identical_in_en_and_ja
 
 
 # The one place the API reference states the date/datetime write rule (#57),
-# and the write sites that must point at it. Anchors are hard-coded because
-# `mkdocs build --strict` does not validate `#anchor` links in this repo.
+# and the write sites that must point at it. Anchors are hard-coded so this
+# pin also runs offline in `make verify`; `validation.anchors: warn` with
+# `mkdocs build --strict` validates them on the EN build.
 DATETIME_RULE: dict[Path, dict[str, Any]] = {
-    _DOCS / "api-reference.md": {
+    _DOCS / "api-stores.md": {
         "heading": "### Date and datetime values",
         "anchor": "date-and-datetime-values",
         "sites": (
-            "### The `Store` protocol",
-            "### `ActionContext`",
-            "## Bulk ingest",
-            "#### `ActionParams`",
+            (_DOCS / "api-stores.md", "### The `Store` protocol", "(#date-and-datetime-values)"),
+            (
+                _DOCS / "api-actions-functions.md",
+                "### `ActionContext`",
+                "(api-stores.md#date-and-datetime-values)",
+            ),
+            (_DOCS / "api-stores.md", "## Bulk ingest", "(#date-and-datetime-values)"),
+            (
+                _DOCS / "api-authoring.md",
+                "#### `ActionParams`",
+                "(api-stores.md#date-and-datetime-values)",
+            ),
         ),
-        "hydration": "> **Hydration.**",
+        "hydration": (
+            _DOCS / "api-runtime.md",
+            "> **Hydration.**",
+            "(api-stores.md#date-and-datetime-values)",
+        ),
     },
-    _DOCS / "api-reference.ja.md": {
+    _DOCS / "api-stores.ja.md": {
         "heading": "### date と datetime の値",
         "anchor": "date-と-datetime-の値",
         "sites": (
-            "### `Store` プロトコル",
-            "### `ActionContext`",
-            "## バルク取り込み",
-            "#### `ActionParams`",
+            (_DOCS / "api-stores.ja.md", "### `Store` プロトコル", "(#date-と-datetime-の値)"),
+            (
+                _DOCS / "api-actions-functions.ja.md",
+                "### `ActionContext`",
+                "(api-stores.ja.md#date-と-datetime-の値)",
+            ),
+            (_DOCS / "api-stores.ja.md", "## バルク取り込み", "(#date-と-datetime-の値)"),
+            (
+                _DOCS / "api-authoring.ja.md",
+                "#### `ActionParams`",
+                "(api-stores.ja.md#date-と-datetime-の値)",
+            ),
         ),
-        "hydration": "> **ハイドレーション。**",
+        "hydration": (
+            _DOCS / "api-runtime.ja.md",
+            "> **ハイドレーション。**",
+            "(api-stores.ja.md#date-と-datetime-の値)",
+        ),
     },
 }
 
@@ -1206,14 +1240,12 @@ def test_datetime_write_rule_is_stated_once_and_linked_from_every_write_site(
     section = _markdown_section(text, rule["heading"])
     for code in ("INVALID_RECORD", "INVALID_PARAMS"):
         assert f"`{code}`" in section, f"{path.name}: subsection lacks {code}"
-    link = f"(#{rule['anchor']})"
-    for site in rule["sites"]:
-        assert link in _markdown_section(text, site), (
-            f"{path.name}: {site!r} does not link to {rule['heading']!r}"
+    for page, site, link in rule["sites"]:
+        assert link in _markdown_section(page.read_text(), site), (
+            f"{page.name}: {site!r} does not link to {rule['heading']!r}"
         )
-    hydration = next(
-        p for p in text.split("\n\n") if p.startswith(rule["hydration"])
-    )
+    page, prefix, link = rule["hydration"]
+    hydration = next(p for p in page.read_text().split("\n\n") if p.startswith(prefix))
     assert link in hydration, f"{path.name}: Hydration note does not link the rule"
     assert "naive" not in hydration, (
         f"{path.name}: Hydration note still restates the write rule"
@@ -1247,6 +1279,6 @@ def test_datetime_write_rule_example_runs_and_is_identical_in_en_and_ja() -> Non
     # `dont_inherit`: run it like a reader's own module, without this file's
     # `from __future__ import annotations` turning `datetime` into a string.
     code = compile(
-        en, "docs/api-reference.md#date-and-datetime-values", "exec", dont_inherit=True
+        en, "docs/api-stores.md#date-and-datetime-values", "exec", dont_inherit=True
     )
     exec(code, namespace)
