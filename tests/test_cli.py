@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -305,3 +306,52 @@ def test_render_findings_omits_guide_line_when_unset(
         "[ERROR] ONTOLOGY_INVALID at object Ticket: invalid declaration\n"
         "  fix: repair the declaration\n"
     )
+
+
+_CWD_MODULE = """\
+from ontary import Ontology, OntologyObject, SelfScope, prop
+
+ontology = Ontology("cwd-module", scope_levels=["org"])
+
+
+@ontology.object(layer="L0", scope=[SelfScope(level="org")])
+class Ticket(OntologyObject):
+    id: str = prop(primary_key=True)
+    title: str
+"""
+
+
+def test_validate_imports_a_module_from_the_current_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    (tmp_path / "ontary_cwd_target.py").write_text(_CWD_MODULE)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        sys, "path", [p for p in sys.path if p not in ("", ".", str(tmp_path))]
+    )
+    monkeypatch.delitem(sys.modules, "ontary_cwd_target", raising=False)
+
+    assert cli.main(["validate", "ontary_cwd_target:ontology", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out) == []
+
+
+def test_validate_console_script_imports_from_cwd_without_pythonpath(
+    tmp_path: Path,
+) -> None:
+    script = Path(sys.executable).with_name("ontary")
+    assert script.exists(), f"console script not installed beside {sys.executable}"
+    (tmp_path / "m.py").write_text(_CWD_MODULE)
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+
+    result = subprocess.run(
+        [str(script), "validate", "m:ontology", "--json"],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == []

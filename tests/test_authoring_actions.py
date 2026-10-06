@@ -20,11 +20,19 @@ from conftest import raises_code
 
 from examples.tickets.ontology import build_ontology
 from ontary.actions import ActionContext, ActionError, ActionExecutor
-from ontary.authoring import ActionParams, Ontology, OntologyObject, prop, ref, scope_ref, target
+from ontary.authoring import (
+    ActionParams,
+    Ontology,
+    OntologyObject,
+    prop,
+    ref,
+    scope_ref,
+    target,
+)
 from ontary.client import OntologyClient
 from ontary.errors import ValidationFailed
 from ontary.ontology import OntologyDef
-from ontary.scope import ScopePolicy
+from ontary.scope import ScopePolicy, SelfScope
 from ontary.security import Consumer
 from ontary.store import ObjectStore, Source
 
@@ -118,6 +126,79 @@ class TestRequiredRule:
         by_name = {p.name: p for p in derived.parameters}
         assert by_name["ticket_id"].required is True
         assert by_name["reason"].required is False
+
+    def test_field_with_non_null_default_is_not_required(self) -> None:
+        """#157 F15: a Python default makes the parameter optional, like
+        pydantic -- not only an `X | None` annotation."""
+        ontology, Ticket, _Team = _build_tickets_ontology()
+
+        class Params(ActionParams):
+            ticket_id: str = target(Ticket)
+            quantity: int = 0
+            note: str = "none"
+
+        @ontology.action(Params, target=Ticket, roles=["Agent"], api_name="Act")
+        def handler(ctx: ActionContext, params: Params) -> dict[str, str]:
+            return {}
+
+        derived = ontology.registry.get_action_type("Act")
+        by_name = {p.name: p for p in derived.parameters}
+        assert by_name["ticket_id"].required is True
+        assert by_name["quantity"].required is False
+        assert by_name["note"].required is False
+
+
+    def test_scope_markers_with_a_default_stay_required(self) -> None:
+        """A defaulted target()/scope_ref() stays required. The scope gate
+        reads the caller's dict, so an omitted marker would skip it."""
+        ontology, Ticket, Team = _build_tickets_ontology()
+
+        class Params(ActionParams):
+            ticket_id: str = target(Ticket, default="t1")
+            team_id: str = scope_ref(Team, default="team-b")
+
+        @ontology.action(Params, target=Ticket, roles=["Agent"], api_name="Act")
+        def handler(ctx: ActionContext, params: Params) -> dict[str, str]:
+            return {}
+
+        derived = ontology.registry.get_action_type("Act")
+        by_name = {p.name: p for p in derived.parameters}
+        assert by_name["ticket_id"].required is True
+        assert by_name["team_id"].required is True
+
+
+def test_dynamic_execute_cannot_skip_a_defaulted_scope_ref() -> None:
+    """Omitting a defaulted scope_ref() on the dynamic path is refused
+    before the handler runs, so the default never bypasses SCOPE_DENIED."""
+    ontology = Ontology(name="teams", scope_levels=["team"])
+
+    @ontology.object(layer="L0", scope=[SelfScope(level="team")])
+    class Team(OntologyObject):
+        id: str = prop(primary_key=True)
+        name: str
+
+    seen: list[str] = []
+
+    class Params(ActionParams):
+        team_id: str = scope_ref(Team, default="team-b")
+        note: str
+
+    @ontology.action(Params, target=Team, roles=["Agent"], api_name="Act")
+    def act(ctx: ActionContext, params: Params) -> dict[str, str]:
+        seen.append(params.team_id)
+        return {}
+
+    store = ObjectStore(ontology.registry)
+    store.insert("Team", {"id": "team-a", "name": "A"}, SRC)
+    store.insert("Team", {"id": "team-b", "name": "B"}, SRC)
+    consumer = Consumer(
+        actor_id="a1", role="Agent", scope_level="team", scope_id="team-a", kind="human"
+    )
+    client = OntologyClient(ontology, store, consumer)
+
+    with raises_code(ActionError, "INVALID_PARAMS"):
+        client.execute("Act", {"note": "n"})
+    assert seen == []
 
 
 class TestMarkerValidation:
@@ -375,6 +456,28 @@ class TestTypedExecuteParity:
         entries = client._store.audit_entries()
         assert len(entries) == 2
         assert entries[0].params == entries[1].params
+
+    def test_string_execute_omitting_a_defaulted_param_uses_the_default(self) -> None:
+        """#157 F15: omitting `quantity: int = 0` on the dynamic path reaches
+        the handler with the default, as the typed form does."""
+        ontology, Ticket, _Team = _build_tickets_ontology()
+        seen: list[Any] = []
+
+        class ReserveParams(ActionParams):
+            ticket_id: str = target(Ticket)
+            quantity: int = 0
+
+        @ontology.action(ReserveParams, target=Ticket, roles=["Agent"], api_name="Reserve")
+        def reserve(ctx: ActionContext, params: ReserveParams) -> dict[str, int]:
+            seen.append(params)
+            return {"quantity": params.quantity}
+
+        client, executor = _build_client_and_executor(ontology)
+        executor._register("Reserve", reserve, ReserveParams)
+
+        assert client.execute("Reserve", {"ticket_id": "t1"}) == {"quantity": 0}
+        assert client.execute(ReserveParams(ticket_id="t1")) == {"quantity": 0}
+        assert [p.quantity for p in seen] == [0, 0]
 
     def test_typed_form_with_extra_params_argument_is_invalid_params(self) -> None:
         client, EscalateParams, _seen = self._setup()

@@ -11,6 +11,23 @@ you**.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`ontary validate` and `ontary serve` import a module from the current
+  directory.** The console script now puts the working directory on
+  `sys.path`, as `python -m` does, so `ontary validate app:ontology` works
+  beside `app.py` without `PYTHONPATH=.`
+  ([#120](https://github.com/ryoochi0112/ontary/issues/120)).
+- **An action parameter with a Python default is optional.**
+  `quantity: int = 0` was marked required, so omitting it on the dynamic
+  (`execute(name, dict)`) and MCP paths was refused with `missing required
+  parameter`. The handler now receives the default. The descriptor's
+  `required` flag changes from `true` to `false` for such action and
+  Function parameters; Functions already applied the default. `target()`
+  and `scope_ref()` stay required even with a default, so the scope check
+  always sees them
+  ([#157](https://github.com/ryoochi0112/ontary/issues/157), F15).
+
 ## [0.20.1] — 2026-10-06
 
 ```bash

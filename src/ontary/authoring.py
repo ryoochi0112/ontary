@@ -679,7 +679,12 @@ def _derive_params(
 
         required = meta.get("required")
         if required is None:
-            required = not is_optional
+            # A Python default makes a parameter optional, as in pydantic.
+            # Scope markers stay required: the scope gate reads the caller's
+            # dict, so an omitted marker would skip it.
+            required = not is_optional and (
+                scope_semantics is not None or field_info.is_required()
+            )
 
         params.append(
             ActionParameterDef(
