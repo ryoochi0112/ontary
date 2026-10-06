@@ -374,7 +374,8 @@ def test_run_mcp_example_builds_server_and_returns_query_envelope() -> None:
     }
 
     payload = _call(server, "query_objects", {"obj_type": "Ticket", "limit": 1})
-    assert set(payload) == {"result", "next_cursor"}
+    assert set(payload) == {"result", "next_cursor", "scope_limited"}
+    assert payload["scope_limited"] is True
     assert len(payload["result"]) == 1
     assert payload["result"][0]["payload"]["subject"] in {
         "Invoice mismatch",

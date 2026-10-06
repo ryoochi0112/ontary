@@ -212,6 +212,14 @@ class _FreshClient:
     def __init__(self, client_id: int) -> None:
         self.client_id = client_id
         self.declarations = _TaggedDeclarations(client_id)
+        self.read_mark_types: list[str] = []
+
+    def _read_marks(self, obj_type: str) -> tuple[bool, tuple[str, ...]]:
+        self.read_mark_types.append(obj_type)
+        return True, (f"client-{self.client_id}",)
+
+    def _link_target_type(self, link: str, *, reverse: bool) -> str:
+        return "Book"
 
     def get(self, obj_type: str, obj_id: str) -> _Tagged:
         return _Tagged(self.client_id)
@@ -261,14 +269,17 @@ class _TaggedDeclarations:
 
 def _client_ids_in(value: Any) -> list[int]:
     """Recursively pull every `client_id` a `_FreshClient`-derived payload
-    embedded, out of whatever shape `_run`/`_run_unwrapped` wrapped it in
+    embedded, including redaction marks, out of whatever shape the helpers wrapped it in
     (`{"result": {"client_id": ...}}` or `{"result": [{"client_id": ...}, ...]}`)."""
     if isinstance(value, dict):
+        own_ids = []
         if "client_id" in value and isinstance(value["client_id"], int):
-            return [value["client_id"]]
-        return [i for v in value.values() for i in _client_ids_in(v)]
+            own_ids = [value["client_id"]]
+        return own_ids + [i for k, v in value.items() if k != "client_id" for i in _client_ids_in(v)]
     if isinstance(value, list):
         return [i for v in value for i in _client_ids_in(v)]
+    if isinstance(value, str) and value.startswith("client-"):
+        return [int(value.removeprefix("client-"))]
     return []
 
 
@@ -286,10 +297,13 @@ def test_all_tools_matches_what_register_tools_actually_registered() -> None:
 def test_resolve_client_result_is_the_client_the_tool_acts_on() -> None:
     server = MCPServer("counting-and-identity")
     calls = {"n": 0}
+    clients: list[_FreshClient] = []
 
     def resolve_client() -> _FreshClient:
         calls["n"] += 1
-        return _FreshClient(calls["n"])
+        client = _FreshClient(calls["n"])
+        clients.append(client)
+        return client
 
     _register_tools(server, _empty_ontology(), resolve_client)  # type: ignore[arg-type]
 
@@ -305,6 +319,15 @@ def test_resolve_client_result_is_the_client_the_tool_acts_on() -> None:
             continue
 
         this_invocation_id = calls["n"]
+        if name in {"get_object", "query_objects", "count_objects", "traverse_links"}:
+            assert clients[-1].read_mark_types == ["Book"], (
+                f"{name}'s marks did not come from THIS invocation's client"
+            )
+        if name in {"get_object", "query_objects", "traverse_links"}:
+            rows = [payload["result"]] if name == "get_object" else payload["result"]
+            assert rows
+            for row in rows:
+                assert row["redacted_fields"] == [f"client-{this_invocation_id}"]
         if name in {"count_objects", "aggregate_objects"}:
             assert payload.get("result") == this_invocation_id
             continue
