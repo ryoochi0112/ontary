@@ -3134,6 +3134,8 @@ def test_every_public_read_routes_through_the_disclosure_gate(
     invokers: dict[str, Callable[[GuardedQuery], object]] = {
         "get_objects": lambda guarded: guarded.get_objects(human, "Reading", limit=None),
         "get_object": lambda guarded: guarded.get_object(human, "Reading", "r0"),
+        "scope_limited": lambda guarded: guarded.scope_limited("Reading"),
+        "redacted_fields": lambda guarded: guarded.redacted_fields(human, "Reading"),
         "count": lambda guarded: guarded.count(human, "Reading"),
         "exists": lambda guarded: guarded.exists(human, "Reading"),
         "traverse": lambda guarded: guarded.traverse(human, "inLibrary", "shelf-1"),

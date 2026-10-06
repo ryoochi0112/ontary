@@ -642,6 +642,19 @@ class GuardedQuery:
             group_by=group_by,
         )
 
+    def scope_limited(self, obj_type: str) -> bool:
+        """Mirror the two deny branches of `_visible` using declarations only.
+
+        Scope coverage and row visibility may deny even when every stored row
+        happens to be visible; this marker never reads the store.
+        Refuse an incoherent policy like every public read.
+        """
+        self._require_coherent_scope(obj_type)
+        return (
+            obj_type not in self._policy.unscoped_types
+            or obj_type in self._policy.row_visibility
+        )
+
     def _visible(
         self,
         consumer: Consumer,
@@ -658,6 +671,7 @@ class GuardedQuery:
         # The V/S/R/W family in
         # `test_exists_bound_matches_unbounded_walk_over_generated_row_shapes`
         # models both rejection branches here; a new branch needs a new kind.
+        # A new deny branch must update scope_limited and its tie test.
         obj_type = obj.lineage.object_type
         if obj_type not in self._policy.unscoped_types:
             resolved = resolved_scope
@@ -735,6 +749,14 @@ class GuardedQuery:
         # disclose information about the value rather than merely selecting
         # rows with a value the consumer already supplied.
         return hidden
+
+    def redacted_fields(self, consumer: Consumer, obj_type: str) -> tuple[str, ...]:
+        """Sorted property names that `_redact` strips from returned rows.
+
+        Refuse an incoherent policy like every public read.
+        """
+        self._require_coherent_scope(obj_type)
+        return tuple(sorted(self._hidden_fields(consumer, obj_type, disclosure="learned")))
 
     def _redact(
         self,

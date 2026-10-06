@@ -310,6 +310,21 @@ class OntologyClient(_TypedReadMixin):
 
     # -- reads --------------------------------------------------------
 
+    def _read_marks(self, obj_type: str) -> tuple[bool, tuple[str, ...]]:
+        """Declaration-only scope and redaction marks for this consumer."""
+        return (
+            self._query.scope_limited(obj_type),
+            self._query.redacted_fields(self._consumer, obj_type),
+        )
+
+    def _link_target_type(self, link: str, *, reverse: bool) -> str:
+        """Resolve the result type of a declared link traversal."""
+        try:
+            link_def = self._ontology.registry.get_link_type(link)
+        except ValidationFailed as exc:
+            raise ValidationFailed(str(exc), code="UNKNOWN_NAME") from exc
+        return link_def.from_type if reverse else link_def.to_type
+
     @overload
     def events(
         self, event_type: type[E], /, *,
