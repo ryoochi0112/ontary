@@ -64,6 +64,7 @@ nav:
   - Reference:
       - API reference: api-reference.md
       - Authoring: api-authoring.md
+      - Reading: api-reading.md
       - Actions & Functions: api-actions-functions.md
       - Stores & ingest: api-stores.md
       - Error codes: api-errors.md

@@ -183,11 +183,11 @@ def _cli_text_example_ontology() -> Ontology:
 def test_queries_document_visible_row_count_disclosure_reasoning() -> None:
     """The visible-row-count reasoning moved out of the deleted queries page.
 
-    It now lives in the API reference's Reading section; the reasoning itself is
+    It now lives in the Reading reference page; the reasoning itself is
     still pinned verbatim, because "why `count`/`exists` are not min-N-gated" is
     a disclosure argument, not a description of an implementation detail.
     """
-    text = (_DOCS / "api-reference.md").read_text()
+    text = (_DOCS / "api-reading.md").read_text()
 
     assert "post-visibility" in text
     assert "can already enumerate the same rows" in text

@@ -203,7 +203,7 @@ Every write path checks a `date` or `datetime` property value the same way:
 - **Nothing is normalised.** The store keeps the exact spelling: an offset is not
   converted to UTC, and `Z` stays `Z`. `eq` and `in` filters match that spelling;
   the comparison operators compare instants (see
-  [Filters, ordering, and bounded reads](api-reference.md#filters-ordering-and-bounded-reads)).
+  [Filters, ordering, and bounded reads](api-reading.md#filters-ordering-and-bounded-reads)).
 - **Naive strings are accepted, naive objects are not.** A naive ISO *string* is
   stored as written. A naive `datetime` *object* is refused, because adding
   `tzinfo=` is the only way to say which instant it means. Avoid mixing naive and
