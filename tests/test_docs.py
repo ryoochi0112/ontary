@@ -207,9 +207,9 @@ def test_count_objects_not_min_n_gated_points_to_aggregate_count() -> None:
     en_marker = "not min-N-gated"
     ja_marker = "min-N の対象外"
     for path, marker in (
-        (_DOCS / "api-reference.md", en_marker),
+        (_DOCS / "api-mcp.md", en_marker),
         (_DOCS / "mcp-serving.md", en_marker),
-        (_DOCS / "api-reference.ja.md", ja_marker),
+        (_DOCS / "api-mcp.ja.md", ja_marker),
     ):
         text = path.read_text()
         paragraphs = text.split("\n\n")
@@ -1177,7 +1177,7 @@ DATETIME_RULE: dict[Path, dict[str, Any]] = {
             ),
         ),
         "hydration": (
-            _DOCS / "api-reference.md",
+            _DOCS / "api-runtime.md",
             "> **Hydration.**",
             "(api-stores.md#date-and-datetime-values)",
         ),
@@ -1200,7 +1200,7 @@ DATETIME_RULE: dict[Path, dict[str, Any]] = {
             ),
         ),
         "hydration": (
-            _DOCS / "api-reference.ja.md",
+            _DOCS / "api-runtime.ja.md",
             "> **ハイドレーション。**",
             "(api-stores.ja.md#date-と-datetime-の値)",
         ),

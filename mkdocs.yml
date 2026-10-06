@@ -64,9 +64,11 @@ nav:
   - Reference:
       - API reference: api-reference.md
       - Authoring: api-authoring.md
+      - Runtime & clients: api-runtime.md
       - Reading: api-reading.md
       - Actions & Functions: api-actions-functions.md
       - Stores & ingest: api-stores.md
+      - MCP server: api-mcp.md
       - Error codes: api-errors.md
       - CLI reference: cli.md
       - Compatibility: compatibility.md

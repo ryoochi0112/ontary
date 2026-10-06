@@ -137,7 +137,7 @@ exit codes: [CLI reference](docs/cli.md).
 | Worked recipes | [Tickets reference app](examples/tickets/README.md) · [Maintenance desk](examples/maintenance_desk/README.md) · [Room booking](examples/room_booking/README.md) · [Bill of materials](examples/bill_of_materials/README.md) |
 | **Reference** | |
 | Names and errors | [API reference](docs/api-reference.md) · [error codes](docs/api-reference.md#error-codes) · [日本語](docs/api-reference.ja.md) |
-| API reference pages | [Authoring](docs/api-authoring.md) · [日本語](docs/api-authoring.ja.md) · [Reading](docs/api-reading.md) · [日本語](docs/api-reading.ja.md) · [Actions & Functions](docs/api-actions-functions.md) · [日本語](docs/api-actions-functions.ja.md) · [Stores & ingest](docs/api-stores.md) · [日本語](docs/api-stores.ja.md) · [Error codes](docs/api-errors.md) · [日本語](docs/api-errors.ja.md) |
+| API reference pages | [Authoring](docs/api-authoring.md) · [日本語](docs/api-authoring.ja.md) · [Runtime & clients](docs/api-runtime.md) · [日本語](docs/api-runtime.ja.md) · [Reading](docs/api-reading.md) · [日本語](docs/api-reading.ja.md) · [Actions & Functions](docs/api-actions-functions.md) · [日本語](docs/api-actions-functions.ja.md) · [Stores & ingest](docs/api-stores.md) · [日本語](docs/api-stores.ja.md) · [MCP server](docs/api-mcp.md) · [日本語](docs/api-mcp.ja.md) · [Error codes](docs/api-errors.md) · [日本語](docs/api-errors.ja.md) |
 | Command line | [CLI reference](docs/cli.md) · [日本語](docs/cli.ja.md) |
 | Compatibility | [Compatibility](docs/compatibility.md) |
 | **Explanation** | |
