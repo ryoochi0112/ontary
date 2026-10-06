@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import importlib
 import json
+import os
 import sys
 from typing import TYPE_CHECKING
 
@@ -94,6 +95,13 @@ def _load_target(target: str) -> tuple[Ontology, Store | None]:
         raise _LoadFailure(
             "target must use the form pkg.module:attr"
         )
+
+    # A console script does not put the working directory on sys.path, so a
+    # module beside the user (`app:ontology`) would not import. Match
+    # `python -m`, uvicorn and `flask --app`.
+    cwd = os.getcwd()
+    if cwd not in sys.path:
+        sys.path.insert(0, cwd)
 
     try:
         module = importlib.import_module(module_name)

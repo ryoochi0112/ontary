@@ -440,9 +440,9 @@ team A sees: [2]
 
 Validation checks the model, and diagnosis reports errors and design advisories. Run this command beside `leave_requests.py`:
 ```bash
-PYTHONPATH=. ontary validate leave_requests:ontology
+ontary validate leave_requests:ontology
 ```
-The CLI imports the module by name, so `PYTHONPATH=.` puts the current directory on the import path.
+The CLI imports `leave_requests` by name from the current directory.
 In **Try it**, run the same checks in Python. `validate()` raises on invalid declarations; `diagnose()` returns findings:
 ```python
 # Try it
@@ -552,7 +552,7 @@ print(sorted(result.structured_content["result"]))
 The CLI starts a localhost development server. `--dev` is required:
 
 ```bash
-PYTHONPATH=. ontary serve leave_requests:ontology --dev --store ./leave-requests.sqlite --port 8000
+ontary serve leave_requests:ontology --dev --store ./leave-requests.sqlite --port 8000
 ```
 
 The development server answers as one fixed dev caller, not as Amina or a manager.
