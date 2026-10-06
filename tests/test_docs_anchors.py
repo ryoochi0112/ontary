@@ -8,8 +8,30 @@ from pathlib import Path
 
 from docs_corpus import API_REFERENCE_PAGES, DOCS, HUB, headings, slugify
 
+from scripts.mkdocs_hooks import RETIRED_ANCHORS
+
 ROOT = DOCS.parent
 _INBOUND = re.compile(r"(api-[a-z-]+(?:\.ja)?\.md)#([^\s)\]\"'`]+)")
+_CHANGELOG_DEEP_LINK = re.compile(r"\]\((docs/[\w.-]+\.md)#([^)\s]+)\)")
+_EXPLICIT_ID = re.compile(r'<a id="([^"]+)"')
+
+
+def _anchors(path: Path) -> set[str]:
+    text = path.read_text(encoding="utf-8")
+    return {slugify(title) for _, title in headings(text)} | set(_EXPLICIT_ID.findall(text))
+
+
+def test_changelog_deep_links_resolve_or_are_declared_retired() -> None:
+    links = set(_CHANGELOG_DEEP_LINK.findall((ROOT / "CHANGELOG.md").read_text(encoding="utf-8")))
+    targets = {f"{path}#{fragment}" for path, fragment in links}
+    assert RETIRED_ANCHORS <= targets, f"Stale retired anchors: {RETIRED_ANCHORS - targets}"
+    for path, fragment in sorted(links):
+        target = f"{path}#{fragment}"
+        live = fragment in _anchors(ROOT / path)
+        if target in RETIRED_ANCHORS:
+            assert not live, f"{target} resolves again; remove it from RETIRED_ANCHORS"
+        else:
+            assert live, f"CHANGELOG.md: {target} has no anchor; restore it or retire it"
 
 
 def test_every_inbound_api_reference_anchor_resolves() -> None:

@@ -78,6 +78,18 @@ def test_changelog_links_to_deleted_docs_go_to_github_not_the_site() -> None:
     assert "(storage.md)" in out
 
 
+def test_changelog_drops_only_retired_anchors() -> None:
+    markdown = (
+        "[a](docs/storage.md#storage-envelope) "
+        "[b](docs/storage.md#moving-across-a-schema-version)"
+    )
+    out = rewrite_links(markdown, "changelog.md", SITE)
+    assert "(storage.md)" in out
+    assert "(storage.md#moving-across-a-schema-version)" in out
+    retired_elsewhere = rewrite_links("[a](../docs/storage.md#storage-envelope)", "x.md", SITE)
+    assert "#storage-envelope" in retired_elsewhere
+
+
 def test_shims_exist_and_name_their_sources() -> None:
     for shim, source in INCLUDES.items():
         first_line = (ROOT / "docs" / shim).read_text().splitlines()[0]
