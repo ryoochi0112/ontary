@@ -11,6 +11,16 @@ you**.
 
 ## [Unreleased]
 
+## [0.20.1] — 2026-10-06
+
+```bash
+uv add "ontary @ git+https://github.com/ryoochi0112/ontary@v0.20.1"
+```
+
+A docs-only patch release. The API reference is split into a hub and seven
+pages, and every anchor linked from elsewhere still resolves. No code or API
+changes; the store schema stays at v14, so a 0.20.0 store needs no re-ingest.
+
 ### Changed
 
 - **The API reference is split into seven pages under Reference**:
