@@ -24,6 +24,18 @@ DESCRIPTION_FALLBACKS = {
     "index.md": "{site_description}",
     "changelog.md": "Every release's changes.",
 }
+#: CHANGELOG link targets whose anchor a later release retired. A released
+#: CHANGELOG section is never edited, so its source keeps the original link and
+#: the site page drops only the dead fragment, linking to the page itself.
+RETIRED_ANCHORS = frozenset(
+    {
+        "docs/compatibility.md#auto-minted-ids-come-from-id_factory-09--010",
+        "docs/compatibility.md#what-counts-as-a-breaking-change",
+        "docs/compatibility.md#fingerprints-and-07-property-types",
+        "docs/storage.md#storage-envelope",
+        "docs/storage.md#read-consistency-an-implementation-detail-not-a-guarantee",
+    }
+)
 LLMS_TITLE = "ontary"
 SITE_SHIM_PREFIX = "<!-- site-page:"
 _LINK = re.compile(r"\]\(([^)\s]+)")
@@ -66,6 +78,8 @@ def rewrite_links(markdown: str, src_path: str, site_url: str) -> str:
         target = match.group(1)
         if target.startswith(("http://", "https://", "mailto:", "#")):
             return match.group(0)
+        if src_path == "changelog.md" and target in RETIRED_ANCHORS:
+            target = target.partition("#")[0]
         ja = _JA_PAGE.fullmatch(target)
         if ja:
             return f"]({site_url}ja/{ja.group(1)}/{ja.group(2) or ''}"
