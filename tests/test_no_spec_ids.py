@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from docs_corpus import API_REFERENCE_PAGES
 
 from ontary.authoring import Ontology, OntologyObject, prop
 from ontary.mcp_server import build_mcp_server, build_multi_consumer_mcp_server
@@ -31,10 +32,7 @@ PATTERNS: tuple[re.Pattern[str], ...] = (
 _ROOT = Path(__file__).resolve().parent.parent
 _SRC_ROOT = _ROOT / "src" / "ontary"
 _SOURCE_FILES = tuple(sorted(_SRC_ROOT.rglob("*.py")))
-_API_REFERENCE_FILES = (
-    _ROOT / "docs" / "api-reference.md",
-    _ROOT / "docs" / "api-reference.ja.md",
-)
+_API_REFERENCE_FILES = API_REFERENCE_PAGES["en"] + API_REFERENCE_PAGES["ja"]
 _ISO_DATE_PREFIX = re.compile(r"\d{4}-\d{2}-\d{2}$")
 _ISO_TIME_SUFFIX = re.compile(r":\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?(?![\w:])")
 

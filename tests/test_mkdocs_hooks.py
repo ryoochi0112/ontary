@@ -4,6 +4,7 @@ sources. Pure-function tests -- mkdocs itself is not a dev dependency."""
 
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,6 +16,7 @@ import yaml
 from scripts.mkdocs_hooks import (
     INCLUDES,
     SITE_SHIM_PREFIX,
+    on_config,
     on_post_build,
     render_llms_full,
     render_llms_txt,
@@ -24,6 +26,20 @@ from scripts.mkdocs_hooks import (
 SITE = "https://ryoochi0112.github.io/ontary/"
 BLOB = "https://github.com/ryoochi0112/ontary/blob/main/"
 ROOT = Path(__file__).resolve().parent.parent
+
+
+@pytest.mark.parametrize("language, expected", [("en", logging.WARNING), ("ja", logging.INFO)])
+@pytest.mark.parametrize("nested", [False, True], ids=["flat", "validated"])
+def test_config_relaxes_anchors_only_for_non_english(
+    language: str, expected: int, nested: bool
+) -> None:
+    validation = SimpleNamespace(anchors=logging.WARNING)
+    config = SimpleNamespace(
+        plugins={"i18n": SimpleNamespace(current_language=language)},
+        validation=SimpleNamespace(links=validation) if nested else validation,
+    )
+    on_config(config)
+    assert validation.anchors == expected
 
 
 def test_readme_links_become_site_links() -> None:

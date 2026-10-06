@@ -614,8 +614,8 @@ uv add "ontary @ git+https://github.com/ryoochi0112/ontary@v0.10.0"
   instead of falling through to the store's own `uuid.uuid4()` — the same seam
   invocation and effect ids already come from. A direct `store.insert` call
   (bypassing an `ActionContext`) is unaffected and keeps minting `uuid.uuid4()`.
-  See [docs/compatibility.md § Auto-minted ids come from `id_factory` (0.9 →
-  0.10)](docs/compatibility.md#auto-minted-ids-come-from-id_factory-09--010).
+  See docs/compatibility.md § Auto-minted ids come from `id_factory` (0.9 →
+  0.10).
 - `docs/storage.md#storage-envelope` now states its publication rule outright and
   adds an observed-run log, closing a silent SELECTION the doc never disclosed: a CI
   run of the Postgres storage-envelope curve step earns a `#### Run <id>` table only
@@ -666,7 +666,7 @@ uv add "ontary @ git+https://github.com/ryoochi0112/ontary@v0.9.0"
 
 ### Added
 
-- [`docs/storage.md#storage-envelope`](docs/storage.md#storage-envelope) publishes a
+- `docs/storage.md#storage-envelope` publishes a
   measured, reproducible envelope for both shipped backends: a governed `aggregate` or
   narrow-scope read stays under one second below ~32,000 rows on `ObjectStore` (SQLite)
   and ~1,600 rows on `PostgresStore` (PostgreSQL — a conservative floor measured across
@@ -693,7 +693,7 @@ uv add "ontary @ git+https://github.com/ryoochi0112/ontary@v0.9.0"
   including where a `ScopePolicy.row_visibility` predicate or a `CustomResolver`
   participates in the visibility decision, and its read-once-per-guarded-read behavior
   is documented as an implementation detail of the current engine, not an API guarantee
-  ([docs/storage.md#read-consistency](docs/storage.md#read-consistency-an-implementation-detail-not-a-guarantee)).
+  (docs/storage.md#read-consistency).
 - `exists()` now stops at the first visible row instead of walking the full selection —
   measurably cheaper than `count()` when an early match exists, with an identical
   answer on every existing case (empty selection, no match, min-N gated, scope-hidden).
@@ -707,7 +707,7 @@ uv add "ontary @ git+https://github.com/ryoochi0112/ontary@v0.9.0"
   supported — and the docstring is softened to say so.
 
   This is **Changed, not Breaking**, checked against every clause
-  [docs/compatibility.md](docs/compatibility.md#what-counts-as-a-breaking-change) lists:
+  docs/compatibility.md lists:
   `Store` is neither removed nor renamed in `ontary.__all__` (see the residue below) and
   no method signature changed, so the "obvious" clause is not met; no `Declarations`
   string changed (1); no error code changed meaning or disappeared (2); no
@@ -1111,8 +1111,8 @@ uv add "ontary @ git+https://github.com/ryoochi0112/ontary@v0.7.0"
   fingerprint-neutral for ontologies that do not use them, so upgrading the
   SDK alone leaves those digests byte-identical. An ontology that declares
   `choices=[...]` moves its digest; declaring a `date` property likewise
-  changes that declaration's shape. Follow the [fingerprint acceptance
-  procedure](docs/compatibility.md#fingerprints-and-07-property-types),
+  changes that declaration's shape. Follow the fingerprint acceptance
+  procedure,
   including row migration before accepting a new choices constraint.
 
 ### Additions

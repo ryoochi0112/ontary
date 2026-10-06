@@ -7,6 +7,10 @@ edit_uri: blob/main/docs/
 docs_dir: docs
 strict: true
 
+# The hook relaxes anchors for JA: English fallback pages link English hub headings.
+validation:
+  anchors: warn
+
 theme:
   name: material
   features:
