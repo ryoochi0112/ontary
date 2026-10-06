@@ -100,9 +100,11 @@ scope-routing keys. Unlike the equality-shaped `where` exemption below,
 > [Date and datetime values](api-stores.md#date-and-datetime-values).
 
 > **Redaction shape.** A redacted field comes back as `None` on the typed surface, with
-> its name in `redacted_fields`. On the **string and MCP surfaces the key is absent
-> from `payload` entirely** — there is no `redacted_fields` companion there. Read
-> defensively over MCP (`payload.get("email")`, not `payload["email"]`), and do not
+> its name in `redacted_fields`. On the **string surface the key is absent from
+> `payload` entirely**, and there is no `redacted_fields` companion. Over **MCP the key
+> is also absent from `payload`**, and each row carries a `redacted_fields` list of the
+> hidden names (see [MCP read results](api-mcp.md#read-results)). Read defensively on the
+> string and MCP surfaces (`payload.get("email")`, not `payload["email"]`), and do not
 > infer "not stored" from a missing key: it may simply be hidden from you.
 
 ---
@@ -148,7 +150,9 @@ Four mechanisms, all enforced in the engine:
 1. **Scope visibility** — resolved through the declared `ScopePolicy`; an unresolved
    level denies.
 2. **Sensitivity redaction** — `Sensitivity(ai_usable, human_visible)` per property.
-   A hidden field reads back `None` and is named in `redacted_fields`.
+   On the typed surface, a hidden field reads back `None` and is named in
+   `redacted_fields`. On the string surface the key is absent from `payload`. Over MCP
+   the key is absent and the row's `redacted_fields` names it.
 3. **min-N** — aggregates over fewer than `min_n` distinct contributors raise
    `VisibilityError` with code `MIN_N_VIOLATION`. Contributors come from the declared
    `contributor` rules, so

@@ -11,6 +11,16 @@ you**.
 
 ## [Unreleased]
 
+### Changed
+
+- **MCP read results carry scope and redaction marks (breaking for clients that
+  check exact keys).** `query_objects`, `traverse_links`, and `count_objects` add a
+  top-level `scope_limited` boolean. Every row from `query_objects`, `traverse_links`,
+  and `get_object` adds a `redacted_fields` list of the hidden property names. A
+  redacted key stays absent from `payload`. `scope_limited` depends on declarations
+  only and does not reveal how many rows were hidden. The Python surface is
+  unchanged ([#62](https://github.com/ryoochi0112/ontary/issues/62)).
+
 ## [0.20.3] — 2026-10-06
 
 ```bash

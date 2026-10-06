@@ -99,9 +99,11 @@ Function 集計の狭い例外は、下記の「フィルター」と「集計�
 > 受け付ける値は [date と datetime の値](api-stores.ja.md#date-と-datetime-の値) を参照してください。
 
 > **リダクションの形。** リダクションされたフィールドは、型付き surface では `None`
-> として返り、名前が `redacted_fields` に載ります。しかし**文字列 surface と MCP では
-> そのキー自体が `payload` から消えます** — `redacted_fields` に相当するものもありません。
-> MCP 越しに読むときは防御的に（`payload["email"]` ではなく `payload.get("email")`）、
+> として返り、名前が `redacted_fields` に載ります。**文字列 surface では
+> そのキー自体が `payload` から消え**、`redacted_fields` に相当するものはありません。
+> **MCP でもキーは `payload` から消え**、各行の `redacted_fields` に隠された名前が載ります
+> （[MCP の読み取り結果](api-mcp.ja.md#読み取り結果) を参照）。文字列 surface と MCP で
+> 読むときは防御的に（`payload["email"]` ではなく `payload.get("email")`）、
 > そしてキーが無いことを「保存されていない」と解釈しないでください。単にあなたから
 > 隠されているだけかもしれません。
 
@@ -147,7 +149,9 @@ def handler(ctx, params):
 
 1. **スコープ可視性** — 宣言された `ScopePolicy` を通じて解決。未解決のレベルは拒否。
 2. **機微度リダクション** — プロパティごとの `Sensitivity(ai_usable, human_visible)`。
-   隠されたフィールドは `None` として読め、`redacted_fields` に名前が載ります。
+   型付き surface では、隠されたフィールドは `None` として読め、`redacted_fields` に
+   名前が載ります。文字列 surface では `payload` からキーが消えます。MCP ではキーが
+   消え、行の `redacted_fields` に名前が載ります。
 3. **min-N** — 異なる寄与者が `min_n` 未満の集計は、コード `MIN_N_VIOLATION` の
    `VisibilityError`。寄与者は宣言された `contributor` ルールから求められるため、
    同一人物の複数行では閾値を満たしません。計数の対象は選択された全行ではなく、
