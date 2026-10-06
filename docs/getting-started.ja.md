@@ -259,4 +259,4 @@ server = build_mcp_server(ontology, store, agent)
 * エージェント統合の詳細については、[MCP Serving](mcp-serving.md) を参照してください。
 * コマンドラインツールについては、[CLI Reference](cli.md) を参照してください。
 * テストのガイドラインについては、[Testing](testing.md) を参照してください。
-* 具体的な動作例については、[Tickets Example](../examples/tickets/README.md) を参照してください。
+* 具体的な動作例については、[Tickets Example](../examples/tickets/README.md) と [Maintenance Desk Example](../examples/maintenance_desk/README.md) を参照してください。
