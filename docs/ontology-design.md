@@ -398,6 +398,8 @@ property and a link unless the property is required for scope or contributor
 resolution. If both are necessary, treat them as one invariant and populate them
 together.
 
+For a complete worked example of this pattern, see [examples/room_booking](../examples/room_booking/README.md).
+
 *Source: Palantir, "Ontology design: Structural guidance".*
 
 ### Naming conventions

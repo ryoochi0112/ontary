@@ -13,6 +13,7 @@ you**.
 
 ### Added
 
+- `examples/room_booking/` is a third reference app: room booking with an owned `Booking` relationship object that carries `starts_at`/`ends_at`, half-open time ranges queried with `where`, an overlap check in the booking action, reschedule as retire + create, one scope level and an MCP server, with end-to-end tests and a README whose Python blocks are executed by a test (#55).
 - `examples/maintenance_desk/` is a second reference app: a work-order desk that shows transitions, rules, `Sensitivity`, scope, a snapshot type, `min_n`, events and an MCP server in one ontology, with end-to-end tests and a README whose Python blocks are executed by a test (#55).
 - A new explanation page maps Domain-Driven Design terms to ontary, including what it does not support, and a docs test keeps that vocabulary off every other page (#53).
 - The docs site now publishes `llms.txt`, a nav-ordered index with one-line page descriptions, and `llms-full.txt`, which puts every English page in one Markdown file with links made absolute. Both files are generated at build time from the nav (#59).
