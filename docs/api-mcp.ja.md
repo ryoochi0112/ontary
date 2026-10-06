@@ -4,6 +4,8 @@
 
 *リファレンス* — MCP サーバーの契約を掲載します。[API リファレンス](api-reference.ja.md) と [はじめに](getting-started.ja.md) も参照してください。
 
+<a id="mcp-server"></a>
+
 ## MCP サーバー
 
 ```python
