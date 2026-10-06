@@ -11,6 +11,17 @@ you**.
 
 ## [Unreleased]
 
+## [0.20.3] — 2026-10-06
+
+```bash
+uv add "ontary @ git+https://github.com/ryoochi0112/ontary@v0.20.3"
+```
+
+A docs-only patch release. The design guide's `ref()` scope note covers
+`scope_ref()`, and English anchors resolve on the Japanese reference pages. No
+code or API changes; the store schema stays at v14, so a 0.20.2 store needs no
+re-ingest.
+
 ### Documentation
 
 - **The design guide's `ref()` scope note covers `scope_ref()`.** Declaring the
