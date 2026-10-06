@@ -11,6 +11,18 @@ you**.
 
 ## [Unreleased]
 
+## [0.20.2] — 2026-10-06
+
+```bash
+uv add "ontary @ git+https://github.com/ryoochi0112/ontary@v0.20.2"
+```
+
+A bugfix patch release for the newcomer path. The CLI imports a module from
+the current directory, and a defaulted action parameter is optional on the
+dynamic and MCP paths. The descriptor's `required` flag changes for such
+parameters. No new public API; the store schema stays at v14, so a 0.20.1
+store needs no re-ingest.
+
 ### Documentation
 
 - **The design guide warns that `ref()` parameters are not scope-checked.**
