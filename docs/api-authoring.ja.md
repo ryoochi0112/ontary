@@ -360,7 +360,7 @@ records[0].payload.carrier
 `redacted_fields: frozenset[str]` です。
 
 イベントは呼び出しの監査行に保存されるため、Action と一緒にコミットまたはロールバックされます。
-`AuditEntry.events` はそれらをマスクせずに列挙します。[`AuditEntry`](api-reference.ja.md#auditentry) を
+`AuditEntry.events` はそれらをマスクせずに列挙します。[`AuditEntry`](api-actions-functions.ja.md#auditentry) を
 参照してください。
 
 <a id="advisory-findings"></a>

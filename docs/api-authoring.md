@@ -366,7 +366,7 @@ sees none. An event type no longer declared is hidden. Payload fields restricted
 
 Events are stored on the invocation's audit row, so they commit or roll back with
 the action. `AuditEntry.events` lists them unredacted; see
-[`AuditEntry`](api-reference.md#auditentry).
+[`AuditEntry`](api-actions-functions.md#auditentry).
 
 #### Advisory findings: `Finding.guide`, `accept`, and `snapshot`
 

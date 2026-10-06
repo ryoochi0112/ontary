@@ -1165,7 +1165,7 @@ DATETIME_RULE: dict[Path, dict[str, Any]] = {
         "sites": (
             (_DOCS / "api-stores.md", "### The `Store` protocol", "(#date-and-datetime-values)"),
             (
-                _DOCS / "api-reference.md",
+                _DOCS / "api-actions-functions.md",
                 "### `ActionContext`",
                 "(api-stores.md#date-and-datetime-values)",
             ),
@@ -1188,7 +1188,7 @@ DATETIME_RULE: dict[Path, dict[str, Any]] = {
         "sites": (
             (_DOCS / "api-stores.ja.md", "### `Store` プロトコル", "(#date-と-datetime-の値)"),
             (
-                _DOCS / "api-reference.ja.md",
+                _DOCS / "api-actions-functions.ja.md",
                 "### `ActionContext`",
                 "(api-stores.ja.md#date-と-datetime-の値)",
             ),

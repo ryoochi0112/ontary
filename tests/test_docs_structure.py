@@ -25,6 +25,7 @@ SECTION_OF: dict[str, str] = {
     "mcp-serving.md": "How-to guides",
     "api-reference.md": "Reference",
     "api-authoring.md": "Reference",
+    "api-actions-functions.md": "Reference",
     "api-stores.md": "Reference",
     "api-errors.md": "Reference",
     "cli.md": "Reference",
