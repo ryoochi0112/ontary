@@ -63,6 +63,7 @@ nav:
       - MCP serving: mcp-serving.md
   - Reference:
       - API reference: api-reference.md
+      - Error codes: api-errors.md
       - CLI reference: cli.md
       - Compatibility: compatibility.md
   - Explanation:

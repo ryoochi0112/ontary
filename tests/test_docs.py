@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, get_args, get_origin, get_type_hints
 
 import pytest
+from docs_corpus import API_REFERENCE_PAGES
 from pydantic import BaseModel
 
 import ontary
@@ -30,7 +31,8 @@ from ontary.errors import ERROR_CODES
 README = Path(__file__).resolve().parent.parent / "README.md"
 CHANGELOG = Path(__file__).resolve().parent.parent / "CHANGELOG.md"
 _DOCS = Path(__file__).resolve().parent.parent / "docs"
-API_REFERENCES = (_DOCS / "api-reference.md", _DOCS / "api-reference.ja.md")
+ERROR_REFERENCES = (_DOCS / "api-errors.md", _DOCS / "api-errors.ja.md")
+HUB_REFERENCES = (_DOCS / "api-reference.md", _DOCS / "api-reference.ja.md")
 EXPECTED_PRE_080_ERROR_CODES = frozenset(
     {
         "AFTER_WITHOUT_LIMIT",
@@ -423,7 +425,8 @@ def test_new_pages_do_not_reintroduce_removed_or_renamed_api_names() -> None:
     # The API references document some still-live engine and MCP names.  Only
     # the BoundQuery section is the renamed Python surface, so keep this check
     # scoped there instead of exempting `get_object` by name everywhere.
-    for path in API_REFERENCES:
+    bound_query_languages: set[str] = set()
+    for path in API_REFERENCE_PAGES["en"] + API_REFERENCE_PAGES["ja"]:
         text = path.read_text()
         other_stale = [
             name
@@ -438,7 +441,9 @@ def test_new_pages_do_not_reintroduce_removed_or_renamed_api_names() -> None:
             r"(?ms)^### `BoundQuery`\n.*?(?=^### |\Z)",
             text,
         )
-        assert section_match is not None, f"{path.name} is missing the BoundQuery section"
+        if section_match is None:
+            continue
+        bound_query_languages.add("ja" if path.name.endswith(".ja.md") else "en")
         bound_query_stale = [
             name for name in BOUND_QUERY_STALE_NAMES if name in section_match.group()
         ]
@@ -446,6 +451,9 @@ def test_new_pages_do_not_reintroduce_removed_or_renamed_api_names() -> None:
             f"{path.name} under ### `BoundQuery` contains removed/renamed name: {name}"
             for name in bound_query_stale
         )
+
+    for lang in ("en", "ja"):
+        assert lang in bound_query_languages, f"{lang} reference is missing the BoundQuery section"
 
     assert not violations, "stale documentation names:\n" + "\n".join(violations)
 
@@ -568,7 +576,7 @@ def _parse_api_reference_error_rows(text: str) -> dict[str, str]:
     return rows
 
 
-@pytest.mark.parametrize("path", API_REFERENCES, ids=lambda p: p.name)
+@pytest.mark.parametrize("path", ERROR_REFERENCES, ids=lambda p: p.name)
 def test_api_reference_error_table_matches_error_codes_exactly(path: Path) -> None:
     """The API references' error tables are generated from `ERROR_CODES`;
     pin the sole published tables so a new/renamed code can never leave a stale
@@ -595,7 +603,7 @@ def test_api_reference_error_table_matches_error_codes_exactly(path: Path) -> No
         )
 
 
-@pytest.mark.parametrize("path", API_REFERENCES, ids=lambda p: p.name)
+@pytest.mark.parametrize("path", ERROR_REFERENCES, ids=lambda p: p.name)
 def test_api_reference_error_summary_matches_error_codes(path: Path) -> None:
     """The summary line derives both published counts from the live catalog."""
     text = path.read_text()
@@ -657,7 +665,7 @@ def test_event_error_codes_have_validation_kind_and_spec_meanings() -> None:
         assert ERROR_CODES[code].description == meaning
 
 
-@pytest.mark.parametrize("path", API_REFERENCES, ids=lambda p: p.name)
+@pytest.mark.parametrize("path", HUB_REFERENCES, ids=lambda p: p.name)
 def test_api_reference_declarations_prose_names_every_declarations_field(
     path: Path,
 ) -> None:
@@ -912,7 +920,7 @@ def test_examples_import_front_door_names_from_ontary() -> None:
     assert root_imports, "examples AST scan found no front-door imports"
 
 
-@pytest.mark.parametrize("path", API_REFERENCES, ids=lambda p: p.name)
+@pytest.mark.parametrize("path", HUB_REFERENCES, ids=lambda p: p.name)
 def test_api_reference_export_coverage(path: Path) -> None:
     """Both references list the complete root and demoted engine surfaces.
 
@@ -1006,7 +1014,7 @@ def _parse_api_reference_error_kinds(text: str) -> dict[str, str]:
     return kinds
 
 
-@pytest.mark.parametrize("path", API_REFERENCES, ids=lambda p: p.name)
+@pytest.mark.parametrize("path", ERROR_REFERENCES, ids=lambda p: p.name)
 def test_api_reference_files_each_code_under_its_declared_kind(path: Path) -> None:
     """Catch a code drifting from the kind heading it is grouped under.
 
