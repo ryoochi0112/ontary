@@ -398,7 +398,10 @@ This sketch is unscoped, so that is safe here. Once Session and Room are
 scoped, a caller could pass a room from another scope. Check in the handler that
 the room shares the session's scope, and refuse with `PRECONDITION_FAILED`
 otherwise. [examples/room_booking](../examples/room_booking/README.md) shows the
-same-building check.
+same-building check. Declaring the room with `scope_ref()` instead makes the
+engine check that the caller's scope covers the room. That check does not
+compare the room with the session, so a caller whose scope covers both can
+still pair them across scopes. Keep the handler check either way.
 
 Do not encode the same association independently as an unconstrained foreign-key
 property and a link unless the property is required for scope or contributor

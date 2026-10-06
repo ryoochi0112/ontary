@@ -182,6 +182,8 @@ SDK 利用者向けのテストヘルパーは `make_store`、`consumer`、`rais
 
 struct プロパティとパラメーターの契約は [オントロジーの宣言](api-authoring.ja.md#struct-プロパティとパラメーター) を参照してください。
 
+<a id="scope-policy"></a>
+
 ## スコープポリシー
 
 宣言されたスコープルール、`ScopePolicy` のフィールド、スコープ解決ヘルパー。詳細: [オントロジーの宣言](api-authoring.ja.md)
@@ -214,6 +216,8 @@ Action は型付きパラメータと `@ontology.action` で宣言するハン�
 
 `Consumer` が呼び出し元を識別し、スコープの強制、機微度リダクション、min-N の寄与者閾値、本人特定リンクのガードがアクセスを制御します。詳細: [ランタイムとクライアント](api-runtime.ja.md)
 
+<a id="stores"></a>
+
 ## ストア
 
 `Store` プロトコル、SQLite と Postgres バックエンド、date/datetime の値の規則、スキーマバージョニング。詳細: [ストアとバルク取り込み](api-stores.ja.md)。
@@ -226,13 +230,19 @@ Action は型付きパラメータと `@ontology.action` で宣言するハン�
 
 `bulk_upsert`、`bulk_link`、クライアントの取り込みメソッド、検証と取り込みレポート。詳細: [ストアとバルク取り込み](api-stores.ja.md)
 
+<a id="mcp-server"></a>
+
 ## MCP サーバー
 
 `build_mcp_server` はイントロスペクション、読み取り、アクション、Function の 12 個のガード付きツールを公開し、`build_multi_consumer_mcp_server` は共有ランタイムで多数の検証済みアイデンティティに配信します。詳細: [MCP サーバー](api-mcp.ja.md)
 
+<a id="descriptor-authoring"></a>
+
 ## 記述子による宣言
 
 記述子による宣言、`Declarations` / `declarations(...)`、レガシーハンドラ。詳細: [オントロジーの宣言](api-authoring.ja.md)
+
+<a id="error-codes"></a>
 
 ## エラーコード
 

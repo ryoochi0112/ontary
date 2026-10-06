@@ -11,6 +11,19 @@ you**.
 
 ## [Unreleased]
 
+### Documentation
+
+- **The design guide's `ref()` scope note covers `scope_ref()`.** Declaring the
+  room with `scope_ref()` makes the engine check that the caller's scope covers
+  it, but not that it shares the session's scope, so the handler check stays
+  ([#185](https://github.com/ryoochi0112/ontary/issues/185)).
+- **English anchors resolve on the Japanese reference pages.** The JA API
+  reference hub and MCP page carry explicit anchors (`#mcp-server`,
+  `#scope-policy`, `#stores`, `#descriptor-authoring`, `#error-codes`), so links
+  from English-only pages land on the right section in the JA site. A test
+  checks every such link
+  ([#186](https://github.com/ryoochi0112/ontary/issues/186)).
+
 ## [0.20.2] — 2026-10-06
 
 ```bash

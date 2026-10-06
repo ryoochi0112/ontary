@@ -14,6 +14,7 @@ ROOT = DOCS.parent
 _INBOUND = re.compile(r"(api-[a-z-]+(?:\.ja)?\.md)#([^\s)\]\"'`]+)")
 _CHANGELOG_DEEP_LINK = re.compile(r"\]\((docs/[\w.-]+\.md)#([^)\s]+)\)")
 _EXPLICIT_ID = re.compile(r'<a id="([^"]+)"')
+_EN_DEEP_LINK = re.compile(r"\]\((?:docs/)?([\w-]+)\.md#([^)\s]+)\)")
 
 
 def _anchors(path: Path) -> set[str]:
@@ -32,6 +33,25 @@ def test_changelog_deep_links_resolve_or_are_declared_retired() -> None:
             assert not live, f"{target} resolves again; remove it from RETIRED_ANCHORS"
         else:
             assert live, f"CHANGELOG.md: {target} has no anchor; restore it or retire it"
+
+
+def test_english_anchors_resolve_on_japanese_siblings() -> None:
+    """The JA build serves `X.ja.md` for every link to `X.md`, from JA pages and
+    from English-only fallback pages alike. An English anchor then needs a
+    JA heading with the same slug, or an explicit `<a id>` before the heading."""
+    sources = [ROOT / "README.md", *sorted(DOCS.glob("*.ja.md"))]
+    sources += [
+        path
+        for path in sorted(DOCS.glob("*.md"))
+        if not path.name.endswith(".ja.md") and not path.with_suffix(".ja.md").is_file()
+    ]
+    missing = []
+    for source in sources:
+        for name, fragment in _EN_DEEP_LINK.findall(source.read_text(encoding="utf-8")):
+            sibling = DOCS / f"{name}.ja.md"
+            if sibling.is_file() and fragment not in _anchors(sibling):
+                missing.append(f"{source.relative_to(ROOT)}: {name}.md#{fragment}")
+    assert not missing, f"No anchor on the JA sibling: {sorted(set(missing))}"
 
 
 def test_every_inbound_api_reference_anchor_resolves() -> None:
