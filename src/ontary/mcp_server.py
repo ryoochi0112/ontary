@@ -333,12 +333,15 @@ def _tool_optional_string(name: str, value: Any) -> str | None:
     return _tool_string(name, value)
 
 
-def _serialize(obj: StoredObject | None) -> dict[str, Any] | None:
-    """Serialize a `StoredObject` to its MCP wire shape: `{"payload": ...,
-    "lineage": ...}` -- `model_dump(mode=
-    "json")` so both halves round-trip as plain JSON-safe values, with no
-    magic `_`-prefixed keys smuggled into `payload`."""
-    return None if obj is None else obj.model_dump(mode="json")
+def _serialize(obj: StoredObject | None, redacted: tuple[str, ...]) -> dict[str, Any] | None:
+    """Serialize an object as `{"payload", "lineage", "redacted_fields"}`.
+
+    `model_dump(mode="json")` keeps payload and lineage JSON-safe; the
+    declaration-only redaction names sit alongside them. `None` stays `None`.
+    """
+    return None if obj is None else {
+        **obj.model_dump(mode="json"), "redacted_fields": list(redacted),
+    }
 
 
 def _try(fn: Callable[[], Any]) -> tuple[Any, dict[str, Any] | None]:
@@ -414,21 +417,28 @@ def _run_unwrapped(fn: Callable[[], dict[str, Any]]) -> dict[str, Any]:
     return error if error is not None else result
 
 
-def _run_paged(
-    fn: Callable[[], tuple[list[dict[str, Any] | None], str | None]]
-) -> dict[str, Any]:
-    """Run a paged read while preserving the existing row result shape.
+def _run_marked(fn: Callable[[], tuple[Any, bool]]) -> dict[str, Any]:
+    """Wrap a successful read with its declaration-only `scope_limited` mark."""
+    result, error = _try(fn)
+    if error is not None:
+        return error
+    value, scope_limited = result
+    return {"result": value, "scope_limited": scope_limited}
 
-    `query_objects` historically returned its rows under the top-level
-    `result` key. Pagination adds `next_cursor` alongside that list so an
-    existing caller can keep consuming the rows without unwrapping a new
-    page object.
+
+def _run_paged(
+    fn: Callable[[], tuple[list[dict[str, Any] | None], str | None, bool]]
+) -> dict[str, Any]:
+    """Wrap a paged read as `{"result", "next_cursor", "scope_limited"}`.
+
+    Rows retain their payload/lineage split and add `redacted_fields`.
+    Errors keep the shared envelope and carry no read marks.
     """
     result, error = _try(fn)
     if error is not None:
         return error
-    rows, next_cursor = result
-    return {"result": rows, "next_cursor": next_cursor}
+    rows, next_cursor, scope_limited = result
+    return {"result": rows, "next_cursor": next_cursor, "scope_limited": scope_limited}
 
 
 def _query_objects_page(
@@ -438,7 +448,7 @@ def _query_objects_page(
     order_by: Any,
     limit: Any,
     after: Any,
-) -> tuple[list[dict[str, Any] | None], str | None]:
+) -> tuple[list[dict[str, Any] | None], str | None, bool]:
     """Apply the MCP cap and delegate one query page to the client surface."""
     client = resolve_client()
     obj_type = _tool_string("obj_type", obj_type)
@@ -468,7 +478,32 @@ def _query_objects_page(
             after=after,
             order_by=order_by,
         )
-    return ([_serialize(obj) for obj in page.items], page.next_cursor)
+    scope_limited, redacted = client._read_marks(obj_type)
+    return ([_serialize(obj, redacted) for obj in page.items], page.next_cursor, scope_limited)
+
+
+def _get_object(
+    resolve_client: Callable[[], OntologyClient], obj_type: Any, obj_id: Any
+) -> dict[str, Any] | None:
+    """Read one object, adding declaration-only redaction names after success."""
+    client = resolve_client()
+    checked_obj_type = _tool_string("obj_type", obj_type)
+    obj = client.get(checked_obj_type, _tool_string("obj_id", obj_id))
+    if obj is None:
+        return None
+    _, redacted = client._read_marks(checked_obj_type)
+    return _serialize(obj, redacted)
+
+
+def _count_objects(
+    resolve_client: Callable[[], OntologyClient], obj_type: Any, where: Any
+) -> tuple[int, bool]:
+    """Count visible rows, then compute the declaration-only scope mark."""
+    client = resolve_client()
+    checked_obj_type = _tool_string("obj_type", obj_type)
+    count = client.count(checked_obj_type, _tool_optional_object("where", where))
+    scope_limited, _ = client._read_marks(checked_obj_type)
+    return count, scope_limited
 
 
 def _traverse_links(
@@ -477,20 +512,24 @@ def _traverse_links(
     link_api_name: Any,
     obj_id: Any,
     reverse: Any,
-) -> list[StoredObject]:
-    """Validate and dispatch one MCP traversal without widening forward calls."""
+) -> tuple[list[dict[str, Any] | None], bool]:
+    """Validate, traverse, then mark the result type without widening forward calls."""
     checked_obj_type = _tool_string("obj_type", obj_type)
     checked_link = _tool_string("link_api_name", link_api_name)
     checked_obj_id = _tool_string("obj_id", obj_id)
     checked_reverse = _tool_bool("reverse", reverse)
     if checked_reverse:
-        return client.traverse(
+        rows = client.traverse(
             checked_obj_type,
             checked_link,
             checked_obj_id,
             reverse=True,
         )
-    return client.traverse(checked_obj_type, checked_link, checked_obj_id)
+    else:
+        rows = client.traverse(checked_obj_type, checked_link, checked_obj_id)
+    target_type = client._link_target_type(checked_link, reverse=checked_reverse)
+    scope_limited, redacted = client._read_marks(target_type)
+    return ([_serialize(obj, redacted) for obj in rows], scope_limited)
 
 
 def _aggregate_objects(
@@ -814,22 +853,19 @@ def _register_tools(
         """Fetch one object by type + id, through the guarded read layer.
 
         `client.get` returns a `StoredObject` (payload/lineage split); the
-        wire result is that model's
-        `model_dump(mode="json")` -- `{"payload": {...}, "lineage": {...}}`
-        -- so a caller sees the object's own properties and its storage/
+        wire row is `{"payload": {...}, "lineage": {...}, "redacted_fields": [...]}`
+        so a caller sees the object's own properties and its storage/
         provenance metadata (object_type, object_id, valid_from/to,
         source_system, source_id, extracted_at) as two clearly separated,
         typed halves rather than lineage fields mixed into the payload
-        under magic `_`-prefixed keys. `None` if the object doesn't exist.
+        under magic `_`-prefixed keys. `redacted_fields` lists sorted property
+        names hidden by declarations; each key is absent from `payload`, never null.
+        Missing or retired objects return `{"result": null}`; an out-of-scope
+        object still refuses with `VISIBILITY_DENIED`. This response has no
+        `scope_limited`; that marker on list/count/traversal depends on declarations only.
         """
-        return _run(
-            lambda: _serialize(
-                resolve_client().get(
-                    _tool_string("obj_type", obj_type),
-                    _tool_string("obj_id", obj_id),
-                )
-            )
-        )
+
+        return _run(lambda: _get_object(resolve_client, obj_type, obj_id))
 
     @server.tool(annotations=read_only)
     async def query_objects(
@@ -888,13 +924,15 @@ def _register_tools(
         `limit` defaults to 100 and has a hard maximum of 1000. `after` is the
         opaque cursor from the previous page and requires an explicit
         `limit`; it is passed to the underlying paged read. The successful
-        response keeps rows under `result` and adds `next_cursor`, which is
+        response keeps rows under `result` and includes `next_cursor`, which is
         the cursor for the next page or `None` when exhausted. A limit below
         one and `after` without `limit` use the underlying
         `INVALID_LIMIT`/`AFTER_WITHOUT_LIMIT` validations.
 
-        Each result is a `{"payload": {...}, "lineage": {...}}` object --
-        see `get_object`'s docstring for the shape."""
+        `scope_limited` is a boolean based on declarations only for this consumer
+        and type, never on stored rows. Each row has `payload`, `lineage`, and
+        `redacted_fields`, a sorted list of hidden property names. A redacted key
+        is absent from `payload`, never null; see `get_object` for the row shape."""
         return _run_paged(
             lambda: _query_objects_page(
                 resolve_client,
@@ -927,18 +965,16 @@ def _register_tools(
         This delegates to ``OntologyClient.count`` so the Python and MCP
         surfaces share field gates, the operator evaluator, scope, and row
         visibility. A fully scoped-away selection returns zero.
+        The response is `{"result": int, "scope_limited": bool}`; `scope_limited`
+        depends on declarations only for this consumer and type, never on stored rows.
 
         This is a visible-row count and is not min-N-gated: it reveals only
         what ``query_objects`` already lists. For a min-N-released count
         call ``aggregate_objects`` with ``func="count"`` (no ``value_field``
         needed).
         """
-        return _run(
-            lambda: resolve_client().count(
-                _tool_string("obj_type", obj_type),
-                _tool_optional_object("where", where),
-            )
-        )
+
+        return _run_marked(lambda: _count_objects(resolve_client, obj_type, where))
 
     _register_aggregate_tool(server, resolve_client, read_only)
 
@@ -957,15 +993,15 @@ def _register_tools(
         ``reverse=True`` to traverse from the link's target side. The value
         must be a JSON boolean when supplied.
 
-        Each result is a `{"payload": {...}, "lineage": {...}}` object --
-        see `get_object`'s docstring for the shape."""
-        return _run(
-            lambda: [
-                _serialize(obj)
-                for obj in _traverse_links(
-                    resolve_client(), obj_type, link_api_name, obj_id, reverse
-                )
-            ]
+        The response has `result` and boolean `scope_limited`, which depends on
+        declarations only for this consumer and the result type (the link's source
+        type when reversed), never on stored rows. Each row has `payload`, `lineage`,
+        and `redacted_fields`, a sorted list of hidden property names. A redacted
+        key is absent from `payload`, never null; see `get_object` for the row shape."""
+        return _run_marked(
+            lambda: _traverse_links(
+                resolve_client(), obj_type, link_api_name, obj_id, reverse
+            )
         )
 
     @server.tool(annotations=destructive)

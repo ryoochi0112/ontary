@@ -91,8 +91,8 @@ lineage フィールドは対象外で、未知のキーは `UNKNOWN_FIELD` に�
 `reverse=true` を渡すとリンクの target 側から辿って source 側のオブジェクトを返します。
 本人特定リンクの拒否は両方向で対称です。
 
-オブジェクトは `{"payload": {...}, "lineage": {...}}` としてシリアライズされます
-（`None` は `None` のまま）。エラーは下表のコードを返し、分類できないものは内部情報を
+レスポンスのキーとオブジェクト行のシリアライズは[読み取り結果](#read-results)を参照してください。
+エラーは下表のコードを返し、分類できないものは内部情報を
 呼び出し側に漏らさないよう `INTERNAL_ERROR` になります。
 
 `mcp` エクストラが必要です。
@@ -155,5 +155,41 @@ stateful セッションでも、各 request はその request 自身のトー�
 
 `mcp` エクストラが必要です。
 
----
+<a id="read-results"></a>
 
+## 読み取り結果
+
+次の表は、成功した読み取りレスポンスのトップレベルのキーと、オブジェクト行のキーをすべて示します。
+エラー時はエラーエンベロープを使います。
+
+| ツール | トップレベルのキー | 行のキー | `result` の値 | スコープの方針 |
+| --- | --- | --- | --- | --- |
+| `get_object` | `result` | `payload`, `lineage`, `redacted_fields` | オブジェクト行、または存在しない・退役したオブジェクトに対する `null` です。 | `scope_limited` はありません。スコープ外の ID は `VISIBILITY_DENIED` で拒否します。 |
+| `query_objects` | `result`, `next_cursor`, `scope_limited` | `payload`, `lineage`, `redacted_fields` | オブジェクト行のリストです。 | `scope_limited` は検索対象の型の宣言に従います。 |
+| `count_objects` | `result`, `scope_limited` | — | 可視行の件数を表す整数です。 | `scope_limited` は件数を数える型の宣言に従います。 |
+| `traverse_links` | `result`, `scope_limited` | `payload`, `lineage`, `redacted_fields` | オブジェクト行のリストです。 | `scope_limited` は結果の型の宣言に従います。 |
+
+`scope_limited` は、成功した検索・件数取得・リンク走査で常に返す真偽値です。
+空のリストや件数がゼロの場合も返します。
+結果の型が `unscoped_types` に含まれないか、`row_visibility` ルールを持つ場合に限り `true` になります。
+`traverse_links` の結果の型は、通常はリンクの `to_type` です。
+`reverse=true` の場合は `from_type` です。
+このマーカーは、このコンシューマーと型に対する宣言だけで決まります。
+保存されたデータには依存しません。
+隠された行の件数も、隠された行があったかどうかも開示しません。
+`get_object` は、結果が `null` の場合も拒否する場合も、`scope_limited` を返しません。
+
+オブジェクト行の形は `{"payload": {...}, "lineage": {...}, "redacted_fields": [...]}` です。
+`redacted_fields` は、このコンシューマーに隠されたプロパティ名をソートしたリストです。
+隠されたプロパティがなければ `[]` です。
+隠されたキーは `payload` に含めません。
+`null` を設定することはありません。
+人間のコンシューマーには、`human_visible=False` のフィールドを列挙します。
+AI のコンシューマーには、`ai_usable=False` のフィールドを列挙します。
+`DirectProperty` で宣言したスコープ振り分け用のキーが隠される場合も列挙します。
+
+短いページや `next_cursor: null` は、呼び出し元に可視な選択範囲で「これ以上行がない」ことを意味します。
+「隠された行があった」ことを意味するものではありません。
+どちらも、その選択範囲の外に行が存在するかどうかは示しません。
+
+---

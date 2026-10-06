@@ -76,12 +76,14 @@ so callers should treat them as potentially expensive on large types;
 type and costs the same as `count_objects`.
 
 The successful response preserves the existing rows under `result` and adds an
-opaque `next_cursor` alongside them:
+opaque `next_cursor` alongside them.
+The response also includes `scope_limited` and a `redacted_fields` list on each row.
 
 ```json
 {
-  "result": [{"payload": {"id": "book-1"}, "lineage": {}}],
-  "next_cursor": "opaque-page-token"
+  "result": [{"payload": {"id": "book-1"}, "lineage": {}, "redacted_fields": []}],
+  "next_cursor": "opaque-page-token",
+  "scope_limited": true
 }
 ```
 
@@ -203,7 +205,8 @@ Content-Type: application/json
 
 The server answers `200 OK` with the rows that alice's `billing` queue scope
 allows. `content` carries the same result as text for clients that do not read
-`structuredContent`; `valid_from` is the time the row was inserted:
+`structuredContent`; `valid_from` is the time the row was inserted.
+`structuredContent` also includes `scope_limited` and a `redacted_fields` list on each row.
 
 ```json
 {
@@ -224,10 +227,12 @@ allows. `content` carries the same result as text for clients that do not read
             "source_system": "demo",
             "source_id": null,
             "extracted_at": null
-          }
+          },
+          "redacted_fields": []
         }
       ],
-      "next_cursor": null
+      "next_cursor": null,
+      "scope_limited": true
     }
   }
 }

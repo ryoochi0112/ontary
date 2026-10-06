@@ -153,6 +153,32 @@ refusal would add no disclosure protection.
 visible-row counting, it resolves the distinct contributor population behind an
 aggregate and therefore keeps the aggregate's min-N release discipline.
 
+### Scope limits and redaction on reads
+
+Every Python read applies scope, row visibility, and `Sensitivity` before it returns.
+No Python read tells you, per call, whether rows were hidden.
+The two ways a hidden field shows up are the same on each method that returns rows.
+A typed read returns the redacted field as `None` and names it in `redacted_fields`.
+A string-form read leaves the key out of `payload` and has no `redacted_fields` companion.
+
+- **`get`** returns `None` for a missing or retired object.
+  It raises `VisibilityError` with `VISIBILITY_DENIED` for an object outside the consumer's scope or row visibility.
+  A redacted field follows the typed and string rules above.
+- **`list`** returns only visible rows, and redaction follows the same two rules.
+  A short page always means "no more rows".
+- **`count`** counts only visible rows.
+  A consumer scoped away from every row gets `0`.
+- **`exists`** checks only visible rows.
+  A consumer scoped away from every row gets `False`.
+- **`traverse`** returns only visible target rows, and redaction follows the same two rules.
+- **`events`** returns only visible events.
+  A redacted payload field is `None` and is named in the record's `redacted_fields`.
+
+The MCP surface differs: its read results carry a `scope_limited` flag and a
+per-row `redacted_fields` list.
+The Python surface is unchanged.
+See [MCP read results](api-mcp.md#read-results).
+
 ### Aggregates
 
 `aggregate(...)` and `aggregate_by(..., group_by=...)` accept

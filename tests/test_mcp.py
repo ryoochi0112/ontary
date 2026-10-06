@@ -605,13 +605,15 @@ def test_count_objects_counts_only_visible_rows_with_operator_where() -> None:
         {"obj_type": "Book", "where": {"title": {"contains": "Foundry"}}},
     )
 
-    assert payload == {"result": 2}
+    assert payload == {"result": 2, "scope_limited": True}
 
 
 def test_count_objects_returns_zero_when_consumer_is_scoped_away() -> None:
     server, _store = _build_server(_librarian("shelf-2"))
 
-    assert _call(server, "count_objects", {"obj_type": "Book"}) == {"result": 0}
+    assert _call(server, "count_objects", {"obj_type": "Book"}) == {
+        "result": 0, "scope_limited": True,
+    }
 
 
 def test_count_objects_operator_refusal_is_structured() -> None:

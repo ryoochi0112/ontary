@@ -92,7 +92,7 @@ func requires it and raises `INVALID_PARAMS` if it is missing.
 cursor surface to delegate to. Pass `reverse=true` to traverse from the link's
 target side and return source-side objects; identity-revealing denial is symmetric.
 
-Objects serialize as `{"payload": {...}, "lineage": {...}}` (`None` stays `None`).
+See [Read results](#read-results) for response keys and object row serialization.
 Errors return a code from the table below; anything unclassified becomes
 `INTERNAL_ERROR` rather than leaking internals to the caller.
 
@@ -152,5 +152,40 @@ per-request identity to resolve.
 
 Needs the `mcp` extra.
 
----
+## Read results
 
+The table lists every top-level key in a successful read response and every
+key in an object row. Errors use the error envelope instead.
+
+| Tool | Top-level keys | Row keys | `result` value | Scope policy |
+| --- | --- | --- | --- | --- |
+| `get_object` | `result` | `payload`, `lineage`, `redacted_fields` | Object row, or `null` for a missing or retired object | No `scope_limited`; an out-of-scope ID refuses with `VISIBILITY_DENIED`. |
+| `query_objects` | `result`, `next_cursor`, `scope_limited` | `payload`, `lineage`, `redacted_fields` | List of object rows | `scope_limited` follows the queried type's declarations. |
+| `count_objects` | `result`, `scope_limited` | — | Integer count of visible rows | `scope_limited` follows the counted type's declarations. |
+| `traverse_links` | `result`, `scope_limited` | `payload`, `lineage`, `redacted_fields` | List of object rows | `scope_limited` follows the result type's declarations. |
+
+`scope_limited` is a boolean on every successful query, count, and traversal,
+including empty lists and zero counts.
+It is `true` exactly when the result type is absent from `unscoped_types` or has
+a `row_visibility` rule.
+For `traverse_links`, the result type is the link's `to_type` by default and
+its `from_type` when `reverse=true`.
+The marker depends only on declarations for this consumer and type.
+It never depends on stored data.
+It reveals neither how many rows were hidden nor whether any rows were hidden.
+`get_object` has no `scope_limited`, including when its result is `null` or it refuses.
+
+An object row has the shape
+`{"payload": {...}, "lineage": {...}, "redacted_fields": [...]}`.
+`redacted_fields` is a sorted list of property names hidden from this consumer,
+or `[]` when none are hidden.
+A redacted key is absent from `payload`; it is never set to `null`.
+For human consumers, a field with `human_visible=False` is listed.
+For AI consumers, a field with `ai_usable=False` is listed.
+A hidden scope-routing key declared through `DirectProperty` is listed too.
+
+A short page or `next_cursor: null` means "no more rows" in the caller's visible
+selection, never "some were hidden".
+Neither signal says whether rows exist outside that selection.
+
+---
