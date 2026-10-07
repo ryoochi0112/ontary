@@ -478,6 +478,21 @@ SELECT row_id FROM objects
 WHERE page_token = {p} AND object_type = {p} AND tenant = {p}
 """
 
+OBJECT_PAGE_FIRST_SELECT_TEMPLATE = f"""
+SELECT {_OBJECT_COLUMN_LIST} FROM objects
+WHERE object_type = {{p}} AND valid_to IS NULL AND tenant = {{p}}
+ORDER BY row_id ASC
+LIMIT {{p}}
+"""
+
+OBJECT_PAGE_AFTER_SELECT_TEMPLATE = f"""
+SELECT {_OBJECT_COLUMN_LIST} FROM objects
+WHERE object_type = {{p}} AND valid_to IS NULL AND row_id > {{p}}
+  AND tenant = {{p}}
+ORDER BY row_id ASC
+LIMIT {{p}}
+"""
+
 LINKS_FROM_SELECT_TEMPLATE = f"""
 SELECT {_LINKS_FROM_COLUMN_LIST} FROM links
 WHERE link_type = {{p}} AND from_id = {{p}} AND valid_to IS NULL

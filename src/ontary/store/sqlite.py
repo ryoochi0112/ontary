@@ -309,30 +309,20 @@ class ObjectStore(SqliteSchemaGate, StoreCore):
         for why), resolved back to `row_id` by `_page_token_row_id` when it
         comes back as `after_key`."""
         if after_row_id is None:
-            cur = self._conn.execute(
-                """
-                SELECT * FROM objects
-                WHERE object_type = ? AND valid_to IS NULL AND tenant = ?
-                ORDER BY row_id ASC
-                LIMIT ?
-                """,
+            rows = _sql.execute(
+                self._conn,
+                _sql.render(_sql.OBJECT_PAGE_FIRST_SELECT_TEMPLATE, "sqlite"),
                 (obj_type, self._tenant, batch),
-            )
+                dialect="sqlite",
+            ).rows
         else:
-            cur = self._conn.execute(
-                """
-                SELECT * FROM objects
-                WHERE object_type = ? AND valid_to IS NULL AND row_id > ?
-                  AND tenant = ?
-                ORDER BY row_id ASC
-                LIMIT ?
-                """,
+            rows = _sql.execute(
+                self._conn,
+                _sql.render(_sql.OBJECT_PAGE_AFTER_SELECT_TEMPLATE, "sqlite"),
                 (obj_type, after_row_id, self._tenant, batch),
-            )
-        rows = cur.fetchall()
-        return [
-            PagedRow(key=row["page_token"], obj=self._row_to_stored(row)) for row in rows
-        ]
+                dialect="sqlite",
+            ).rows
+        return [PagedRow(key=row["page_token"], obj=self._row_to_stored(row)) for row in rows]
 
     # -- storage steps: links ----------------------------------------------
 
@@ -440,8 +430,10 @@ class ObjectStore(SqliteSchemaGate, StoreCore):
         )
 
     def _audit_rows(self) -> list[AuditEntry]:
-        cur = self._conn.execute(
-            "SELECT * FROM audit_log WHERE tenant = ? ORDER BY seq ASC",
+        rows = _sql.execute(
+            self._conn,
+            _sql.render(_sql.AUDIT_LOG_SELECT_TEMPLATE, "sqlite"),
             (self._tenant,),
-        )
-        return [decode_audit_entry(row) for row in cur.fetchall()]
+            dialect="sqlite",
+        ).rows
+        return [decode_audit_entry(row) for row in rows]

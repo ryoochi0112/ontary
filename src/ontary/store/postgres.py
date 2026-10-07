@@ -354,8 +354,6 @@ class PostgresStore(StoreCore):
             dialect="postgres",
         )
 
-    _OBJECT_COLUMNS = ", ".join(_sql.OBJECT_COLUMNS)
-
     def _row_to_stored(self, row: tuple[Any, ...]) -> StoredObject:
         (
             _row_id,
@@ -434,28 +432,24 @@ class PostgresStore(StoreCore):
     def _page_rows(
         self, obj_type: str, after_row_id: int | None, batch: int
     ) -> list[PagedRow]:
-        with self._conn.cursor() as cur:
-            if after_row_id is None:
-                cur.execute(
-                    f"""
-                    SELECT {self._OBJECT_COLUMNS} FROM objects
-                    WHERE object_type = %s AND valid_to IS NULL AND tenant = %s
-                    ORDER BY row_id ASC LIMIT %s
-                    """,
-                    (obj_type, self._tenant, batch),
-                )
-            else:
-                cur.execute(
-                    f"""
-                    SELECT {self._OBJECT_COLUMNS} FROM objects
-                    WHERE object_type = %s AND valid_to IS NULL AND row_id > %s
-                      AND tenant = %s
-                    ORDER BY row_id ASC LIMIT %s
-                    """,
-                    (obj_type, after_row_id, self._tenant, batch),
-                )
-            rows = cur.fetchall()
-        return [PagedRow(key=str(row[9]), obj=self._row_to_stored(row)) for row in rows]
+        if after_row_id is None:
+            rows = _sql.execute(
+                self._conn,
+                _sql.render(_sql.OBJECT_PAGE_FIRST_SELECT_TEMPLATE, "postgres"),
+                (obj_type, self._tenant, batch),
+                dialect="postgres",
+            ).rows
+        else:
+            rows = _sql.execute(
+                self._conn,
+                _sql.render(_sql.OBJECT_PAGE_AFTER_SELECT_TEMPLATE, "postgres"),
+                (obj_type, after_row_id, self._tenant, batch),
+                dialect="postgres",
+            ).rows
+        page_token_idx = _sql.OBJECT_COLUMNS.index("page_token")
+        return [
+            PagedRow(key=str(row[page_token_idx]), obj=self._row_to_stored(row)) for row in rows
+        ]
 
     # -- links -----------------------------------------------------------
 
