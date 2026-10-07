@@ -2407,7 +2407,7 @@ def test_read_page_after_key_from_a_different_object_type_raises_invalid_cursor(
     """T2 review P1: `page_token` is only unique GLOBALLY (uuid4 hex), not
     scoped to `object_type` -- a cursor issued for one type is a real,
     resolvable token that happens to name a row of a DIFFERENT type. Both
-    `_resolve_page_token` implementations must additionally check
+    `_page_token_row_id` implementations must additionally check
     `object_type` and refuse the mismatch with an `INVALID_CURSOR` validation-kind error, rather than
     silently accepting the other type's `row_id` as a positional offset
     into the requested type's ordering -- the fail-open receipt this
@@ -4487,3 +4487,288 @@ def test_events_page_still_lists_the_retired_subject(store_factory: StoreFactory
     retired = _events_page_call(server, {"about_type": "PageTicket", "about_id": "T-1"})
     assert [r["about_id"] for r in retired["result"]] == ["T-1", "T-1"]
     assert [r["about_id"] for r in _events_page_all(server)].count("T-1") == 2
+
+
+# -- converged write rules ----------------------------------------------------
+#
+# Every backend runs the same write path, so these pin the behaviour that the
+# three backends used to disagree on: the refusal wording, which reads happen
+# inside the transaction, what an unencodable payload leaves behind, and when
+# the clock is read.
+
+
+def _two_link_registry() -> OntologyRegistry:
+    """`belongsToDepartment` (MANY_TO_ONE, Team -> Department) plus `hasTeam`
+    (ONE_TO_MANY, Department -> Team): one refusal per constrained side."""
+    registry = build_registry()
+    registry.register_link_type(
+        LinkTypeDef(
+            api_name="hasTeam",
+            from_type="Department",
+            to_type="Team",
+            cardinality=Cardinality.ONE_TO_MANY,
+            description="Department has teams",
+        )
+    )
+    registry.validate()
+    return registry
+
+
+def test_every_backend_satisfies_the_store_protocol(store: Store) -> None:
+    """Includes `PostgresStore` on the Postgres parametrization."""
+    assert isinstance(store, Store)
+    if POSTGRES_DSN and not isinstance(store, (ObjectStore, InMemoryStore)):
+        from ontary.store.postgres import PostgresStore
+
+        assert isinstance(store, PostgresStore)
+
+
+def test_refused_many_to_one_link_names_the_from_side_in_one_wording(
+    store_factory: StoreFactory,
+) -> None:
+    store = store_factory(_two_link_registry())
+    _seed_teams_and_departments(store, "team-1", "dept-a", "dept-b")
+    store.create_link("belongsToDepartment", "team-1", "dept-a")
+
+    with raises_code(ConflictError, "CARDINALITY_VIOLATION") as refused:
+        store.create_link("belongsToDepartment", "team-1", "dept-b")
+    assert str(refused.value) == (
+        "belongsToDepartment: from_id 'team-1' already has an active link "
+        f"({Cardinality.MANY_TO_ONE.value} forbids a second)"
+    )
+
+
+def test_refused_one_to_many_link_names_the_to_side_in_one_wording(
+    store_factory: StoreFactory,
+) -> None:
+    store = store_factory(_two_link_registry())
+    _seed_teams_and_departments(store, "team-1", "dept-a", "dept-b")
+    store.create_link("hasTeam", "dept-a", "team-1")
+
+    with raises_code(ConflictError, "CARDINALITY_VIOLATION") as refused:
+        store.create_link("hasTeam", "dept-b", "team-1")
+    assert str(refused.value) == (
+        "hasTeam: to_id 'team-1' already has an active link "
+        f"({Cardinality.ONE_TO_MANY.value} forbids a second)"
+    )
+
+
+_READ_STEPS = (
+    "read_current",
+    "read_last",
+    "links_from",
+    "links_to",
+    "_live_object_rows",
+    "_has_object_history",
+    "_live_link_valid_froms",
+)
+
+
+def _record_transaction_state(
+    store: Store, monkeypatch: pytest.MonkeyPatch
+) -> list[bool]:
+    """Wrap every read the write path performs on this instance; each call
+    appends `store.in_transaction` as seen at call time."""
+    recorded: list[bool] = []
+
+    def wrap(original: Callable[..., Any]) -> Callable[..., Any]:
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            recorded.append(store.in_transaction)
+            return original(*args, **kwargs)
+
+        return wrapper
+
+    for name in _READ_STEPS:
+        if hasattr(store, name):  # a backend may not split a step out
+            monkeypatch.setattr(store, name, wrap(getattr(store, name)))
+    return recorded
+
+
+_TXN_WRITES = (
+    "insert",
+    "update",
+    "retire_object",
+    "create_link",
+    "close_link",
+    "refused_many_to_one_link",
+    "refused_one_to_many_link",
+)
+
+
+@pytest.mark.parametrize("write", _TXN_WRITES)
+def test_every_read_a_write_makes_runs_inside_the_transaction(
+    store_factory: StoreFactory, monkeypatch: pytest.MonkeyPatch, write: str
+) -> None:
+    store = store_factory(_two_link_registry())
+    src = Source(source_system="synthetic")
+    _seed_teams_and_departments(store, "team-1", "team-2", "dept-a", "dept-b")
+    store.create_link("belongsToDepartment", "team-2", "dept-a")
+    store.create_link("hasTeam", "dept-a", "team-2")
+    store.create_link("belongsToDepartment", "team-1", "dept-a")
+    recorded = _record_transaction_state(store, monkeypatch)
+
+    if write == "insert":
+        store.insert("Team", {"id": "team-3", "name": "t3"}, src)
+    elif write == "update":
+        store.update("Team", "team-1", {"name": "renamed"}, src)
+    elif write == "retire_object":
+        store.retire_object("Department", "dept-b")
+    elif write == "create_link":
+        store.create_link("hasTeam", "dept-b", "team-1")
+    elif write == "close_link":
+        store.close_link("belongsToDepartment", "team-1", "dept-a")
+    elif write == "refused_many_to_one_link":
+        with raises_code(ConflictError, "CARDINALITY_VIOLATION"):
+            store.create_link("belongsToDepartment", "team-1", "dept-b")
+    else:
+        with raises_code(ConflictError, "CARDINALITY_VIOLATION"):
+            store.create_link("hasTeam", "dept-b", "team-2")
+
+    assert recorded, f"{write} made no read through the wrapped steps"
+    assert all(recorded), f"{write} read outside the transaction: {recorded}"
+
+
+def _note_registry() -> OntologyRegistry:
+    """One `Note` type with a `json` property: a payload the property check
+    accepts (any dict) but `json.dumps` cannot encode (a dict holding an
+    `object()`)."""
+    registry = OntologyRegistry()
+    registry.register_object_type(
+        ObjectTypeDef(
+            api_name="Note",
+            display_name="Note",
+            description="A note with a free-form json body",
+            layer="L0",
+            properties=[
+                PropertyDef(name="id", type="str", required=False),
+                PropertyDef(name="body", type="json"),
+            ],
+            primary_key="id",
+        )
+    )
+    registry.validate()
+    return registry
+
+
+_UNENCODABLE = {"k": object()}
+
+
+def test_a_caught_unencodable_update_inside_an_outer_transaction_keeps_the_row(
+    store_factory: StoreFactory,
+) -> None:
+    store = store_factory(_note_registry())
+    src = Source(source_system="synthetic")
+    store.insert("Note", {"id": "n1", "body": {"k": "original"}}, src)
+
+    with store.transaction():
+        with pytest.raises(TypeError):
+            store.update("Note", "n1", {"body": _UNENCODABLE}, src)
+
+    current = store.read_current("Note", "n1")
+    assert current is not None
+    assert current.payload["body"] == {"k": "original"}
+    assert current.lineage.valid_to is None
+
+
+class _CountingClock:
+    """Counts reads; returns a fixed instant."""
+
+    def __init__(self, value: datetime) -> None:
+        self.value = value
+        self.reads = 0
+
+    def __call__(self) -> datetime:
+        self.reads += 1
+        return self.value
+
+
+def test_a_refused_link_does_not_read_the_clock(store: Store) -> None:
+    _seed_teams_and_departments(store, "team-1", "dept-a", "dept-b")
+    store.create_link("belongsToDepartment", "team-1", "dept-a")
+    clock = _CountingClock(_T1)
+    store.bind_clock(clock)
+
+    with raises_code(ConflictError, "CARDINALITY_VIOLATION"):
+        store.create_link("belongsToDepartment", "team-1", "dept-b")
+    assert clock.reads == 0
+
+
+def test_a_refused_one_to_many_link_does_not_read_the_clock(
+    store_factory: StoreFactory,
+) -> None:
+    store = store_factory(_two_link_registry())
+    _seed_teams_and_departments(store, "team-1", "dept-a", "dept-b")
+    store.create_link("hasTeam", "dept-a", "team-1")
+    clock = _CountingClock(_T1)
+    store.bind_clock(clock)
+
+    with raises_code(ConflictError, "CARDINALITY_VIOLATION"):
+        store.create_link("hasTeam", "dept-b", "team-1")
+    assert clock.reads == 0
+
+
+def test_a_refused_link_reports_cardinality_even_under_a_naive_clock(
+    store: Store,
+) -> None:
+    _seed_teams_and_departments(store, "team-1", "dept-a", "dept-b")
+    store.create_link("belongsToDepartment", "team-1", "dept-a")
+    store.bind_clock(_CountingClock(datetime(2026, 1, 2, 3, 4, 5)))
+
+    with raises_code(ConflictError, "CARDINALITY_VIOLATION"):
+        store.create_link("belongsToDepartment", "team-1", "dept-b")
+
+
+def test_an_unencodable_insert_or_update_does_not_read_the_clock(
+    store_factory: StoreFactory,
+) -> None:
+    store = store_factory(_note_registry())
+    src = Source(source_system="synthetic")
+    store.insert("Note", {"id": "n1", "body": {"k": "original"}}, src)
+    clock = _CountingClock(_T1)
+    store.bind_clock(clock)
+
+    with pytest.raises(TypeError):
+        store.insert("Note", {"id": "n2", "body": _UNENCODABLE}, src)
+    with pytest.raises(TypeError):
+        store.update("Note", "n1", {"body": _UNENCODABLE}, src)
+    assert clock.reads == 0
+    assert store.read_current("Note", "n2") is None
+
+
+def test_an_unencodable_payload_wins_over_a_naive_clock(
+    store_factory: StoreFactory,
+) -> None:
+    store = store_factory(_note_registry())
+    src = Source(source_system="synthetic")
+    store.insert("Note", {"id": "n1", "body": {"k": "original"}}, src)
+    store.bind_clock(_CountingClock(datetime(2026, 1, 2, 3, 4, 5)))
+
+    with pytest.raises(TypeError):
+        store.insert("Note", {"id": "n2", "body": _UNENCODABLE}, src)
+    with pytest.raises(TypeError):
+        store.update("Note", "n1", {"body": _UNENCODABLE}, src)
+
+
+def test_in_memory_retire_checks_not_before_on_every_live_row_and_closes_all() -> None:
+    """In-memory only: the SQL backends' unique index on live rows forbids
+    two live rows of one object, so only the dict-backed store can hold the
+    state this pins. The older-appended row has the LATER `valid_from`, so a
+    check on the newest row alone would let the retire through."""
+    store = InMemoryStore(build_registry())
+    src = Source(source_system="synthetic")
+    encoded = json.dumps({"id": "team-1", "name": "t"})
+    store._insert_object_row("Team", "team-1", encoded, _T1_ISO, src)
+    store._insert_object_row("Team", "team-1", encoded, _EARLIER.isoformat(), src)
+    assert len(store._live_object_rows("Team", "team-1")) == 2
+
+    clock = _SettableClock(_T0)
+    store.bind_clock(clock)
+    with raises_code(PreconditionFailed, "CLOCK_REGRESSION"):
+        store.retire_object("Team", "team-1")
+    assert len(store._live_object_rows("Team", "team-1")) == 2
+
+    clock.value = _T1
+    retired = store.retire_object("Team", "team-1")
+    assert store._live_object_rows("Team", "team-1") == []
+    assert retired.lineage.valid_to == _T1_ISO
+    assert retired.lineage.valid_from == _EARLIER.isoformat()

@@ -1,19 +1,16 @@
 """In-memory `Store` implementation: dict-backed, no SQL.
 
-Proves the storage seam is real, not decorative: `InMemoryStore` implements
-the same `Store` Protocol as `ontary.store.ObjectStore` and passes the
-shared conformance suite (`tests/test_store_conformance.py`) unchanged --
-CRUD, links + cardinality, authority refusals, audit, and transaction
-rollback all behave identically. It also doubles as a fast, dependency-free
-test double for user code.
+`InMemoryStore` subclasses `ontary.store._core.StoreCore` and implements the same `Store` Protocol as
+`ontary.store.ObjectStore` and passes the shared conformance suite
+(`tests/test_store_conformance.py`) unchanged -- CRUD, links + cardinality,
+authority refusals, audit, and transaction rollback all behave identically.
+It also doubles as a fast, dependency-free test double for user code.
 
-Deliberately thin: no shared base class with `ObjectStore` -- a from-scratch
-implementation is the only way the conformance suite proves the seam rather
-than exercising inherited SQLite helpers by another name. Refinement of that
-rule: pure CONTRACT logic that must be byte-identical across backends
-(refusal checks, validation, codecs) is shared via `ontary.store._shared` --
-see that module's doctrine docstring -- while all storage mechanics remain
-from-scratch here, so the conformance suite still proves the seam.
+The write path (order of steps, refusals, cardinality, the clock, and write
+capture) is `ontary.store._core.StoreCore`'s; this module supplies the
+dict-backed transaction and storage steps it calls, reads included. Pure
+contract logic shared with the other backends lives in
+`ontary.store._shared`.
 """
 
 from __future__ import annotations
@@ -21,41 +18,19 @@ from __future__ import annotations
 import json
 import threading
 import uuid
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
-from datetime import datetime
 from typing import Any, Literal, TypedDict
 
-from ontary.audit import (
-    AuditEntry,
-    WriteRecord,
-)
-from ontary.errors import ConflictError
-from ontary.meta import Cardinality, OntologyRegistry
+from ontary.audit import AuditEntry
+from ontary.meta import OntologyRegistry
+from ontary.store._core import StoreCore
 from ontary.store._shared import (
-    StoreClock,
-    WriteCapture,
-    canonical_id,
-    check_link_endpoints,
-    check_link_removal_authority,
-    check_link_write_authority,
-    check_object_removal_authority,
-    check_read_page_batch,
-    check_update_authority,
+    AuditRowFields,
     decode_audit_entry,
-    encode_audit_entry,
-    ensure_not_before,
-    live_link_not_found,
-    merge_update,
-    object_already_exists,
-    prepare_insert,
-    resolve_link_type,
-    retire_object_refusal,
-    unknown_page_token,
 )
 from ontary.store.protocol import Store
 from ontary.store.values import (
-    DEFAULT_BATCH,
     DEFAULT_TENANT,
     Lineage,
     PagedRow,
@@ -116,7 +91,7 @@ def _ordered_link_ids(
     ]
 
 
-class InMemoryStore:
+class InMemoryStore(StoreCore):
     """Dict-backed store matching `ObjectStore`'s observed semantics.
 
     Rows are never mutated in place -- closing an object's current row (on
@@ -143,10 +118,7 @@ class InMemoryStore:
         Two in-memory stores cannot share rows anyway, so this exists for parity:
         a test double whose tenant argument was ignored would let a caller
         "verify" isolation against a store that cannot leak."""
-        if not tenant:
-            raise ValueError("tenant must be a non-empty string")
-        self._registry = registry
-        self._tenant = tenant
+        super().__init__(registry, tenant=tenant)
         self._objects: list[_ObjectRow] = []
         self._links: list[_LinkRow] = []
         self._audit: list[AuditEntry] = []
@@ -157,8 +129,6 @@ class InMemoryStore:
         # caller-opened nested transaction to `in_transaction`.
         self._transaction_lock = threading.RLock()
         self._transaction_state = threading.local()
-        self._write_capture = WriteCapture()
-        self._clock_state = StoreClock()
         # Mirrors `ObjectStore`'s `objects.row_id INTEGER PRIMARY KEY
         # AUTOINCREMENT`: a monotonic, per-row identity distinct from the
         # payload primary key (`Lineage.object_id`), whose uniqueness among
@@ -219,145 +189,66 @@ class InMemoryStore:
     def in_transaction(self) -> bool:
         return getattr(self._transaction_state, "depth", 0) > 0
 
-    def bind_clock(
-        self, clock: Callable[[], datetime] | None
-    ) -> Callable[[], datetime]:
-        return self._clock_state.bind(clock)
-
-    @contextmanager
-    def capture_action_writes(
-        self, *, at: str | None = None
-    ) -> Iterator[list[WriteRecord]]:
-        with self._write_capture.capture(at=at) as records:
-            yield records
-
-    def _record_write(self, record: WriteRecord) -> None:
-        self._write_capture.record(record)
-
     def _next_id(self) -> int:
         row_id = self._next_row_id
         self._next_row_id += 1
         return row_id
 
-    # -- objects ---------------------------------------------------------
+    # -- object storage steps ------------------------------------------
 
-    def insert(self, obj_type: str, payload: dict[str, Any], source: Source) -> str:
-        prepared = prepare_insert(
-            self._registry, obj_type, payload, capturing=self._write_capture.active
+    def _matches_object(self, row: _ObjectRow, obj_type: str, obj_id: str) -> bool:
+        return (
+            row["tenant"] == self._tenant
+            and row["object_type"] == obj_type
+            and row["id"] == obj_id
         )
-        payload, obj_id = prepared.payload, prepared.obj_id
 
-        now = self._clock_state.now_iso(self._write_capture)
-        with self.transaction():
-            if self.read_current(obj_type, obj_id) is not None:
-                raise object_already_exists(obj_type, obj_id)
-            self._objects.append(
-                {
-                    "tenant": self._tenant,
-                    "object_type": obj_type,
-                    "id": obj_id,
-                    # JSON round-trip (matching `ObjectStore`'s TEXT column):
-                    # fresh, unshared structures on every read; a
-                    # non-JSON-serializable value raises `TypeError` here,
-                    # exactly as `ObjectStore.insert`'s `json.dumps` does.
-                    "payload": json.dumps(payload),
-                    "valid_from": now,
-                    "valid_to": None,
-                    "source_system": source.source_system,
-                    "source_id": source.source_id,
-                    "extracted_at": source.extracted_at,
-                    "row_id": self._next_id(),
-                    "page_token": uuid.uuid4().hex,
-                }
-            )
-        self._record_write(WriteRecord(op="create", object_type=obj_type, object_id=obj_id))
-        return obj_id
-
-    def update(
+    def _insert_object_row(
         self,
         obj_type: str,
         obj_id: str,
-        payload_changes: dict[str, Any],
+        encoded_payload: str,
+        valid_from: str,
         source: Source,
     ) -> None:
-        obj_id = canonical_id(obj_id)
-        capturing = self._write_capture.active
-        obj_def = check_update_authority(
-            self._registry, obj_type, payload_changes, capturing=capturing
+        self._objects.append(
+            {
+                "tenant": self._tenant,
+                "object_type": obj_type,
+                "id": obj_id,
+                # The payload is held as JSON text (matching `ObjectStore`'s
+                # TEXT column), so every read builds fresh, unshared
+                # structures.
+                "payload": encoded_payload,
+                "valid_from": valid_from,
+                "valid_to": None,
+                "source_system": source.source_system,
+                "source_id": source.source_id,
+                "extracted_at": source.extracted_at,
+                "row_id": self._next_id(),
+                "page_token": uuid.uuid4().hex,
+            }
         )
-        with self.transaction():
-            current = self.read_current(obj_type, obj_id)
-            merged = merge_update(
-                obj_def, obj_type, obj_id, current, payload_changes, capturing=capturing
-            )
-            now = self._clock_state.now_iso(self._write_capture)
-            assert current is not None
-            ensure_not_before(
-                current.lineage.valid_from, now, what=f"{obj_type} {obj_id}"
-            )
-            for i, row in enumerate(self._objects):
-                if (
-                    row["object_type"] == obj_type
-                    and row["id"] == obj_id
-                    and row["valid_to"] is None
-                ):
-                    self._objects[i] = {**row, "valid_to": now}
-                    break
-            self._objects.append(
-                {
-                    "tenant": self._tenant,
-                    "object_type": obj_type,
-                    "id": obj_id,
-                    "payload": json.dumps(merged),
-                    "valid_from": now,
-                    "valid_to": None,
-                    "source_system": source.source_system,
-                    "source_id": source.source_id,
-                    "extracted_at": source.extracted_at,
-                    "row_id": self._next_id(),
-                    "page_token": uuid.uuid4().hex,
-                }
-            )
-        self._record_write(WriteRecord(op="update", object_type=obj_type, object_id=obj_id))
 
-    def retire_object(self, object_type: str, obj_id: str) -> StoredObject:
-        obj_id = canonical_id(obj_id)
-        check_object_removal_authority(
-            self._registry,
-            object_type,
-            capturing=self._write_capture.active,
-        )
-        now = self._clock_state.now_iso(self._write_capture)
-        with self.transaction():
-            current_rows = [
-                (index, row)
-                for index, row in enumerate(self._objects)
-                if row["tenant"] == self._tenant
-                and row["object_type"] == object_type
-                and row["id"] == obj_id
-                and row["valid_to"] is None
-            ]
-            if not current_rows:
-                has_history = any(
-                    row["tenant"] == self._tenant
-                    and row["object_type"] == object_type
-                    and row["id"] == obj_id
-                    for row in self._objects
-                )
-                raise retire_object_refusal(
-                    object_type, obj_id, has_history=has_history
-                )
-            for _, row in current_rows:
-                ensure_not_before(
-                    row["valid_from"], now, what=f"{object_type} {obj_id}"
-                )
-            for index, row in current_rows:
-                self._objects[index] = {**row, "valid_to": now}
-            retired = self._row_to_stored(self._objects[current_rows[-1][0]])
-        self._record_write(
-            WriteRecord(op="retire", object_type=object_type, object_id=obj_id)
-        )
-        return retired
+    def _live_object_rows(self, obj_type: str, obj_id: str) -> list[StoredObject]:
+        # `self._objects` is append-ordered, so list order is `row_id` order.
+        return [
+            self._row_to_stored(row)
+            for row in self._objects
+            if self._matches_object(row, obj_type, obj_id) and row["valid_to"] is None
+        ]
+
+    def _has_object_history(self, obj_type: str, obj_id: str) -> bool:
+        return any(self._matches_object(row, obj_type, obj_id) for row in self._objects)
+
+    def _close_object_rows(self, obj_type: str, obj_id: str, valid_to: str) -> None:
+        # Rows are replaced, never mutated in place, so the rollback snapshot
+        # (a shallow copy of the list) still holds the open row.
+        for index, row in enumerate(self._objects):
+            if self._matches_object(row, obj_type, obj_id) and row["valid_to"] is None:
+                self._objects[index] = {**row, "valid_to": valid_to}
+
+    # -- object reads ----------------------------------------------------
 
     def _row_to_stored(self, row: _ObjectRow) -> StoredObject:
         # `json.loads` here (mirroring `ObjectStore._row_to_stored`) is what
@@ -378,8 +269,7 @@ class InMemoryStore:
             ),
         )
 
-    def read_current(self, obj_type: str, obj_id: str) -> StoredObject | None:
-        obj_id = canonical_id(obj_id)
+    def _current_row(self, obj_type: str, obj_id: str) -> StoredObject | None:
         # Every public read below briefly takes `_transaction_lock` (reentrant,
         # so the writing thread's own reads pass through): rows are mutated in
         # place inside a transaction and only snapshot-restored on rollback, so
@@ -396,7 +286,7 @@ class InMemoryStore:
                     return self._row_to_stored(row)
             return None
 
-    def read_last(self, obj_type: str, obj_id: str) -> StoredObject | None:
+    def _last_row(self, obj_type: str, obj_id: str) -> StoredObject | None:
         """Raw (unredacted, unscoped) read of one object's newest row, live
         or retired. `self._objects` is append-ordered and `update` appends
         the replacement row, so the LAST match is the newest state.
@@ -411,7 +301,6 @@ class InMemoryStore:
         from `read_current`: the two disagreeing let the gate authorize
         against a scope no consumer read can see.
         """
-        obj_id = canonical_id(obj_id)
         with self._transaction_lock:
             newest: _ObjectRow | None = None
             for row in self._objects:
@@ -426,7 +315,7 @@ class InMemoryStore:
                 newest = row
             return None if newest is None else self._row_to_stored(newest)
 
-    def read_all(self, obj_type: str) -> list[StoredObject]:
+    def _all_rows(self, obj_type: str) -> list[StoredObject]:
         """Raw (unredacted, unscoped) read of every current row of
         `obj_type`, ordered by the same per-row identity as `read_page`. Its
         OWN single pass -- NOT a `read_page` loop: looping would
@@ -444,7 +333,7 @@ class InMemoryStore:
             current.sort(key=lambda row: row["row_id"])
             return [self._row_to_stored(row) for row in current]
 
-    def _resolve_page_token(self, obj_type: str, token: str) -> int:
+    def _page_token_row_id(self, obj_type: str, token: str) -> int | None:
         """Resolve an untrusted `after_key` PAGE TOKEN to the `row_id` it
         was issued for -- a linear scan here rather than a maintained `token
         -> row_id` dict, unlike `ObjectStore`'s real unique SQL index: this
@@ -459,39 +348,30 @@ class InMemoryStore:
         still resolve to that row's `row_id` and be accepted as a valid
         resume point into the CALLER's requested type, silently
         reinterpreted as an arbitrary positional offset into an unrelated
-        type's ordering instead of refused. Raises a validation-kind
-        `INVALID_CURSOR` failure if `token` was never issued for `obj_type`
-        specifically."""
-        for row in self._objects:
-            if (
-                row["page_token"] == token
-                and row["object_type"] == obj_type
-                and row["tenant"] == self._tenant
-            ):
-                return row["row_id"]
-        raise unknown_page_token(obj_type, token)
+        type's ordering instead of refused. Returns `None` if `token` was
+        never issued for `obj_type` specifically; the core refuses it."""
+        with self._transaction_lock:
+            for row in self._objects:
+                if (
+                    row["page_token"] == token
+                    and row["object_type"] == obj_type
+                    and row["tenant"] == self._tenant
+                ):
+                    return row["row_id"]
+            return None
 
-    def read_page(
-        self, obj_type: str, after_key: str | None = None, batch: int = DEFAULT_BATCH
+    def _page_rows(
+        self, obj_type: str, after_row_id: int | None, batch: int
     ) -> list[PagedRow]:
-        """See `Store.read_page`'s docstring for the full contract.
-
-        Orders by `row_id` -- this store's own monotonic per-row counter
+        """Orders by `row_id` -- this store's own monotonic per-row counter
         (mirroring `ObjectStore`'s physical SQLite ROWID), not the payload
         primary key (which also can't express the ties the store allows
-        among current rows). `row_id` never leaves this method except
+        among current rows). `row_id` never leaves the store except
         resolved-into internally: the CURSOR a caller actually receives,
         `PagedRow.key`, is a random per-row page token instead (see
-        `PagedRow`'s docstring for why), resolved back to `row_id` via
-        `_resolve_page_token` when it comes back as `after_key`."""
-        check_read_page_batch(batch)
+        `PagedRow`'s docstring for why), resolved back to `row_id` by
+        `_page_token_row_id` when it comes back as `after_key`."""
         with self._transaction_lock:
-            after = (
-                None
-                if after_key is None
-                else self._resolve_page_token(obj_type, after_key)
-            )
-
             current = [
                 row
                 for row in self._objects
@@ -500,8 +380,8 @@ class InMemoryStore:
                 and row["valid_to"] is None
             ]
             current.sort(key=lambda row: row["row_id"])
-            if after is not None:
-                current = [row for row in current if row["row_id"] > after]
+            if after_row_id is not None:
+                current = [row for row in current if row["row_id"] > after_row_id]
             page = current[:batch]
             return [
                 PagedRow(key=row["page_token"], obj=self._row_to_stored(row))
@@ -510,95 +390,48 @@ class InMemoryStore:
 
     # -- links -------------------------------------------------------------
 
-    def create_link(self, link_type: str, from_id: str, to_id: str) -> None:
-        from_id, to_id = canonical_id(from_id), canonical_id(to_id)
-        link_def = check_link_write_authority(
-            self._registry, link_type, capturing=self._write_capture.active
-        )
-        check_link_endpoints(
-            link_def,
-            link_type,
-            from_id,
-            to_id,
-            read_current=self.read_current,
-            read_last=self.read_last,
-        )
-        if to_id in self.links_from(link_type, from_id):
-            # #37: an identical live link already exists -- a no-op, checked
-            # before cardinality so a re-run never trips over itself. Nothing
-            # is written, so no write record is captured either.
-            return
-
-        if link_def.cardinality in (Cardinality.ONE_TO_ONE, Cardinality.MANY_TO_ONE):
-            existing_from = self.links_from(link_type, from_id)
-            if existing_from:
-                raise ConflictError(
-                    f"{link_type}: from_id {from_id!r} already has an active "
-                    f"link ({link_def.cardinality.value} forbids a second)",
-                    code="CARDINALITY_VIOLATION",
-                )
-
-        if link_def.cardinality in (Cardinality.ONE_TO_ONE, Cardinality.ONE_TO_MANY):
-            existing_to = self.links_to(link_type, to_id)
-            if existing_to:
-                raise ConflictError(
-                    f"{link_type}: to_id {to_id!r} already has an active "
-                    f"link ({link_def.cardinality.value} forbids a second)",
-                    code="CARDINALITY_VIOLATION",
-                )
-
-        now = self._clock_state.now_iso(self._write_capture)
-        with self.transaction():
-            self._links.append(
-                {
-                    "tenant": self._tenant,
-                    "link_type": link_type,
-                    "from_id": from_id,
-                    "to_id": to_id,
-                    "valid_from": now,
-                    "valid_to": None,
-                }
-            )
-        self._record_write(
-            WriteRecord(op="link", link_type=link_type, from_id=from_id, to_id=to_id)
+    def _matches_link(
+        self, row: _LinkRow, link_type: str, from_id: str, to_id: str
+    ) -> bool:
+        return (
+            row["tenant"] == self._tenant
+            and row["link_type"] == link_type
+            and row["from_id"] == from_id
+            and row["to_id"] == to_id
+            and row["valid_to"] is None
         )
 
-    def close_link(self, link_type: str, from_id: str, to_id: str) -> bool:
-        from_id, to_id = canonical_id(from_id), canonical_id(to_id)
-        check_link_removal_authority(
-            self._registry,
-            link_type,
-            capturing=self._write_capture.active,
+    def _insert_link_row(
+        self, link_type: str, from_id: str, to_id: str, valid_from: str
+    ) -> None:
+        self._links.append(
+            {
+                "tenant": self._tenant,
+                "link_type": link_type,
+                "from_id": from_id,
+                "to_id": to_id,
+                "valid_from": valid_from,
+                "valid_to": None,
+            }
         )
-        now = self._clock_state.now_iso(self._write_capture)
-        with self.transaction():
-            matching = [
-                (index, row)
-                for index, row in enumerate(self._links)
-                if row["tenant"] == self._tenant
-                and row["link_type"] == link_type
-                and row["from_id"] == from_id
-                and row["to_id"] == to_id
-                and row["valid_to"] is None
-            ]
-            if not matching:
-                raise live_link_not_found(link_type, from_id, to_id)
-            for _, row in matching:
-                ensure_not_before(
-                    row["valid_from"], now, what=f"{link_type} {from_id}->{to_id}"
-                )
-            for index, row in matching:
-                self._links[index] = {**row, "valid_to": now}
-        self._record_write(
-            WriteRecord(
-                op="unlink", link_type=link_type, from_id=from_id, to_id=to_id
-            )
-        )
-        return True
 
-    def links_from(self, link_type: str, from_id: str) -> list[str]:
-        from_id = canonical_id(from_id)
-        resolve_link_type(self._registry, link_type)
+    def _live_link_valid_froms(
+        self, link_type: str, from_id: str, to_id: str
+    ) -> list[str]:
+        return [
+            row["valid_from"]
+            for row in self._links
+            if self._matches_link(row, link_type, from_id, to_id)
+        ]
+
+    def _close_link_rows(
+        self, link_type: str, from_id: str, to_id: str, valid_to: str
+    ) -> None:
+        for index, row in enumerate(self._links):
+            if self._matches_link(row, link_type, from_id, to_id):
+                self._links[index] = {**row, "valid_to": valid_to}
+
+    def _link_ids_from(self, link_type: str, from_id: str) -> list[str]:
         with self._transaction_lock:
             return _ordered_link_ids(
                 (
@@ -612,9 +445,7 @@ class InMemoryStore:
                 "to_id",
             )
 
-    def links_to(self, link_type: str, to_id: str) -> list[str]:
-        to_id = canonical_id(to_id)
-        resolve_link_type(self._registry, link_type)
+    def _link_ids_to(self, link_type: str, to_id: str) -> list[str]:
         with self._transaction_lock:
             return _ordered_link_ids(
                 (
@@ -628,11 +459,9 @@ class InMemoryStore:
                 "from_id",
             )
 
-    def links_from_asof(
+    def _link_ids_from_asof(
         self, link_type: str, from_id: str, asof: str
     ) -> list[str]:
-        from_id = canonical_id(from_id)
-        resolve_link_type(self._registry, link_type)
         with self._transaction_lock:
             return _ordered_link_ids(
                 (
@@ -646,9 +475,7 @@ class InMemoryStore:
                 "to_id",
             )
 
-    def links_to_asof(self, link_type: str, to_id: str, asof: str) -> list[str]:
-        to_id = canonical_id(to_id)
-        resolve_link_type(self._registry, link_type)
+    def _link_ids_to_asof(self, link_type: str, to_id: str, asof: str) -> list[str]:
         with self._transaction_lock:
             return _ordered_link_ids(
                 (
@@ -664,25 +491,13 @@ class InMemoryStore:
 
     # -- audit ---------------------------------------------------------
 
-    def append_audit(self, entry: AuditEntry) -> None:
-        """Persist one audit entry. Never raises: params/writes that fail
-        JSON encoding are recorded as placeholders via `_safe_json_dumps`,
-        matching `ObjectStore`'s JSON-round-trip behavior exactly even
-        though this backend has no physical serialization requirement of its
-        own."""
-        # encode-then-decode through the SHARED codec -- literally the same
-        # serialize/rebuild round trip this method used to hand-write per
-        # field. The hand-written version silently dropped every field it
-        # forgot to list, and shipped that bug twice (`invocation_id`,
-        # `kind` -- see git history). With the field enumeration living
-        # only in `ontary.store._shared`, this backend no longer HAS a list
-        # to forget a field from; `test_audit_entries_round_trip_every_field`
-        # still guards the codec itself.
-        normalized = decode_audit_entry(encode_audit_entry(entry)._asdict())
-        with self.transaction():
-            self._audit.append(normalized)
+    def _append_audit_row(self, fields: AuditRowFields) -> None:
+        # Decoding the shared codec's encoded fields gives exactly the entry
+        # a SQL backend would read back -- unencodable values already
+        # replaced by placeholders -- with no field list kept here to drift.
+        self._audit.append(decode_audit_entry(fields._asdict()))
 
-    def audit_entries(self) -> list[AuditEntry]:
+    def _audit_rows(self) -> list[AuditEntry]:
         """Deep copies, so a reader cannot rewrite the append-only log.
 
         Whole-branch review finding (2026-07-26): `list(self._audit)` copied the

@@ -2,13 +2,14 @@
 
 Logic that must be byte-identical across all three `Store`
 backends -- refusal checks, validation, and codecs -- lives here ONCE,
-instead of being hand-copied per backend. Doctrine (refining the "no shared
-base class" rule the backends' module docstrings state): this module may
-contain only pure functions and value objects with no storage side effects.
-Anything that touches rows -- SQL, dict mutation, transactions -- stays
-per-backend, so the conformance suite (`tests/test_store_conformance.py`)
-still proves the storage seam rather than exercising one backend's helpers
-by another name.
+instead of being hand-copied per backend. The order of steps of every write
+and read lives in `ontary.store._core.StoreCore`, which calls these helpers.
+Doctrine: this module holds only pure functions and value objects with no
+storage side effects (plus the small `WriteCapture` and `StoreClock` state
+holders that `StoreCore` owns). Anything that touches rows -- SQL, dict
+mutation, transactions -- is a storage step a backend supplies, so the
+conformance suite (`tests/test_store_conformance.py`) proves those storage
+steps.
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ import uuid
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import datetime, timezone
-from typing import Any, NamedTuple, Protocol
+from typing import Any, Literal, NamedTuple, Protocol
 
 from ontary import _runtime
 from ontary.audit import (
@@ -30,6 +31,7 @@ from ontary.audit import (
 )
 from ontary.errors import AuthorityError, ConflictError, PreconditionFailed, ValidationFailed
 from ontary.meta import (
+    Cardinality,
     LinkTypeDef,
     ObjectTypeDef,
     OntologyRegistry,
@@ -186,8 +188,8 @@ def retire_object_refusal(
 
 def object_already_exists(object_type: str, obj_id: str) -> ConflictError:
     """Build the coded refusal for an insert whose primary key is already
-    live. Each backend checks inside its own serialized transaction; the SQL
-    backends also carry a partial unique index as a storage backstop."""
+    live. `StoreCore` checks inside the store transaction; the SQL backends
+    also carry a partial unique index as a storage backstop."""
     return ConflictError(
         f"{object_type} object {obj_id!r} already exists -- update it, or "
         "retire it before inserting the same primary key again",
@@ -214,7 +216,7 @@ def check_link_endpoints(
     (never retry) differs from a typo or an out-of-order ingest.
 
     The reads are injected rather than performed here so this module stays
-    storage-free: each backend passes its own `read_current`/`read_last`,
+    storage-free: `StoreCore` passes the store's own `read_current`/`read_last`,
     which run on the backend's transaction connection and therefore see
     an object inserted earlier in the same action transaction.
     """
@@ -402,8 +404,8 @@ def check_update_authority(
     capturing: bool,
 ) -> ObjectTypeDef:
     """`update`'s pre-read half: resolve the type and refuse a captured
-    write that touches a source-backed property. The backend then performs
-    its own `read_current` and hands the result to `merge_update`."""
+    write that touches a source-backed property. `StoreCore` then
+    performs `read_current` and hands the result to `merge_update`."""
     obj_def = resolve_object_type(registry, obj_type)
 
     if capturing and not obj_def.is_owned_type:
@@ -505,10 +507,10 @@ def check_link_write_authority(
     registry: OntologyRegistry, link_type: str, *, capturing: bool
 ) -> LinkTypeDef:
     """`create_link`'s preamble: resolve the type and refuse a captured
-    write of a non-owned link type. Cardinality enforcement stays
-    per-backend -- the SQL backends check it inside their own transactions
-    and their messages are not identical, so it is storage mechanics, not
-    shared contract."""
+    write of a non-owned link type. Cardinality is not checked here: the
+    shared store core owns it, reading the live links inside the write
+    transaction and raising `cardinality_violation` -- one check and one
+    message for every backend."""
     link_def = resolve_link_type(registry, link_type)
 
     if capturing and link_def.owned is not True:
@@ -520,12 +522,27 @@ def check_link_write_authority(
     return link_def
 
 
+def cardinality_violation(
+    link_type: str,
+    side: Literal["from_id", "to_id"],
+    id_: str,
+    cardinality: Cardinality,
+) -> ConflictError:
+    """Build the coded refusal for a link that would give `id_` a second
+    live link on a side its cardinality limits to one. Worded once for
+    every backend."""
+    return ConflictError(
+        f"{link_type}: {side} {id_!r} already has an active "
+        f"link ({cardinality.value} forbids a second)",
+        code="CARDINALITY_VIOLATION",
+    )
+
+
 class WriteCapture:
-    """The `capture_action_writes` state machine, shared by composition
-    (never inheritance -- see the module docstring's doctrine). Each backend
-    holds one instance and keeps a one-line `capture_action_writes()`
-    returning `self._write_capture.capture()`; authority gates read
-    `.active` and allowed writes go through `.record(...)`."""
+    """The `capture_action_writes` state machine, held by
+    `StoreCore`, one instance per store. `StoreCore.capture_action_writes()`
+    returns `self._write_capture.capture()`; authority gates read `.active`
+    and allowed writes go through `.record(...)`."""
 
     def __init__(self) -> None:
         self._capture: list[WriteRecord] | None = None
@@ -574,8 +591,8 @@ def iso_instant(dt: datetime) -> str:
 
 
 class StoreClock:
-    """The clock a store stamps `valid_from`/`valid_to` with, shared by
-    composition like `WriteCapture`. No clock is installed at construction."""
+    """The clock a store stamps `valid_from`/`valid_to` with, held by
+    `StoreCore` like `WriteCapture`. No clock is installed at construction."""
 
     def __init__(self) -> None:
         self._clock: Callable[[], datetime] | None = None

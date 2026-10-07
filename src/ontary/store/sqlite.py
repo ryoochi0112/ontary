@@ -5,6 +5,10 @@ Domain-agnostic storage layer for any ontology declared via
 (valid_from/valid_to, close-old-insert-new), links with cardinality
 enforcement, and an append-only audit log.
 
+`ObjectStore` subclasses `ontary.store._core.StoreCore`, which owns the write
+and read paths, and supplies the SQLite storage steps (connection,
+transaction, SQL).
+
 The raw read API (`read_current`, `read_all`) is public but
 *engine/trusted-caller-only*: the guarded, security-aware query layer
 (`ontary.query.GuardedQuery`) is the only read path a CONSUMER (human/AI
@@ -18,42 +22,21 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import datetime
 from typing import Any
 
-from ontary.audit import (
-    AuditEntry,
-    WriteRecord,
-)
+from ontary.audit import AuditEntry
 from ontary.errors import ConflictError
-from ontary.meta import Cardinality, OntologyRegistry
+from ontary.meta import OntologyRegistry
 from ontary.store import _sql
+from ontary.store._core import StoreCore
 from ontary.store._shared import (
-    StoreClock,
-    WriteCapture,
-    canonical_id,
-    check_link_endpoints,
-    check_link_removal_authority,
-    check_link_write_authority,
-    check_object_removal_authority,
-    check_read_page_batch,
-    check_update_authority,
+    AuditRowFields,
     decode_audit_entry,
-    encode_audit_entry,
-    ensure_not_before,
-    live_link_not_found,
-    merge_update,
-    object_already_exists,
-    prepare_insert,
-    resolve_link_type,
-    retire_object_refusal,
-    unknown_page_token,
 )
 from ontary.store.migration import SqliteSchemaGate
 from ontary.store.values import (
-    DEFAULT_BATCH,
     DEFAULT_TENANT,
     Lineage,
     PagedRow,
@@ -72,7 +55,7 @@ def _is_busy_error(exc: sqlite3.OperationalError) -> bool:
     return "database is locked" in message or "database table is locked" in message
 
 
-class ObjectStore(SqliteSchemaGate):
+class ObjectStore(SqliteSchemaGate, StoreCore):
     """SQLite-backed store for canonical objects, links, and audit log.
 
     Postgres-shaped SQL (standard types, no SQLite-only quirks) so the schema
@@ -103,15 +86,10 @@ class ObjectStore(SqliteSchemaGate):
         `busy_timeout` is the number of seconds SQLite waits for a locked table
         before refusing the operation. The default matches `sqlite3.connect`.
         """
-        if not tenant:
-            raise ValueError("tenant must be a non-empty string")
-        self._registry = registry
-        self._tenant = tenant
+        super().__init__(registry, tenant=tenant)
         self._conn = sqlite3.connect(path, timeout=busy_timeout)
         self._conn.row_factory = sqlite3.Row
         self._txn_depth = 0
-        self._write_capture = WriteCapture()
-        self._clock_state = StoreClock()
         self._init_schema()
 
     @contextmanager
@@ -177,184 +155,64 @@ class ObjectStore(SqliteSchemaGate):
         finally:
             self._txn_depth -= 1
 
-    # -- authority / write capture -----------------------------------------
-
     @property
     def in_transaction(self) -> bool:
         """True while a `transaction()` block (at any nesting depth) is
         open on this store."""
         return self._txn_depth > 0
 
-    def bind_clock(
-        self, clock: Callable[[], datetime] | None
-    ) -> Callable[[], datetime]:
-        return self._clock_state.bind(clock)
+    # -- storage steps: objects --------------------------------------------
 
-    @contextmanager
-    def capture_action_writes(
-        self, *, at: str | None = None
-    ) -> Iterator[list[WriteRecord]]:
-        """Context manager that, while active, enforces authority
-        declarations on action writes and records each allowed create,
-        update, retire, link, or unlink as a `WriteRecord` in the yielded
-        list.
-
-        Outside a capture context the store enforces nothing -- writes from
-        trusted loader/fixture code are unrestricted (declared, not
-        defended; see module docstring). Nesting is a programming error
-        (the executor owns one capture context per action call).
-        """
-        with self._write_capture.capture(at=at) as records:
-            yield records
-
-    def _record_write(self, record: WriteRecord) -> None:
-        self._write_capture.record(record)
-
-    # -- objects ---------------------------------------------------------
-
-    def insert(self, obj_type: str, payload: dict[str, Any], source: Source) -> str:
-        prepared = prepare_insert(
-            self._registry, obj_type, payload, capturing=self._write_capture.active
-        )
-        payload, obj_id = prepared.payload, prepared.obj_id_raw
-
-        now = self._clock_state.now_iso(self._write_capture)
-        with self.transaction() as conn:
-            if self.read_current(obj_type, prepared.obj_id) is not None:
-                raise object_already_exists(obj_type, prepared.obj_id)
-            conn.execute(
-                """
-                INSERT INTO objects
-                    (object_type, id, payload, valid_from, valid_to,
-                     source_system, source_id, extracted_at, page_token,
-                     tenant)
-                VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)
-                """,
-                (
-                    obj_type,
-                    obj_id,
-                    json.dumps(payload),
-                    now,
-                    source.source_system,
-                    source.source_id,
-                    source.extracted_at,
-                    uuid.uuid4().hex,
-                    self._tenant,
-                ),
-            )
-        self._record_write(
-            WriteRecord(op="create", object_type=obj_type, object_id=str(obj_id))
-        )
-        return str(obj_id)
-
-    def update(
+    def _insert_object_row(
         self,
         obj_type: str,
         obj_id: str,
-        payload_changes: dict[str, Any],
+        encoded_payload: str,
+        valid_from: str,
         source: Source,
     ) -> None:
-        obj_id = canonical_id(obj_id)
-        capturing = self._write_capture.active
-        obj_def = check_update_authority(
-            self._registry, obj_type, payload_changes, capturing=capturing
+        _sql.execute(
+            self._conn,
+            _sql.render(_sql.OBJECT_INSERT_TEMPLATE, "sqlite"),
+            (
+                obj_type,
+                obj_id,
+                encoded_payload,
+                valid_from,
+                source.source_system,
+                source.source_id,
+                source.extracted_at,
+                uuid.uuid4().hex,
+                self._tenant,
+            ),
+            dialect="sqlite",
         )
-        with self.transaction() as conn:
-            current = self.read_current(obj_type, obj_id)
-            merged = merge_update(
-                obj_def, obj_type, obj_id, current, payload_changes, capturing=capturing
-            )
-            now = self._clock_state.now_iso(self._write_capture)
-            assert current is not None
-            ensure_not_before(
-                current.lineage.valid_from, now, what=f"{obj_type} {obj_id}"
-            )
-            conn.execute(
-                """
-                UPDATE objects
-                SET valid_to = ?
-                WHERE object_type = ? AND id = ? AND valid_to IS NULL
-                  AND tenant = ?
-                """,
-                (now, obj_type, obj_id, self._tenant),
-            )
-            conn.execute(
-                """
-                INSERT INTO objects
-                    (object_type, id, payload, valid_from, valid_to,
-                     source_system, source_id, extracted_at, page_token,
-                     tenant)
-                VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)
-                """,
-                (
-                    obj_type,
-                    obj_id,
-                    json.dumps(merged),
-                    now,
-                    source.source_system,
-                    source.source_id,
-                    source.extracted_at,
-                    uuid.uuid4().hex,
-                    self._tenant,
-                ),
-            )
-        self._record_write(WriteRecord(op="update", object_type=obj_type, object_id=obj_id))
 
-    def retire_object(self, object_type: str, obj_id: str) -> StoredObject:
-        obj_id = canonical_id(obj_id)
-        check_object_removal_authority(
-            self._registry,
-            object_type,
-            capturing=self._write_capture.active,
+    def _live_object_rows(self, obj_type: str, obj_id: str) -> list[StoredObject]:
+        rows = _sql.execute(
+            self._conn,
+            _sql.render(_sql.OBJECT_LIVE_ROWS_SELECT_TEMPLATE, "sqlite"),
+            (obj_type, obj_id, self._tenant),
+            dialect="sqlite",
+        ).rows
+        return [self._row_to_stored(row) for row in rows]
+
+    def _has_object_history(self, obj_type: str, obj_id: str) -> bool:
+        rows = _sql.execute(
+            self._conn,
+            _sql.render(_sql.OBJECT_HISTORY_PROBE_TEMPLATE, "sqlite"),
+            (obj_type, obj_id, self._tenant),
+            dialect="sqlite",
+        ).rows
+        return bool(rows)
+
+    def _close_object_rows(self, obj_type: str, obj_id: str, valid_to: str) -> None:
+        _sql.execute(
+            self._conn,
+            _sql.render(_sql.OBJECT_CLOSE_LIVE_TEMPLATE, "sqlite"),
+            (valid_to, obj_type, obj_id, self._tenant),
+            dialect="sqlite",
         )
-        now = self._clock_state.now_iso(self._write_capture)
-        with self.transaction() as conn:
-            current = conn.execute(
-                """
-                SELECT * FROM objects
-                WHERE object_type = ? AND id = ? AND valid_to IS NULL
-                  AND tenant = ?
-                ORDER BY row_id DESC
-                LIMIT 1
-                """,
-                (object_type, obj_id, self._tenant),
-            ).fetchone()
-            if current is None:
-                has_history = (
-                    conn.execute(
-                        """
-                        SELECT 1 FROM objects
-                        WHERE object_type = ? AND id = ? AND tenant = ?
-                        LIMIT 1
-                        """,
-                        (object_type, obj_id, self._tenant),
-                    ).fetchone()
-                    is not None
-                )
-                raise retire_object_refusal(
-                    object_type, obj_id, has_history=has_history
-                )
-            ensure_not_before(
-                current["valid_from"], now, what=f"{object_type} {obj_id}"
-            )
-            conn.execute(
-                """
-                UPDATE objects SET valid_to = ?
-                WHERE object_type = ? AND id = ? AND valid_to IS NULL
-                  AND tenant = ?
-                """,
-                (now, object_type, obj_id, self._tenant),
-            )
-            closed = conn.execute(
-                "SELECT * FROM objects WHERE row_id = ? AND tenant = ?",
-                (current["row_id"], self._tenant),
-            ).fetchone()
-            assert closed is not None
-            retired = self._row_to_stored(closed)
-        self._record_write(
-            WriteRecord(op="retire", object_type=object_type, object_id=obj_id)
-        )
-        return retired
 
     def _row_to_stored(self, row: sqlite3.Row) -> StoredObject:
         payload: dict[str, Any] = json.loads(row["payload"])
@@ -371,24 +229,10 @@ class ObjectStore(SqliteSchemaGate):
             ),
         )
 
-    def read_current(self, obj_type: str, obj_id: str) -> StoredObject | None:
-        """Public but *trusted-caller-only* raw read of a single object's
-        current row.
-
-        This is NOT the guarded consumer read path -- it returns the full,
-        unredacted payload with no scope/sensitivity/min-N checks applied.
-        It exists so registered action-handler bodies (which already run
-        inside `ActionExecutor.execute`'s audited, permission/scope-checked,
-        transactional pipeline -- see `actions.py`), the engine's own
-        `GuardedQuery`/`scope`/`ingest` internals, and other trusted
-        authoring/loader code have a public method to call. It must never
-        be handed to, or called on behalf of, a CONSUMER (human/AI client,
-        MCP tool, Function body): `GuardedQuery` remains the only read path
-        a consumer may use -- that invariant is about there being no
-        *ungated* read path a consumer can reach, not about `ObjectStore`
-        having zero public methods.
-        """
-        obj_id = canonical_id(obj_id)
+    def _current_row(self, obj_type: str, obj_id: str) -> StoredObject | None:
+        """The live row of one object: a raw, unredacted read for trusted
+        callers only (see `StoreCore`); consumers read through
+        `ontary.query.GuardedQuery`."""
         rows = _sql.execute(
             self._conn,
             _sql.render(_sql.OBJECT_CURRENT_SELECT_TEMPLATE, "sqlite"),
@@ -398,11 +242,9 @@ class ObjectStore(SqliteSchemaGate):
         row = rows[0] if rows else None
         return None if row is None else self._row_to_stored(row)
 
-    def read_last(self, obj_type: str, obj_id: str) -> StoredObject | None:
-        """Raw (unredacted, unscoped) read of one object's newest row, live
-        or retired -- the trusted-caller seam `read_current` cannot serve
-        because it filters on `valid_to IS NULL` (see the protocol)."""
-        obj_id = canonical_id(obj_id)
+    def _last_row(self, obj_type: str, obj_id: str) -> StoredObject | None:
+        """One object's newest row, live or retired -- what `_current_row`
+        cannot serve because it filters on `valid_to IS NULL`."""
         rows = _sql.execute(
             self._conn,
             _sql.render(_sql.OBJECT_LAST_SELECT_TEMPLATE, "sqlite"),
@@ -412,7 +254,7 @@ class ObjectStore(SqliteSchemaGate):
         row = rows[0] if rows else None
         return None if row is None else self._row_to_stored(row)
 
-    def read_all(self, obj_type: str) -> list[StoredObject]:
+    def _all_rows(self, obj_type: str) -> list[StoredObject]:
         """Raw (unredacted, unscoped) read of every current row of
         `obj_type`, ordered by the same per-row identity as `read_page`. Its
         OWN single query/pass -- NOT a `read_page` loop: looping would
@@ -428,7 +270,7 @@ class ObjectStore(SqliteSchemaGate):
         ).rows
         return [self._row_to_stored(row) for row in rows]
 
-    def _resolve_page_token(self, obj_type: str, token: str) -> int:
+    def _page_token_row_id(self, obj_type: str, token: str) -> int | None:
         """Resolve an untrusted `after_key` PAGE TOKEN to the `row_id` it
         was issued for, via `idx_objects_page_token`'s unique index -- one
         indexed lookup, exactly like every other point-lookup path in this
@@ -440,11 +282,10 @@ class ObjectStore(SqliteSchemaGate):
         accepted as a valid resume point into the CALLER's requested type
         -- silently reinterpreted as an arbitrary positional offset into an
         unrelated type's ordering (a fail-open, not an error) -- rather
-        than refused. Raises a validation-kind `INVALID_CURSOR` failure if
-        `token` was never issued
-        for `obj_type` specifically (never a bare `None`/empty result a
-        caller could mistake for "start of table" -- see the page-token
-        docstring)."""
+        than refused. Returns `None` if `token` was never issued for
+        `obj_type` specifically; the core turns that into the cursor refusal
+        (a caller never sees a bare `None` it could mistake for "start of
+        table" -- see the page-token docstring)."""
         rows = _sql.execute(
             self._conn,
             _sql.render(_sql.OBJECT_PAGE_TOKEN_SELECT_TEMPLATE, "sqlite"),
@@ -452,33 +293,22 @@ class ObjectStore(SqliteSchemaGate):
             dialect="sqlite",
         ).rows
         row = rows[0] if rows else None
-        if row is None:
-            raise unknown_page_token(obj_type, token)
-        return int(row["row_id"])
+        return None if row is None else int(row["row_id"])
 
-    def read_page(
-        self, obj_type: str, after_key: str | None = None, batch: int = DEFAULT_BATCH
+    def _page_rows(
+        self, obj_type: str, after_row_id: int | None, batch: int
     ) -> list[PagedRow]:
-        """See `Store.read_page`'s docstring for the full contract.
-
-        Orders by `row_id` -- `objects`' own `INTEGER PRIMARY KEY`, i.e.
+        """Orders by `row_id` -- `objects`' own `INTEGER PRIMARY KEY`, i.e.
         SQLite's physical ROWID: a real, already-indexed column (see
         `idx_objects_type_rowid`), so no `json_extract`, no `CAST`, and no
         registry lookup is needed (unlike a payload-pk-keyed cursor, which
         also can't express the ties the store allows among current rows).
-        `row_id` itself never leaves this method except resolved-into
+        `row_id` itself never leaves the store except resolved-into
         internally: the CURSOR a caller actually receives, `PagedRow.key`,
         is a random per-row page token instead (see `PagedRow`'s docstring
-        for why), resolved back to `row_id` via `_resolve_page_token` when
-        it comes back as `after_key`."""
-        check_read_page_batch(batch)
-        after = (
-            None
-            if after_key is None
-            else self._resolve_page_token(obj_type, after_key)
-        )
-
-        if after is None:
+        for why), resolved back to `row_id` by `_page_token_row_id` when it
+        comes back as `after_key`."""
+        if after_row_id is None:
             cur = self._conn.execute(
                 """
                 SELECT * FROM objects
@@ -497,107 +327,49 @@ class ObjectStore(SqliteSchemaGate):
                 ORDER BY row_id ASC
                 LIMIT ?
                 """,
-                (obj_type, after, self._tenant, batch),
+                (obj_type, after_row_id, self._tenant, batch),
             )
         rows = cur.fetchall()
         return [
             PagedRow(key=row["page_token"], obj=self._row_to_stored(row)) for row in rows
         ]
 
-    # -- links -------------------------------------------------------------
+    # -- storage steps: links ----------------------------------------------
 
-    def create_link(self, link_type: str, from_id: str, to_id: str) -> None:
-        from_id, to_id = canonical_id(from_id), canonical_id(to_id)
-        link_def = check_link_write_authority(
-            self._registry, link_type, capturing=self._write_capture.active
-        )
-        check_link_endpoints(
-            link_def,
-            link_type,
-            from_id,
-            to_id,
-            read_current=self.read_current,
-            read_last=self.read_last,
-        )
-        if to_id in self.links_from(link_type, from_id):
-            # #37: an identical live link already exists -- a no-op, checked
-            # before cardinality so a re-run never trips over itself. Nothing
-            # is written, so no write record is captured either.
-            return
-
-        if link_def.cardinality in (Cardinality.ONE_TO_ONE, Cardinality.MANY_TO_ONE):
-            existing_from = self.links_from(link_type, from_id)
-            if existing_from:
-                raise ConflictError(
-                    f"{link_type}: from_id {from_id!r} already has an active "
-                    f"link ({link_def.cardinality.value} forbids a second)",
-                    code="CARDINALITY_VIOLATION",
-                )
-
-        if link_def.cardinality in (Cardinality.ONE_TO_ONE, Cardinality.ONE_TO_MANY):
-            existing_to = self.links_to(link_type, to_id)
-            if existing_to:
-                raise ConflictError(
-                    f"{link_type}: to_id {to_id!r} already has an active "
-                    f"link ({link_def.cardinality.value} forbids a second)",
-                    code="CARDINALITY_VIOLATION",
-                )
-
-        now = self._clock_state.now_iso(self._write_capture)
-        with self.transaction() as conn:
-            conn.execute(
-                """
-                INSERT INTO links
-                    (link_type, from_id, to_id, valid_from, valid_to, tenant)
-                VALUES (?, ?, ?, ?, NULL, ?)
-                """,
-                (link_type, from_id, to_id, now, self._tenant),
-            )
-        self._record_write(
-            WriteRecord(op="link", link_type=link_type, from_id=from_id, to_id=to_id)
+    def _insert_link_row(
+        self, link_type: str, from_id: str, to_id: str, valid_from: str
+    ) -> None:
+        _sql.execute(
+            self._conn,
+            _sql.render(_sql.LINK_INSERT_TEMPLATE, "sqlite"),
+            (link_type, from_id, to_id, valid_from, self._tenant),
+            dialect="sqlite",
         )
 
-    def close_link(self, link_type: str, from_id: str, to_id: str) -> bool:
-        from_id, to_id = canonical_id(from_id), canonical_id(to_id)
-        check_link_removal_authority(
-            self._registry,
-            link_type,
-            capturing=self._write_capture.active,
-        )
-        now = self._clock_state.now_iso(self._write_capture)
-        with self.transaction() as conn:
-            live = conn.execute(
-                """
-                SELECT valid_from FROM links
-                WHERE link_type = ? AND from_id = ? AND to_id = ?
-                  AND valid_to IS NULL AND tenant = ?
-                """,
-                (link_type, from_id, to_id, self._tenant),
-            ).fetchall()
-            if not live:
-                raise live_link_not_found(link_type, from_id, to_id)
-            for row in live:
-                ensure_not_before(
-                    row["valid_from"], now, what=f"{link_type} {from_id}->{to_id}"
-                )
-            conn.execute(
-                """
-                UPDATE links SET valid_to = ?
-                WHERE link_type = ? AND from_id = ? AND to_id = ?
-                  AND valid_to IS NULL AND tenant = ?
-                """,
-                (now, link_type, from_id, to_id, self._tenant),
-            )
-        self._record_write(
-            WriteRecord(
-                op="unlink", link_type=link_type, from_id=from_id, to_id=to_id
-            )
-        )
-        return True
+    def _live_link_valid_froms(
+        self, link_type: str, from_id: str, to_id: str
+    ) -> list[str]:
+        rows = _sql.execute(
+            self._conn,
+            _sql.render(_sql.LINK_LIVE_VALID_FROM_SELECT_TEMPLATE, "sqlite"),
+            (link_type, from_id, to_id, self._tenant),
+            dialect="sqlite",
+        ).rows
+        return [str(row["valid_from"]) for row in rows]
 
-    def links_from(self, link_type: str, from_id: str) -> list[str]:
-        from_id = canonical_id(from_id)
-        resolve_link_type(self._registry, link_type)
+    def _close_link_rows(
+        self, link_type: str, from_id: str, to_id: str, valid_to: str
+    ) -> None:
+        _sql.execute(
+            self._conn,
+            _sql.render(_sql.LINK_CLOSE_LIVE_TEMPLATE, "sqlite"),
+            (valid_to, link_type, from_id, to_id, self._tenant),
+            dialect="sqlite",
+        )
+
+    # -- reads: links ------------------------------------------------------
+
+    def _link_ids_from(self, link_type: str, from_id: str) -> list[str]:
         rows = _sql.execute(
             self._conn,
             _sql.render(_sql.LINKS_FROM_SELECT_TEMPLATE, "sqlite"),
@@ -606,9 +378,7 @@ class ObjectStore(SqliteSchemaGate):
         ).rows
         return [str(row["to_id"]) for row in rows]
 
-    def links_to(self, link_type: str, to_id: str) -> list[str]:
-        to_id = canonical_id(to_id)
-        resolve_link_type(self._registry, link_type)
+    def _link_ids_to(self, link_type: str, to_id: str) -> list[str]:
         rows = _sql.execute(
             self._conn,
             _sql.render(_sql.LINKS_TO_SELECT_TEMPLATE, "sqlite"),
@@ -617,11 +387,9 @@ class ObjectStore(SqliteSchemaGate):
         ).rows
         return [str(row["from_id"]) for row in rows]
 
-    def links_from_asof(
+    def _link_ids_from_asof(
         self, link_type: str, from_id: str, asof: str
     ) -> list[str]:
-        from_id = canonical_id(from_id)
-        resolve_link_type(self._registry, link_type)
         rows = _sql.execute(
             self._conn,
             _sql.render(_sql.LINKS_FROM_ASOF_SELECT_TEMPLATE, "sqlite"),
@@ -630,9 +398,7 @@ class ObjectStore(SqliteSchemaGate):
         ).rows
         return [str(row["to_id"]) for row in rows]
 
-    def links_to_asof(self, link_type: str, to_id: str, asof: str) -> list[str]:
-        to_id = canonical_id(to_id)
-        resolve_link_type(self._registry, link_type)
+    def _link_ids_to_asof(self, link_type: str, to_id: str, asof: str) -> list[str]:
         rows = _sql.execute(
             self._conn,
             _sql.render(_sql.LINKS_TO_ASOF_SELECT_TEMPLATE, "sqlite"),
@@ -643,42 +409,37 @@ class ObjectStore(SqliteSchemaGate):
 
     # -- audit ---------------------------------------------------------
 
-    def append_audit(self, entry: AuditEntry) -> None:
-        """Persist one audit entry. Never raises: params/writes that fail
-        JSON encoding are recorded as placeholders via `_safe_json_dumps`
-        rather than lost or crashing the audit write itself."""
-        fields = encode_audit_entry(entry)
-        with self.transaction() as conn:
-            _sql.execute(
-                conn,
-                _sql.render(
-                    _sql.AUDIT_LOG_INSERT_TEMPLATE,
-                    "sqlite",
-                    placeholder_count=len(_sql.AUDIT_LOG_COLUMNS),
-                ),
-                (
-                    fields.ts,
-                    fields.actor,
-                    fields.role,
-                    fields.action,
-                    fields.target_type,
-                    fields.target_id,
-                    fields.params,
-                    fields.outcome,
-                    fields.writes,
-                    fields.capability_accesses,
-                    fields.invocation_id,
-                    fields.kind,
-                    self._tenant,
-                    fields.principal,
-                    fields.unscoped_params,
-                    fields.error_code,
-                    fields.events,
-                ),
-                dialect="sqlite",
-            )
+    def _append_audit_row(self, fields: AuditRowFields) -> None:
+        _sql.execute(
+            self._conn,
+            _sql.render(
+                _sql.AUDIT_LOG_INSERT_TEMPLATE,
+                "sqlite",
+                placeholder_count=len(_sql.AUDIT_LOG_COLUMNS),
+            ),
+            (
+                fields.ts,
+                fields.actor,
+                fields.role,
+                fields.action,
+                fields.target_type,
+                fields.target_id,
+                fields.params,
+                fields.outcome,
+                fields.writes,
+                fields.capability_accesses,
+                fields.invocation_id,
+                fields.kind,
+                self._tenant,
+                fields.principal,
+                fields.unscoped_params,
+                fields.error_code,
+                fields.events,
+            ),
+            dialect="sqlite",
+        )
 
-    def audit_entries(self) -> list[AuditEntry]:
+    def _audit_rows(self) -> list[AuditEntry]:
         cur = self._conn.execute(
             "SELECT * FROM audit_log WHERE tenant = ? ORDER BY seq ASC",
             (self._tenant,),
