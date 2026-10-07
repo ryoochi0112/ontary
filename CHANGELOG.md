@@ -11,6 +11,22 @@ you**.
 
 ## [Unreleased]
 
+## [0.24.0] — 2026-10-07
+
+```bash
+uv add "ontary @ git+https://github.com/ryoochi0112/ontary@v0.24.0"
+```
+
+A minor release with breaking changes to handler results and MCP parameter objects.
+Function and Action results now cross one JSON boundary on both surfaces: `date` and
+`datetime` values come back as ISO 8601 strings (in-process `call_function` used to
+return the objects), and a result that is not JSON refuses with the new
+`RESULT_NOT_JSON` code instead of `INTERNAL_ERROR`, including non-JSON values that
+in-process `call_function` used to return unchanged. Every MCP parameter object now
+carries a `description` key, and `ontary validate --strict` exits 1 for undescribed
+actions and Functions. The store schema stays at v14, so a 0.23.0 store needs no
+re-ingest.
+
 ### Added
 
 - **Parameter `description` (#65).** `ActionParameterDef` gains an optional
