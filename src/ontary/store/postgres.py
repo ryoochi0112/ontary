@@ -49,6 +49,11 @@ from ontary.errors import ConflictError
 from ontary.meta import OntologyRegistry
 from ontary.store import _sql
 from ontary.store._core import StoreCore
+from ontary.store._filter import (
+    OBJECT_FILTERED_PAGE_SELECT_TEMPLATE,
+    RowFilter,
+    compile_filter,
+)
 from ontary.store._shared import (
     AuditRowFields,
     decode_audit_entry,
@@ -446,6 +451,26 @@ class PostgresStore(StoreCore):
                 (obj_type, after_row_id, self._tenant, batch),
                 dialect="postgres",
             ).rows
+        page_token_idx = _sql.OBJECT_COLUMNS.index("page_token")
+        return [
+            PagedRow(key=str(row[page_token_idx]), obj=self._row_to_stored(row)) for row in rows
+        ]
+
+    def _filtered_page_rows(
+        self, obj_type: str, row_filter: RowFilter, after_row_id: int | None, batch: int
+    ) -> list[PagedRow]:
+        fragment, params = compile_filter(row_filter, "postgres")
+        template = OBJECT_FILTERED_PAGE_SELECT_TEMPLATE.replace("{filter}", fragment)
+        rows = _sql.execute(
+            self._conn,
+            _sql.render(template, "postgres"),
+            [
+                obj_type, self._tenant,
+                after_row_id if after_row_id is not None else 0,
+                *params, batch,
+            ],
+            dialect="postgres",
+        ).rows
         page_token_idx = _sql.OBJECT_COLUMNS.index("page_token")
         return [
             PagedRow(key=str(row[page_token_idx]), obj=self._row_to_stored(row)) for row in rows

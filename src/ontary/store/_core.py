@@ -44,6 +44,7 @@ from typing import Any
 
 from ontary.audit import AuditEntry, WriteRecord
 from ontary.meta import Cardinality, OntologyRegistry
+from ontary.store._filter import RowFilter
 from ontary.store._shared import (
     AuditRowFields,
     StoreClock,
@@ -181,6 +182,12 @@ class StoreCore(abc.ABC):
         """Up to `batch` live rows of `obj_type` in this tenant in row order,
         starting after `after_row_id` (from the start when `None`)."""
 
+    def _filtered_page_rows(
+        self, obj_type: str, row_filter: RowFilter, after_row_id: int | None, batch: int
+    ) -> list[PagedRow]:
+        """Permissive default for backends without SQL filtering."""
+        return self._page_rows(obj_type, after_row_id, batch)
+
     @abc.abstractmethod
     def _link_ids_from(self, link_type: str, from_id: str) -> list[str]:
         """`to_id` of every live link out of `from_id`, in link order."""
@@ -267,13 +274,30 @@ class StoreCore(abc.ABC):
         capped at `batch`. Each `PagedRow` carries its own cursor key; an
         unknown `after_key` or an invalid `batch` is refused.
         Trusted-caller-only."""
+        after_row_id = self._validate_page(obj_type, after_key, batch)
+        return self._page_rows(obj_type, after_row_id, batch)
+
+    def read_page_filtered(
+        self,
+        obj_type: str,
+        row_filter: RowFilter,
+        after_key: str | None = None,
+        batch: int = DEFAULT_BATCH,
+    ) -> list[PagedRow]:
+        """Raw page with a permissive prefilter; callers must judge each row."""
+        after_row_id = self._validate_page(obj_type, after_key, batch)
+        return self._filtered_page_rows(obj_type, row_filter, after_row_id, batch)
+
+    def _validate_page(
+        self, obj_type: str, after_key: str | None, batch: int
+    ) -> int | None:
         check_read_page_batch(batch)
         after_row_id: int | None = None
         if after_key is not None:
             after_row_id = self._page_token_row_id(obj_type, after_key)
             if after_row_id is None:
                 raise unknown_page_token(obj_type, after_key)
-        return self._page_rows(obj_type, after_row_id, batch)
+        return after_row_id
 
     def links_from(self, link_type: str, from_id: str) -> list[str]:
         """Ids of every current target reachable from `from_id` via `link_type`;

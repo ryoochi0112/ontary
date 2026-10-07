@@ -24,6 +24,7 @@ import sqlite3
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from typing import Any
 
 from ontary.audit import AuditEntry
@@ -31,6 +32,11 @@ from ontary.errors import ConflictError
 from ontary.meta import OntologyRegistry
 from ontary.store import _sql
 from ontary.store._core import StoreCore
+from ontary.store._filter import (
+    OBJECT_FILTERED_PAGE_SELECT_TEMPLATE,
+    RowFilter,
+    compile_filter,
+)
 from ontary.store._shared import (
     AuditRowFields,
     decode_audit_entry,
@@ -43,6 +49,21 @@ from ontary.store.values import (
     Source,
     StoredObject,
 )
+
+
+def _ontary_instant(value: Any) -> str | None:
+    """Python's ISO parser, with an explicit awareness and UTC ordering key."""
+    if not isinstance(value, str):
+        return None
+    try:
+        instant = datetime.fromisoformat(value)
+        marker = "N|"
+        if instant.tzinfo is not None:
+            instant = instant.astimezone(timezone.utc)
+            marker = "A|"
+        return marker + instant.isoformat(timespec="microseconds")
+    except (ValueError, OverflowError):
+        return None
 
 
 def _is_busy_error(exc: sqlite3.OperationalError) -> bool:
@@ -89,6 +110,7 @@ class ObjectStore(SqliteSchemaGate, StoreCore):
         super().__init__(registry, tenant=tenant)
         self._conn = sqlite3.connect(path, timeout=busy_timeout)
         self._conn.row_factory = sqlite3.Row
+        self._conn.create_function("ontary_instant", 1, _ontary_instant, deterministic=True)
         self._txn_depth = 0
         self._init_schema()
 
@@ -322,6 +344,23 @@ class ObjectStore(SqliteSchemaGate, StoreCore):
                 (obj_type, after_row_id, self._tenant, batch),
                 dialect="sqlite",
             ).rows
+        return [PagedRow(key=row["page_token"], obj=self._row_to_stored(row)) for row in rows]
+
+    def _filtered_page_rows(
+        self, obj_type: str, row_filter: RowFilter, after_row_id: int | None, batch: int
+    ) -> list[PagedRow]:
+        fragment, params = compile_filter(row_filter, "sqlite")
+        template = OBJECT_FILTERED_PAGE_SELECT_TEMPLATE.replace("{filter}", fragment)
+        rows = _sql.execute(
+            self._conn,
+            _sql.render(template, "sqlite"),
+            [
+                obj_type, self._tenant,
+                after_row_id if after_row_id is not None else 0,
+                *params, batch,
+            ],
+            dialect="sqlite",
+        ).rows
         return [PagedRow(key=row["page_token"], obj=self._row_to_stored(row)) for row in rows]
 
     # -- storage steps: links ----------------------------------------------
