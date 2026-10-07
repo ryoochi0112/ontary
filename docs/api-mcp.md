@@ -16,7 +16,7 @@ server = build_mcp_server(ontology, store, consumer, *, name=None,
 One server process, one `Consumer` identity. Declared handlers arrive **pre-bound** —
 there is no registration callback.
 
-Twelve tools, all subject to the same guards as the Python surface. Read-only
+Fourteen tools, all subject to the same guards as the Python surface. Read-only
 tools carry `ToolAnnotations(readOnlyHint=True)`; `execute_action` carries
 `ToolAnnotations(destructiveHint=True)`:
 
@@ -26,12 +26,14 @@ tools carry `ToolAnnotations(readOnlyHint=True)`; `execute_action` carries
 | `list_link_types` | Introspection | `readOnlyHint=True` |
 | `list_action_types` | Introspection, incl. parameter defs | `readOnlyHint=True` |
 | `list_functions` | Introspection | `readOnlyHint=True` |
+| `list_event_types` | Introspection | `readOnlyHint=True` |
 | `get_declarations` | The declared contract bundle | `readOnlyHint=True` |
 | `get_object` | Single read | `readOnlyHint=True` |
 | `query_objects` | Filtered/paged read | `readOnlyHint=True` |
 | `count_objects` | Visible-row count | `readOnlyHint=True` |
 | `aggregate_objects` | Aggregate read | `readOnlyHint=True` |
 | `traverse_links` | Follow a link | `readOnlyHint=True` |
+| `list_events` | Paged business-event read | `readOnlyHint=True` |
 | `execute_action` | Run an action | `destructiveHint=True` |
 | `call_function` | Call a function | `readOnlyHint=True` |
 
@@ -47,12 +49,13 @@ and required status.
 
 | Tool | Required arguments | Optional arguments |
 | --- | --- | --- |
-| `list_object_types`, `list_link_types`, `list_action_types`, `list_functions`, `get_declarations` | — | — |
+| `list_object_types`, `list_link_types`, `list_action_types`, `list_functions`, `list_event_types`, `get_declarations` | — | — |
 | `get_object` | `obj_type`, `obj_id` | — |
 | `query_objects` | `obj_type` | `where`, `order_by`, `limit`, `after`, `include_total` (default `false`) |
 | `count_objects` | `obj_type` | `where` |
 | `aggregate_objects` | `obj_type` | `value_field`, `group_by`, `where`, `func` (default `"mean"`) |
 | `traverse_links` | `obj_type`, `obj_id`, `link_api_name` | `reverse` (default `false`), `limit`, `after`, `include_total` (default `false`) |
+| `list_events` | — | `event_type`, `about_type`, `about_id`, `since`, `until`, `limit`, `after`, `include_total` (default `false`) |
 | `execute_action` | `api_name`, `params` | — |
 | `call_function` | `api_name`, `params` | — |
 
@@ -116,6 +119,78 @@ Errors return a code from the table below; anything unclassified becomes
 
 Needs the `mcp` extra.
 
+### `list_event_types` and `list_events`
+
+`list_event_types` takes no arguments and returns `{"event_types": [...]}`, one entry
+per declared event type. Each entry has `api_name`, `description`, `properties` (the
+same per-property keys as `list_object_types`, including `ai_usable` and
+`human_visible`), `about_types` (the sorted target types of the actions that emit it),
+and `emitted_by` (the sorted `api_name`s of those actions). Like the other
+introspection tools, it is read-only and, on a multi-consumer server, refuses an
+unauthenticated call.
+
+`list_events(event_type=None, about_type=None, about_id=None, since=None, until=None, limit=None, after=None, include_total=False)`
+lists the business events this consumer may see, in log order: audit sequence, then
+emission order. Every argument is optional.
+
+- `event_type` limits the list to one declared event type.
+- `about_type` limits it to events about one declared object type, after visibility
+  is applied. `about_id` narrows that to one subject and needs `about_type`.
+- `since` is an inclusive lower bound and `until` an exclusive upper bound. Each is an
+  ISO 8601 date-time with a UTC offset, such as `2026-10-07T09:00:00+00:00`.
+
+An event is listed only when its subject is visible to this consumer, judged by the
+subject's latest row. A retired subject still counts, so its events stay listed unless
+its latest row is out of scope.
+
+The response is a paged read with the same envelope as `query_objects`: `result`,
+`next_cursor`, `has_more`, `scope_limited`, and `total` when `include_total=true`.
+`limit` defaults to 100 and may be at most 1000. `after` takes the previous
+`next_cursor` and needs an explicit `limit`. `next_cursor` is `null` exactly when
+`has_more` is `false`. `total` is the number of visible events across all pages and is
+not min-N gated. `limit=0` with `include_total=true` is count-only mode: `result` is
+`[]`, `next_cursor` is `null`, and `has_more` is `total > 0`.
+`scope_limited` depends on declarations only: it is `true` when any subject type the
+selected events can be about is scoped or has a `row_visibility` rule.
+
+Each row has the keys `event_type`, `about_type`, `about_id`, `ts` (an ISO 8601
+string with offset), `invocation_id`, `payload`, and `redacted_fields`.
+`redacted_fields` is a sorted list of hidden field names, or `[]`. A redacted key is
+absent from `payload`; it is never `null`. For example, consumer `ai`, scoped to
+team `a`, calls
+`list_events(event_type="TicketEscalated", about_type="Ticket", about_id="T-1", limit=10)`
+where `customer_email` is declared `ai_usable=False`:
+
+```json
+{
+  "result": [
+    {
+      "event_type": "TicketEscalated",
+      "about_type": "Ticket",
+      "about_id": "T-1",
+      "ts": "2026-10-07T09:12:03.120000+00:00",
+      "invocation_id": "inv_8f2c",
+      "payload": {"reason": "SLA breach"},
+      "redacted_fields": ["customer_email"]
+    }
+  ],
+  "next_cursor": null,
+  "has_more": false,
+  "scope_limited": true
+}
+```
+
+`list_events` refuses with these codes, in this order of checks:
+
+| Code | When |
+| --- | --- |
+| `UNKNOWN_EVENT_TYPE` | `event_type` is not a declared event type. |
+| `UNKNOWN_OBJECT_TYPE` | `about_type` is not a declared object type. |
+| `INVALID_PARAMS` | `about_id` is given without `about_type`, or `since` or `until` is naive (no UTC offset) or not parseable. |
+| `AFTER_WITHOUT_LIMIT` | `after` is given without `limit`. |
+| `INVALID_LIMIT` | `limit` is above 1000 or below 1, or `after` is combined with count-only mode. |
+| `INVALID_CURSOR` | `after` is not a `next_cursor` returned by `list_events`. |
+
 ### Multi-consumer serving
 
 ```python
@@ -139,7 +214,7 @@ back to `client_id`) **after** the resolver returns — so a resolver cannot for
 authenticated. Resolution is never cached: a revoked or re-scoped token can never be
 served from a stale binding.
 
-Same twelve tools as `build_mcp_server`, all fail-closed the same three ways, including
+Same fourteen tools as `build_mcp_server`, all fail-closed the same three ways, including
 introspection:
 
 | Condition | Code |

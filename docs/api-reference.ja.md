@@ -234,7 +234,7 @@ Action は型付きパラメータと `@ontology.action` で宣言するハン�
 
 ## MCP サーバー
 
-`build_mcp_server` はイントロスペクション、読み取り、アクション、Function の 12 個のガード付きツールを公開し、`build_multi_consumer_mcp_server` は共有ランタイムで多数の検証済みアイデンティティに配信します。詳細: [MCP サーバー](api-mcp.ja.md)
+`build_mcp_server` はイントロスペクション、読み取り、アクション、Function の 14 個のガード付きツールを公開し、`build_multi_consumer_mcp_server` は共有ランタイムで多数の検証済みアイデンティティに配信します。詳細: [MCP サーバー](api-mcp.ja.md)
 
 <a id="descriptor-authoring"></a>
 
