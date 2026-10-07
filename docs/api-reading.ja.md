@@ -220,9 +220,13 @@ struct 値はグループキーとしてサポートされません。
 母集団は 1 つだけです。この検査は各グループの公開時に、そのグループの min-N 判定の
 あとで走ります。min-N が差し止める選択は引き続き `MIN_N_VIOLATION` になります。
 
-`aggregate`、`aggregate_by`、`count_contributors` は、未登録のオブジェクト型を
-`UNKNOWN_OBJECT_TYPE` で拒否します。これは `where=` を渡したときの従来の挙動と
-同じです。
+文字列で型を指定する読み取りは、すべて未登録のオブジェクト型を
+`UNKNOWN_OBJECT_TYPE` で拒否します。対象は `list`、`count`、`get`、`exists`、
+`traverse`、`aggregate`、`aggregate_by`、`count_contributors`、`GuardedQuery` の
+各メソッド、Function 本体での `BoundQuery` の文字列読み取りです。型の検査は
+ほかのどの検査よりも先に、行を読む前に走ります。そのため拒否の結果は、
+呼び出し元のスコープによらず同じです。`traverse` では、未登録のアンカー型が
+この拒否の対象です。未知のリンクは引き続き `UNKNOWN_NAME` です。
 
 ### `GuardedQuery(store, registry, policy)`
 

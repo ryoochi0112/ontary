@@ -192,4 +192,16 @@ AI のコンシューマーには、`ai_usable=False` のフィールドを列�
 「隠された行があった」ことを意味するものではありません。
 どちらも、その選択範囲の外に行が存在するかどうかは示しません。
 
+5 つの読み取りツール（`query_objects`、`count_objects`、`get_object`、
+`traverse_links`、`aggregate_objects`）に宣言されていない `obj_type` を渡すと、
+`UNKNOWN_OBJECT_TYPE` のエラーエンベロープを返します。
+この検査は、`limit` の上限やリンクの解決など、ほかのどの検査よりも先に走ります。
+レスポンスには `result` も `scope_limited` も含みません。
+そのため、`scope_limited: true` の空リストは、常に宣言済みの型に対する結果です。
+たとえば `obj_type="Tickte"` は次を返します。
+
+```json
+{"error": {"type": "ValidationFailed", "message": "unregistered object type: 'Tickte'", "code": "UNKNOWN_OBJECT_TYPE", "kind": "validation"}}
+```
+
 ---
