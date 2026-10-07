@@ -13,8 +13,8 @@ from ontary.query._guarded import TypedPage as TypedPage
 from ontary.query._guarded import _AUTHOR_DISPATCH as _AUTHOR_DISPATCH
 from ontary.query._guarded import _UNSET_LIMIT as _UNSET_LIMIT
 from ontary.query._guarded import _AuthorDispatch as _AuthorDispatch
-from ontary.query._guarded import _normalize_where as _normalize_where
-from ontary.query._guarded import _require_where_mapping as _require_where_mapping
+from ontary.query._where import _normalize_where as _normalize_where
+from ontary.query._where import _require_where_mapping as _require_where_mapping
 
 __all__ = [
     "DEFAULT_READ_LIMIT",

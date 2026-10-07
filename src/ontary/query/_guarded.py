@@ -81,9 +81,9 @@ went away:
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import datetime
 from itertools import islice
 from typing import Any, Final, Generic, Literal, NoReturn, TypeVar, final, overload
 
@@ -92,6 +92,22 @@ from pydantic import BaseModel, ConfigDict
 from ontary.audit import AuditEntry, EmittedEvent
 from ontary.errors import InternalError, ValidationFailed, VisibilityError
 from ontary.meta import OntologyRegistry, PropertyDef
+from ontary.query._params import (
+    _NUMERIC_PROPERTY_TYPES,
+    _OrderSpec,
+    _property_type,
+    _validate_group_by,
+    _validate_read_fields,
+)
+from ontary.query._where import (
+    _compile_where,
+    _is_supplied_value,
+    _normalize_where,
+    _NormalizedCondition,
+    _NormalizedWhere,
+    _validate_where_keys,
+    _WhereMatcher,
+)
 from ontary.scope import (
     DirectProperty,
     RowVisibilityStore,
@@ -106,31 +122,8 @@ from ontary.store import DEFAULT_BATCH, Store, StoredObject
 from ontary.store._shared import iso_instant
 from ontary.typesys import (
     PropertyType,
-    _to_storage_scalar,
-    choice_value,
-    validate_scalar,
 )
 
-_NUMERIC_PROPERTY_TYPES = {"int", "float"}
-_GROUPABLE_PROPERTY_TYPES = {"str", "int", "float", "bool", "date", "datetime"}
-"""Declared types whose values may be a `group_by` key.
-
-An ALLOW-list, not a `{"json"}` deny-list, so a `PropertyType` added later
-fails closed here instead of reaching `dict.setdefault` and raising a bare
-`TypeError` from inside the grouping loop. `json` is the only current member
-that can hold a `dict`/`list`, and so the only one excluded.
-"""
-_WHERE_OPERATORS = frozenset({"gt", "gte", "lt", "lte", "in", "ne", "contains"})
-_WHERE_COMPARISON_OPERATORS = frozenset({"gt", "gte", "lt", "lte"})
-_COMPARABLE_PROPERTY_TYPES = frozenset({"int", "float", "date", "datetime"})
-_CONJUNCTION = "and"
-"""Internal clause operator for a multi-operator condition mapping.
-
-Never a caller-facing spelling: `_compile_where_clause` emits it only for an
-``"operators"`` condition, whose operand is the tuple of compiled sub-clauses.
-It is not in `_WHERE_OPERATORS`, so ``{"and": ...}`` from a caller is still
-`UNKNOWN_OPERATOR`.
-"""
 _MIN_N_COUNT_WITHHELD = "count withheld"
 _AGGREGATE_FUNCS = ("mean", "count", "sum", "min", "max")
 
@@ -188,101 +181,16 @@ _AUTHOR_DISPATCH: Final = _AuthorDispatch()
 AggregateValue = int | float
 """One released aggregate value; ``count`` returns int, others float."""
 
-_OrderSpec = tuple[str, bool]
-
-_WhereClause = tuple[str, PropertyType, str, Any]
-_WhereMatcher = Callable[[dict[str, Any]], bool]
 
 
-_NormalizedCondition = tuple[str, str, Any]
-"""One `where` condition, snapshotted as ``(kind, operator, operand)``.
-
-``kind`` is ``"bare"`` (the condition was not a mapping, so it is equality
-sugar), ``"operator"`` (a one-entry mapping, whose key is NOT yet known to
-be a real operator), ``"operators"`` (a mapping with several entries, whose
-``operand`` is the tuple of ``(key, operand)`` pairs in caller order -- the
-conjunction of those clauses, so ``{"gte": a, "lt": b}`` is a range), or
-``"malformed"`` (an empty mapping, or one with a non-``str`` key, whose
-``operand`` carries its key tuple for the refusal message).
-"""
-
-_NormalizedWhere = tuple[tuple[str, _NormalizedCondition], ...]
-"""A whole `where` mapping, snapshotted once and immutable thereafter."""
 
 
-def _is_supplied_value(value: Any) -> bool:
-    """Whether a `where` operand is a value the caller had to already hold.
-
-    The supply-shaped exemption rests entirely on this: naming a value you
-    must already possess teaches you nothing you did not bring. `None` fails
-    it -- null-ness is universally available, so ``where={"person_id": None}``
-    is a free per-row null probe, not a supply -- and so does any container or
-    arbitrary object, which fails closed ahead of operand validation.
-    """
-    return isinstance(value, str | int | float | date)
 
 
-def _normalize_where_condition(condition: Any) -> _NormalizedCondition:
-    """Snapshot one caller-supplied condition, reading it EXACTLY once.
-
-    The classifier and the compiler used to each re-read the caller's
-    mapping. A mapping whose ``items()`` answered differently on the second
-    read therefore got classified on one predicate and executed as another --
-    a supply-shaped `eq` at the gate, a `contains` alphabet-walk at the
-    matcher. Everything downstream consumes this immutable triple instead of
-    the caller's object, so there is no second read to disagree with.
-    """
-    if not isinstance(condition, dict):
-        return ("bare", "eq", condition)
-    items = tuple(condition.items())
-    if not items or not all(isinstance(operator, str) for operator, _ in items):
-        return ("malformed", "", tuple(operator for operator, _ in items))
-    if len(items) == 1:
-        operator, operand = items[0]
-        return ("operator", operator, operand)
-    return ("operators", "", items)
 
 
-def _require_where_mapping(where: object) -> None:
-    """Refuse a `where=` that is not a mapping, before anything reads it.
-
-    The type check has to come BEFORE the falsy short-circuit below, and that
-    ordering is the whole fix. `if not where: return None` treated a falsy
-    NON-mapping as "no filter", so ``where=""``/``0``/``[]``/``False``
-    silently matched every visible row -- a caller who believed they were
-    narrowing received the entire population, with no exception to notice. A
-    truthy one reached ``.items()`` and raised a bare `AttributeError` on all
-    six read surfaces. The same caller mistake was therefore loud for one
-    operand and silent for the other.
-
-    An EMPTY MAPPING keeps meaning "no filter": ``{}`` is a mapping, so it
-    passes here and short-circuits below exactly as it always has.
-
-    `INVALID_PARAMS` rather than a new code: the MCP boundary already answers
-    it for this exact complaint (`_tool_optional_object` -- "tool parameter
-    'where' must be an object, got str"), and `get_objects`' own `order_by`
-    shape refusal already uses it for a read parameter in this file. The
-    in-process refusal and the wire one now agree on the code as well as on
-    the verdict.
-    """
-    if where is None or isinstance(where, dict):
-        return
-    raise ValidationFailed(
-        "where= must be a mapping of field name to condition, got "
-        f"{type(where).__name__}",
-        code="INVALID_PARAMS",
-    )
 
 
-def _normalize_where(where: dict[str, Any] | None) -> _NormalizedWhere | None:
-    """Snapshot a whole `where` mapping at the public boundary, once."""
-    _require_where_mapping(where)
-    if not where:
-        return None
-    return tuple(
-        (field, _normalize_where_condition(condition))
-        for field, condition in where.items()
-    )
 
 
 def _where_disclosure(
@@ -340,98 +248,14 @@ def _min_n_violation_message(prefix: str, min_n: int) -> str:
     )
 
 
-def _evaluate_comparison(
-    actual: Any, prop_type: PropertyType, operator: str, operand: Any
-) -> bool:
-    if prop_type == "date":
-        if not isinstance(actual, str):
-            return False
-        try:
-            actual_value = date.fromisoformat(actual)
-        except ValueError:
-            return False
-        if actual_value.isoformat() != actual:
-            return False
-        operand_value = date.fromisoformat(operand)
-    elif prop_type == "datetime":
-        # Compared as instants, not as strings: `2026-02-15T09:00:00+09:00`
-        # and `2026-02-15T00:00:00+00:00` are the same moment. A naive
-        # stored value against an aware operand (or the reverse) has no
-        # defined order; Python raises `TypeError`, and the row is treated
-        # as unmatched below, the same verdict a corrupt value gets.
-        if not isinstance(actual, str):
-            return False
-        try:
-            actual_value = datetime.fromisoformat(actual)
-        except ValueError:
-            return False
-        operand_value = datetime.fromisoformat(operand)
-    else:
-        actual_value = actual
-        operand_value = operand
-
-    try:
-        if operator == "gt":
-            return actual_value > operand_value
-        if operator == "gte":
-            return actual_value >= operand_value
-        if operator == "lt":
-            return actual_value < operand_value
-        return actual_value <= operand_value
-    except TypeError:
-        # A corrupt historical row does not satisfy a typed predicate.
-        # Writes already enforce declared shape; this keeps a read from
-        # surfacing an uncoded Python comparison failure if old data does not.
-        return False
 
 
-def _evaluate_where_clause(payload: dict[str, Any], clause: _WhereClause) -> bool:
-    field, prop_type, operator, operand = clause
-    if operator == _CONJUNCTION:
-        return all(_evaluate_where_clause(payload, sub) for sub in operand)
-    actual = payload.get(field)
-    if operator == "eq":
-        return bool(actual == operand)
-    if operator == "ne":
-        return bool(actual != operand)
-    if operator == "in":
-        return bool(actual in operand)
-    if operator == "contains":
-        return bool(isinstance(actual, str) and operand in actual)
-    return _evaluate_comparison(actual, prop_type, operator, operand)
 
 
-def _evaluate_where(
-    payload: dict[str, Any], clauses: tuple[_WhereClause, ...]
-) -> bool:
-    """Evaluate the normalized where clauses against one stored payload.
-
-    This is deliberately the only operator evaluator. Typed and string
-    client reads, aggregate selection, BoundQuery reads, and MCP reads all
-    converge on ``GuardedQuery`` before reaching this function.
-    """
-    return all(_evaluate_where_clause(payload, clause) for clause in clauses)
 
 
-def _operator_type_mismatch(
-    obj_type: str,
-    field: str,
-    operator: object,
-    prop_type: str,
-    detail: str,
-) -> NoReturn:
-    raise ValidationFailed(
-        f"{obj_type}.{field}: operator {operator!r} is incompatible with "
-        f"declared type {prop_type!r} ({detail})",
-        code="OPERATOR_TYPE_MISMATCH",
-    )
 
 
-def _unknown_operator(obj_type: str, field: str, operator: object) -> NoReturn:
-    raise ValidationFailed(
-        f"{obj_type}.{field}: unknown where operator {operator!r}",
-        code="UNKNOWN_OPERATOR",
-    )
 
 
 def _order_sort_value(value: Any, prop_type: PropertyType) -> tuple[int, Any]:
@@ -643,7 +467,7 @@ class GuardedQuery:
         if errors:
             raise ValidationFailed("; ".join(errors), code="SCOPE_POLICY_ERROR")
         if group_by is not None:
-            self._validate_group_by(obj_type, group_by)
+            _validate_group_by(self._registry, obj_type, group_by)
         normalized_where = _normalize_where(where)
         return _ReadDisclosure(
             where=normalized_where,
@@ -766,6 +590,18 @@ class GuardedQuery:
         self._require_coherent_scope(obj_type)
         return tuple(sorted(self._hidden_fields(consumer, obj_type, disclosure="learned")))
 
+    def _validate_where_keys(
+        self, obj_type: str, where: _NormalizedWhere | None
+    ) -> None:
+        """Refuse unknown `where=` keys for a string-form object name."""
+        _validate_where_keys(self._registry, obj_type, where)
+
+    def _compile_where(
+        self, obj_type: str, where: _NormalizedWhere | None
+    ) -> _WhereMatcher | None:
+        """Compile `where` into a row matcher."""
+        return _compile_where(self._registry, obj_type, where)
+
     def _redact(
         self,
         consumer: Consumer,
@@ -870,346 +706,14 @@ class GuardedQuery:
             visible.append((position, entry, event.model_copy(update={"payload": payload}), hidden))
         return visible
 
-    def _validate_where_keys(
-        self, obj_type: str, where: _NormalizedWhere | None
-    ) -> None:
-        """Refuse unknown `where=` keys for a string-form object name.
 
-        The registry descriptor is the string surface's equivalent of the
-        typed model's `model_fields`. Lineage metadata is not in that payload
-        schema, so keys such as `source_system` keep the existing
-        `UNKNOWN_FIELD` rejection shape instead of becoming filterable.
-        Unknown object names use the registry's existing
-        `UNKNOWN_OBJECT_TYPE` refusal before payload validation.
-        """
-        if not where:
-            return
-        obj_def = self._registry.get_object_type(obj_type)
-        unknown = {field for field, _ in where} - {
-            prop.name for prop in obj_def.properties
-        }
-        if unknown:
-            raise ValidationFailed(
-                f"{obj_type}: where= names unknown field(s) "
-                f"{sorted(unknown)!r}",
-                code="UNKNOWN_FIELD",
-            )
 
-    def _validate_group_by(self, obj_type: str, group_by: str) -> None:
-        """Refuse a `group_by` that is not a declared, groupable property.
 
-        Existence first, and with the same `UNKNOWN_FIELD` code and message
-        shape `order_by` already uses on this surface: an unknown name must
-        not be answered with a number, and the three identifier parameters of
-        one read must not disagree about what an unknown name is.
 
-        Then the declared TYPE, checked before a single row is read. Doing it
-        on the declaration rather than on the stored values is the point: a
-        `json` property whose rows all happen to hold scalars would otherwise
-        group fine until the first `dict` a connector delivered, which is the
-        same data-dependent silence the bare `TypeError` had. A hidden
-        `group_by` is deliberately NOT decided here -- it is a declared field,
-        so it passes existence and reaches `_aggregate`'s visibility gate
-        unchanged; answering `UNKNOWN_FIELD` for it would both leak "no such
-        field" about a field that exists and make that gate unreachable.
-        """
-        obj_def = self._registry.get_object_type(obj_type)
-        declared = {prop.name: prop.type for prop in obj_def.properties}
-        if group_by not in declared:
-            raise ValidationFailed(
-                f"{obj_type}: group_by names unknown field(s) [{group_by!r}]",
-                code="UNKNOWN_FIELD",
-            )
-        group_by_type = declared[group_by]
-        if group_by_type not in _GROUPABLE_PROPERTY_TYPES:
-            raise ValidationFailed(
-                f"{obj_type}.{group_by} is declared {group_by_type!r}, which "
-                "cannot be a group key -- its values need not be hashable, so "
-                "grouping by it fails on the data rather than on the "
-                "declaration",
-                code="INVALID_GROUP_BY",
-            )
 
-    def _validate_read_fields(
-        self,
-        consumer: Consumer,
-        obj_type: str,
-        disclosure: _ReadDisclosure,
-        order_by: Any,
-    ) -> _OrderSpec | None:
-        """Run the one field-gate path shared by filtered/ordered reads.
 
-        Unknown and hidden fields are rejected before where-operator
-        validation. The order_by value deliberately enters this same gate
-        before its direction is checked, so an unknown or hidden field cannot
-        be used to probe which ordering forms the ontology accepts.
-        """
-        self._validate_where_keys(obj_type, disclosure.where)
 
-        order_shape: tuple[str, object] | None
-        if order_by is None:
-            order_shape = None
-        elif isinstance(order_by, str):
-            order_shape = (order_by, "asc")
-        elif (
-            isinstance(order_by, (tuple, list))
-            and len(order_by) == 2
-            and isinstance(order_by[0], str)
-        ):
-            order_shape = (order_by[0], order_by[1])
-        else:
-            raise ValidationFailed(
-                "get_objects order_by must be a field name or a "
-                "(field, 'asc'|'desc') pair",
-                code="INVALID_PARAMS",
-            )
 
-        if order_shape is not None:
-            order_field, _direction = order_shape
-            obj_def = self._registry.get_object_type(obj_type)
-            declared = {prop.name for prop in obj_def.properties}
-            if order_field not in declared:
-                raise ValidationFailed(
-                    f"{obj_type}: order_by names unknown field(s) "
-                    f"[{order_field!r}]",
-                    code="UNKNOWN_FIELD",
-                )
-
-        if disclosure.where_fields:
-            # The scope-key exemption belongs only to predicates whose shape
-            # supplies explicit values. Learning-shaped and malformed clauses
-            # consult the un-exempted hidden set before operator validation.
-            denied_keys = {
-                field
-                for field, field_disclosure in disclosure.where_fields
-                if field
-                in self._hidden_fields(
-                    consumer,
-                    obj_type,
-                    disclosure=field_disclosure,
-                )
-            }
-            if denied_keys:
-                raise VisibilityError(
-                    f"{consumer.actor_id!r} cannot filter {obj_type} on "
-                    f"hidden field(s) {sorted(denied_keys)!r}",
-                    code="VISIBILITY_DENIED",
-                )
-
-        if order_shape is None:
-            return None
-
-        order_field, direction = order_shape
-        # Ordering discloses rank, so even a scope-routing property is a
-        # learned value here and must consult the un-exempted hidden set.
-        order_hidden = self._hidden_fields(
-            consumer, obj_type, disclosure="learned"
-        )
-        if order_field in order_hidden:
-            raise VisibilityError(
-                f"{consumer.actor_id!r} cannot order {obj_type} on "
-                f"hidden field(s) [{order_field!r}]",
-                code="VISIBILITY_DENIED",
-            )
-        if self._property_type(obj_type, order_field) == "struct":
-            raise ValidationFailed(
-                f"order_by is not supported on struct property {order_field!r}",
-                code="INVALID_PARAMS",
-            )
-        if direction not in {"asc", "desc"}:
-            raise ValidationFailed(
-                "get_objects order_by direction must be 'asc' or 'desc', "
-                f"got {direction!r}",
-                code="INVALID_PARAMS",
-            )
-        return order_field, direction == "desc"
-
-    @staticmethod
-    def _normalize_where_operand(
-        operator: object, operand: Any, prop_type: PropertyType
-    ) -> Any:
-        if operator == "in" and isinstance(operand, list):
-            return [
-                _to_storage_scalar(value, prop_type)
-                if value is not None
-                else value
-                for value in operand
-            ]
-        return (
-            _to_storage_scalar(operand, prop_type)
-            if operand is not None
-            else operand
-        )
-
-    def _validate_where_operator(
-        self,
-        obj_type: str,
-        field: str,
-        prop_type: PropertyType,
-        operator: str,
-        operand: Any,
-    ) -> None:
-        if operator in _WHERE_COMPARISON_OPERATORS:
-            if prop_type not in _COMPARABLE_PROPERTY_TYPES:
-                _operator_type_mismatch(
-                    obj_type,
-                    field,
-                    operator,
-                    prop_type,
-                    "comparisons require an int, float, date, or datetime property",
-                )
-            self._validate_where_scalar(
-                obj_type, field, operator, prop_type, operand
-            )
-        elif operator == "in":
-            if not isinstance(operand, list):
-                _operator_type_mismatch(
-                    obj_type,
-                    field,
-                    operator,
-                    prop_type,
-                    "the operand must be a list",
-                )
-            for value in operand:
-                self._validate_where_scalar(
-                    obj_type, field, operator, prop_type, value
-                )
-        elif operator == "eq":
-            # The bare form is the only equality spelling, so `eq` never
-            # reaches here from `_WHERE_OPERATORS` -- `_compile_where_clause`
-            # routes its `bare` branch here by hand. `None` stays the null
-            # test (pinned by
-            # `test_bare_null_still_filters_a_field_that_is_not_hidden`);
-            # every other operand is a declared-type scalar, same as `ne`.
-            if operand is not None:
-                self._validate_where_scalar(
-                    obj_type, field, operator, prop_type, operand
-                )
-        elif operator == "ne":
-            self._validate_where_scalar(
-                obj_type, field, operator, prop_type, operand
-            )
-        else:
-            if prop_type != "str":
-                _operator_type_mismatch(
-                    obj_type,
-                    field,
-                    operator,
-                    prop_type,
-                    "contains requires a str property",
-                )
-            self._validate_where_scalar(
-                obj_type, field, operator, prop_type, operand, scalar_type="str"
-            )
-
-    @staticmethod
-    def _validate_where_scalar(
-        obj_type: str,
-        field: str,
-        operator: str,
-        prop_type: PropertyType,
-        operand: Any,
-        *,
-        scalar_type: PropertyType | None = None,
-    ) -> None:
-        checked_type = prop_type if scalar_type is None else scalar_type
-        mismatch = validate_scalar(operand, checked_type)
-        if mismatch is not None:
-            _operator_type_mismatch(obj_type, field, operator, prop_type, mismatch)
-
-    @staticmethod
-    def _unwrap_choice_operand(operand: Any, choices: tuple[str, ...] | None) -> Any:
-        """Apply `typesys.choice_value` to a where operand (#42): an
-        ``Enum`` member is unwrapped ONLY when the field declares `choices`,
-        and only unwrapped -- the operand gains no membership check here, so
-        a field without `choices` still refuses the member as before."""
-        if isinstance(operand, list):
-            return [choice_value(value, choices) for value in operand]
-        return choice_value(operand, choices)
-
-    def _compile_where_clause(
-        self,
-        obj_type: str,
-        field: str,
-        prop_type: PropertyType,
-        condition: _NormalizedCondition,
-        choices: tuple[str, ...] | None = None,
-    ) -> _WhereClause:
-        """Compile one already-snapshotted condition.
-
-        Takes the same `_NormalizedCondition` the field gate classified, not
-        the caller's mapping -- see `_normalize_where_condition` for why a
-        second read of that mapping was a disclosure.
-        """
-        if prop_type == "struct":
-            raise ValidationFailed(
-                f"where is not supported on struct property {field!r}",
-                code="OPERATOR_TYPE_MISMATCH",
-            )
-        kind, operator, operand = condition
-        if kind in ("bare", "operator"):
-            operand = self._unwrap_choice_operand(operand, choices)
-        if kind == "bare":
-            self._validate_where_operator(obj_type, field, prop_type, "eq", operand)
-            return (
-                field,
-                prop_type,
-                "eq",
-                self._normalize_where_operand("eq", operand, prop_type),
-            )
-
-        if kind == "malformed":
-            _unknown_operator(obj_type, field, operand)
-        if kind == "operators":
-            # Each pair is validated as its own one-key clause, in caller
-            # order, so a bad key refuses with the same code and message it
-            # would get alone; the clauses are then AND-ed per row.
-            return (
-                field,
-                prop_type,
-                _CONJUNCTION,
-                tuple(
-                    self._compile_where_clause(
-                        obj_type, field, prop_type, ("operator", op, sub_operand), choices
-                    )
-                    for op, sub_operand in operand
-                ),
-            )
-        if operator not in _WHERE_OPERATORS:
-            _unknown_operator(obj_type, field, operator)
-        self._validate_where_operator(
-            obj_type, field, prop_type, operator, operand
-        )
-        return (
-            field,
-            prop_type,
-            operator,
-            self._normalize_where_operand(operator, operand, prop_type),
-        )
-
-    def _compile_where(
-        self, obj_type: str, where: _NormalizedWhere | None
-    ) -> _WhereMatcher | None:
-        """Validate operator clauses and compile them into one row matcher.
-
-        Callers invoke this only after the existing unknown-field and hidden-
-        field gates. That ordering is intentional: a caller cannot use an
-        operator error to probe a field it was not allowed to name.
-        """
-        if not where:
-            return None
-        obj_def = self._registry.get_object_type(obj_type)
-        prop_types = {prop.name: prop.type for prop in obj_def.properties}
-        prop_choices = {prop.name: prop.choices for prop in obj_def.properties}
-        clauses = [
-            self._compile_where_clause(
-                obj_type, field, prop_types[field], condition, prop_choices[field]
-            )
-            for field, condition in where
-        ]
-
-        frozen_clauses = tuple(clauses)
-        return lambda payload: _evaluate_where(payload, frozen_clauses)
 
     def _sort_entries(
         self,
@@ -1464,15 +968,21 @@ class GuardedQuery:
                 code="AFTER_WITHOUT_LIMIT",
             )
 
-        order_spec = self._validate_read_fields(
-            consumer, obj_type, disclosure, order_by
+        order_spec = _validate_read_fields(
+            self._registry,
+            self._hidden_fields,
+            consumer,
+            obj_type,
+            disclosure.where,
+            disclosure.where_fields,
+            order_by,
         )
         if effective_limit is not None and effective_limit < 1:
             raise ValidationFailed(
                 f"get_objects limit must be >= 1, got {effective_limit!r}",
                 code="INVALID_LIMIT",
             )
-        where_matcher = self._compile_where(obj_type, disclosure.where)
+        where_matcher = _compile_where(self._registry, obj_type, disclosure.where)
 
         if effective_limit is None:
             return self._unbounded_results(
@@ -1899,7 +1409,7 @@ class GuardedQuery:
         drift apart: a filter oracle closed on one path and left open on the
         other is the same disclosure either way.
         """
-        self._validate_where_keys(obj_type, disclosure.where)
+        _validate_where_keys(self._registry, obj_type, disclosure.where)
         if disclosure.where_fields:
             denied_keys = {
                 field
@@ -1933,7 +1443,7 @@ class GuardedQuery:
         method's docstring for why divergence here would be a disclosure and
         not merely an inconsistency.
         """
-        where_matcher = self._compile_where(obj_type, where)
+        where_matcher = _compile_where(self._registry, obj_type, where)
         visible = []
         for row in self._store.read_all(obj_type):
             if where_matcher is not None and not where_matcher(row.payload):
@@ -2113,7 +1623,7 @@ class GuardedQuery:
         # happen to look numeric on some rows can never sneak past the
         # type contract.
         prop_type = (
-            self._property_type(obj_type, value_field)
+            _property_type(self._registry, obj_type, value_field)
             if value_field is not None else None
         )
         # Existence, checked here and not earlier for the reason the block
@@ -2299,28 +1809,6 @@ class GuardedQuery:
         if releasing and sink is not None:
             sink.append((obj_type, value_field))
 
-    def _property_type(self, obj_type: str, field_name: str) -> str | None:
-        """The declared `PropertyType` of `field_name` on `obj_type`, or
-        `None` if `obj_type` is unregistered or declares no property by
-        that name.
-
-        The `None` answer is a refusal for the caller to act on, not a
-        permission to proceed. This docstring used to say an unrecognized
-        `value_field` was "left to the existing row-based aggregation, which
-        simply finds no matching keys", and `_aggregate` skipped its type gate
-        on that basis. Both were wrong: `meta.declared_shape_violation` allows
-        undeclared payload keys deliberately, so a row can and does carry a
-        key no property declares, and reducing over one released an ungoverned
-        number (or let `float()` raise on the data). See `_aggregate`.
-        """
-        try:
-            obj_def = self._registry.get_object_type(obj_type)
-        except ValidationFailed:
-            return None
-        for prop in obj_def.properties:
-            if prop.name == field_name:
-                return prop.type
-        return None
 
     def _contributor_count(
         self,
