@@ -11,6 +11,18 @@ you**.
 
 ## [Unreleased]
 
+## [0.25.0] — 2026-10-07
+
+```bash
+uv add "ontary @ git+https://github.com/ryoochi0112/ontary@v0.25.0"
+```
+
+A minor, additive release that completes the M3 agent surface. Agents connected over
+MCP can now discover event types with `list_event_types` and page the business events
+they may see with `list_events`, under the same visibility and redaction rules as
+`client.events()`. Nothing existing changes behavior, and the store schema stays at
+v14, so a 0.24.0 store needs no re-ingest.
+
 ### Added
 
 - Two MCP tools, `list_event_types` and `list_events`, expose the event log to agents.
