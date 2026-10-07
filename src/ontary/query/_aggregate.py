@@ -1,4 +1,18 @@
-"""min-N aggregation: grouped reductions, release, and contributor counts."""
+"""min-N aggregation: grouped reductions, release, and contributor counts.
+
+The prototype's `_contributor_count` de-duplicated contributors via a
+hardcoded `person_id` property / `byPerson` link (a Response/Person-specific
+anti-gaming rule). The generalized replacement is
+`ScopePolicy.contributor_rules` -- a per-type, declarative resolution list
+reusing the SAME `ScopeRule` machinery as scope resolution
+(`DirectProperty`/`ViaLink`/etc.) -- plus `ontary.scope.resolve_contributor`.
+`aggregate` counts DISTINCT resolved contributors per group for any object
+type an ontology author declares contributor rules for (a row whose
+contributor fails to resolve counts as its own row, mirroring the prototype's
+fallback); a type with NO contributor rules declared falls back to a plain
+row count -- the still-real, domain-agnostic floor every ontology gets for
+free with zero declarations.
+"""
 
 from __future__ import annotations
 

@@ -67,12 +67,12 @@ from ontary.model import (
     OntologyObject,
 )
 from ontary.query import (
-    _AUTHOR_DISPATCH,
     GuardedQuery,
     OrderBy,
     Page,
     TypedPage,
 )
+from ontary.query._aggregate import _AUTHOR_DISPATCH
 from ontary.security import Consumer
 from ontary.store import StoredObject
 from ontary.store._shared import iso_instant

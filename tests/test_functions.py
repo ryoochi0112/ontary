@@ -39,12 +39,12 @@ from ontary.meta import (
 )
 from ontary.model import FunctionParams, LinkHandle
 from ontary.query import (
-    _AUTHOR_DISPATCH,
     DEFAULT_READ_LIMIT,
     GuardedQuery,
     Page,
     TypedPage,
 )
+from ontary.query._aggregate import _AUTHOR_DISPATCH
 from ontary.scope import DirectProperty, ScopePolicy, SelfScope
 from ontary.security import Consumer
 from ontary.store import ObjectStore, Source

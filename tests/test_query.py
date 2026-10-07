@@ -38,7 +38,8 @@ from ontary.meta import (
     Sensitivity,
 )
 from ontary.ontology import OntologyDef
-from ontary.query import _AUTHOR_DISPATCH, GuardedQuery, _AuthorDispatch
+from ontary.query import GuardedQuery
+from ontary.query._aggregate import _AUTHOR_DISPATCH, _AuthorDispatch
 from ontary.scope import (
     CustomResolver,
     DirectProperty,

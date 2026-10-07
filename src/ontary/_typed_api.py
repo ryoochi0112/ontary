@@ -27,7 +27,6 @@ from ontary.model import (
     hydrate,
 )
 from ontary.query import (
-    _UNSET_LIMIT,
     DEFAULT_READ_LIMIT,
     AggregateFunc,
     AggregateValue,
@@ -35,10 +34,10 @@ from ontary.query import (
     OrderBy,
     Page,
     TypedPage,
-    _AuthorDispatch,
-    _normalize_where,
-    _require_where_mapping,
 )
+from ontary.query._aggregate import _AuthorDispatch
+from ontary.query._paging import _UNSET_LIMIT
+from ontary.query._where import _normalize_where, _require_where_mapping
 from ontary.security import Consumer
 from ontary.store import StoredObject
 from ontary.typesys import struct_value

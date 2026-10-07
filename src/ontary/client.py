@@ -79,13 +79,13 @@ from ontary.model import (
 )
 from ontary.ontology import OntologyDef, SupportsDefinition, resolve_definition
 from ontary.query import (
-    _UNSET_LIMIT,
     DEFAULT_READ_LIMIT,
     GuardedQuery,
     OrderBy,
     Page,
     TypedPage,
 )
+from ontary.query._paging import _UNSET_LIMIT
 from ontary.security import Consumer
 from ontary.store import Source, Store, StoredObject
 
