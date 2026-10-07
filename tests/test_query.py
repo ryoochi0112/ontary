@@ -3139,6 +3139,9 @@ def test_every_public_read_routes_through_the_disclosure_gate(
         "count": lambda guarded: guarded.count(human, "Reading"),
         "exists": lambda guarded: guarded.exists(human, "Reading"),
         "traverse": lambda guarded: guarded.traverse(human, "inLibrary", "shelf-1"),
+        "traverse_page": lambda guarded: guarded.traverse_page(
+            human, "inLibrary", "shelf-1", limit=1
+        ),
         "aggregate": lambda guarded: guarded.aggregate(human, "Reading", "score"),
         "aggregate_by": lambda guarded: guarded.aggregate_by(human, "Reading", "score", "shelf_id"),
         "count_contributors": lambda guarded: guarded.count_contributors(human, "Reading"),

@@ -1544,14 +1544,19 @@ class GuardedQuery:
             )
         )
 
-    def traverse(
+    def _traverse_targets(
         self,
         consumer: Consumer,
         link_type: str,
         from_id: str,
         *,
-        reverse: bool = False,
-    ) -> list[StoredObject]:
+        reverse: bool,
+    ) -> tuple[str, list[str]]:
+        """The one gate every link traversal passes before it reads a row:
+        the identity-revealing denial, the target type, the scope-coherence
+        check, and the link's id list in the store's link order. Returns
+        `(target_type, target_ids)`; ids are raw (unchecked for visibility).
+        """
         link_def = self._registry.get_link_type(link_type)
         if link_def.identity_revealing and consumer.kind == "human":
             # e.g. an anonymized-survey-response -> authoring-person link:
@@ -1573,6 +1578,19 @@ class GuardedQuery:
             if reverse
             else self._store.links_from(link_type, from_id)
         )
+        return target_type, target_ids
+
+    def traverse(
+        self,
+        consumer: Consumer,
+        link_type: str,
+        from_id: str,
+        *,
+        reverse: bool = False,
+    ) -> list[StoredObject]:
+        target_type, target_ids = self._traverse_targets(
+            consumer, link_type, from_id, reverse=reverse
+        )
         scope_cache = _ScopeReadCache()
         results = []
         for tid in target_ids:
@@ -1583,6 +1601,68 @@ class GuardedQuery:
                 continue
             results.append(self._redact(consumer, target_type, row))
         return results
+
+    def traverse_page(
+        self,
+        consumer: Consumer,
+        link_type: str,
+        from_id: str,
+        *,
+        reverse: bool = False,
+        limit: int,
+        after: str | None = None,
+    ) -> Page:
+        """One page of `traverse`, in the same (store link) order.
+
+        Keeps `limit` visible linked rows and peeks one more visible row to
+        set `has_more`; rows that are missing or hidden from this consumer
+        never count. `next_cursor` is the object id of the last kept row
+        when `has_more` is true, else `None`.
+
+        `after` resumes after that object id. An id this consumer cannot
+        resume from -- not in the current link list, no current row, or a
+        row hidden from this consumer -- refuses with `STALE_CURSOR` and one
+        identical message for all three, so a guessed `after` never reveals
+        that a hidden row is linked here.
+        """
+        target_type, target_ids = self._traverse_targets(
+            consumer, link_type, from_id, reverse=reverse
+        )
+        if limit < 1:
+            raise ValidationFailed(
+                f"traverse_page limit must be >= 1, got {limit!r}",
+                code="INVALID_LIMIT",
+            )
+        scope_cache = _ScopeReadCache()
+        start = 0
+        if after is not None:
+            resume_row = None
+            if after in target_ids:
+                resume_row = self._store.read_current(target_type, after)
+            if resume_row is None or not self._visible(
+                consumer, resume_row, scope_cache=scope_cache
+            ):
+                raise ValidationFailed(
+                    "traverse: the cursor no longer names a linked row you can "
+                    "resume from; restart the traversal from the first page",
+                    code="STALE_CURSOR",
+                )
+            start = target_ids.index(after) + 1
+
+        # Peek one visible row past `limit`, as `_row_id_page` does: only
+        # rows that pass `_visible` count, and the peeked row is never
+        # redacted or returned (`_page_of` keeps the first `limit`).
+        kept: list[tuple[str | None, StoredObject]] = []
+        for tid in target_ids[start:]:
+            row = self._store.read_current(target_type, tid)
+            if row is None or not self._visible(
+                consumer, row, scope_cache=scope_cache
+            ):
+                continue
+            kept.append((tid, row))
+            if len(kept) > limit:
+                break
+        return self._page_of(consumer, target_type, kept, limit)
 
     # -- aggregation -----------------------------------------------------
 

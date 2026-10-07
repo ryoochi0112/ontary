@@ -229,8 +229,9 @@ ERROR_CODES: dict[str, ErrorCodeInfo] = {
     "STALE_CURSOR": ErrorCodeInfo(
         kind="validation",
         description=(
-            "An ordered walk's cursor resolved to a row that is no longer "
-            "current; restart the ordered walk from the first page."
+            "An ordered walk's or a link traversal's cursor no longer names a "
+            "current row this consumer can resume from; restart from the first "
+            "page."
         ),
     ),
     "PRECONDITION_FAILED": ErrorCodeInfo(
