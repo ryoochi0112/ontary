@@ -278,6 +278,11 @@ struct はフラットです。入れ子のモデル、モデルの list や map
 これらが生成される `ActionParameterDef` の `refers_to` / `scope_semantics` を決めます。
 つまりスコープ強制は、エンジンのハードコードではなく**作者が宣言する**ものです。
 
+パラメータの説明は `Field(description=...)` で付けます。
+`prop`、`target`、`scope_ref`、`ref` の `description=...` でも付けられます。
+説明は `ActionParameterDef.description` と、MCP の `list_action_types` / `list_functions` のパラメータに載ります。
+説明のないパラメータは `null` になります。docstring は読みません。
+
 #### `ActionParams`
 
 型付き Action パラメータモデルの基底クラス。フィールドには上記マーカーを使います。
@@ -391,8 +396,8 @@ lint。一覧は [CLI リファレンス](cli.ja.md)）ごとに `Finding` を�
   | --- | --- | --- |
   | `prop(...)` | `accept=` | `STORED_DERIVABLE`, `FREE_TEXT_STATUS` |
   | `@ontology.object(...)` | `accept=` | `FORBIDDEN_TYPE_NAME`, `AUDIT_TYPE` |
-  | `@ontology.action(...)` | `accept=` | `CRUD_ACTION_NAME`, `MICRO_ACTION` |
-  | `@ontology.function(...)` | `accept=` | `CRUD_ACTION_NAME` |
+  | `@ontology.action(...)` | `accept=` | `CRUD_ACTION_NAME`, `MICRO_ACTION`, `MISSING_DESCRIPTION` |
+  | `@ontology.function(...)` | `accept=` | `CRUD_ACTION_NAME`, `MISSING_DESCRIPTION` |
   | `@ontology.event(...)` | `accept=` | `EVENT_NEVER_EMITTED` |
 
   受け付ける名前は、`ontary.meta` の `Literal` エイリアス `PropertyLint`、
@@ -481,7 +486,7 @@ covers_scope(policy, consumer, resolved) -> bool
 | `PropertyDef` | `name`, `type`, `choices`, `fields`, `transitions`, `required`, `sensitivity`, `scope_level` |
 | `LinkTypeDef` | `api_name`, `from_type`, `to_type`, `cardinality`, `description`, `identity_revealing`, `owned` |
 | `ActionTypeDef` | `api_name`, `display_name`, `target_type`, `executable_by_roles`, `description`, `parameters`, `capabilities` |
-| `ActionParameterDef` | `name`, `type`, `choices`, `fields`, `required`, `refers_to`, `scope_semantics` |
+| `ActionParameterDef` | `name`, `type`, `description`, `choices`, `fields`, `required`, `refers_to`, `scope_semantics` |
 | `StructFieldDef` | `name`, `type`, `choices`, `required` |
 | `TransitionDef` | `initial`, `moves` |
 | `RuleDef` | `name`, `message`, `check` |

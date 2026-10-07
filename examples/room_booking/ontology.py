@@ -114,7 +114,13 @@ def _check_overlap(
             )
 
 
-@ontology.action(BookSession, api_name="book_session", target=Session, roles=["Coordinator"])
+@ontology.action(
+    BookSession,
+    api_name="book_session",
+    target=Session,
+    roles=["Coordinator"],
+    description="Book a room for a session, refusing double-booking of the room.",
+)
 def book_session(ctx: ActionContext, p: BookSession) -> dict[str, str]:
     session = ctx.get(Session, p.session_id)
     room = ctx.get(Room, p.room_id)
@@ -139,7 +145,11 @@ def book_session(ctx: ActionContext, p: BookSession) -> dict[str, str]:
 
 
 @ontology.action(
-    RescheduleSession, api_name="reschedule_session", target=Session, roles=["Coordinator"]
+    RescheduleSession,
+    api_name="reschedule_session",
+    target=Session,
+    roles=["Coordinator"],
+    description="Move a session's live booking to a new time window.",
 )
 def reschedule_session(ctx: ActionContext, p: RescheduleSession) -> dict[str, str]:
     session = ctx.get(Session, p.session_id)
@@ -167,7 +177,13 @@ def reschedule_session(ctx: ActionContext, p: RescheduleSession) -> dict[str, st
     return {"booking_id": booking.id}
 
 
-@ontology.action(CancelBooking, api_name="cancel_booking", target=Session, roles=["Coordinator"])
+@ontology.action(
+    CancelBooking,
+    api_name="cancel_booking",
+    target=Session,
+    roles=["Coordinator"],
+    description="Cancel a session's live booking.",
+)
 def cancel_booking(ctx: ActionContext, p: CancelBooking) -> dict[str, str]:
     session = ctx.get(Session, p.session_id)
     if session is None:

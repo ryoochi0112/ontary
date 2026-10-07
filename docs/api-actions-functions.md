@@ -199,7 +199,8 @@ declared choices raise `ValidationFailed` with `code="INVALID_PARAMS"` before th
 handler runs. A no-input function also rejects non-empty params with that code.
 
 `FunctionDef.parameters` and MCP `list_functions` expose typed inputs as
-parameters with `name`, `type`, `choices`, `fields`, `required`, and `refers_to`,
+parameters with `name`, `type`, `description`, `choices`, `fields`, `required`, and
+`refers_to`,
 matching the action parameter shape without `scope_semantics`. The value is
 `[]` for a no-input function.
 `client.call_function` refuses an argument that is neither a function name nor a

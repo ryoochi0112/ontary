@@ -22,6 +22,8 @@ from ontary.meta import (
     ObjectTypeDef,
     PropertyDef,
     Sensitivity,
+    default_action_description,
+    default_function_description,
     target_param_mismatch,
 )
 from ontary.scope import (
@@ -64,6 +66,7 @@ GUIDE_ANCHORS: dict[str, tuple[str, ...]] = {
     "STORED_DERIVABLE": ("normalization-and-derived-values",),
     "MICRO_ACTION": ("action-sprawl",),
     "CRUD_ACTION_NAME": ("action-sprawl", "retirement-and-removal"),
+    "MISSING_DESCRIPTION": ("descriptions-for-agents",),
     "FORBIDDEN_TYPE_NAME": ("the-time-machine",),
     "FREE_TEXT_STATUS": ("choice-properties",),
     "AUDIT_TYPE": ("the-golden-hammer",),
@@ -872,6 +875,33 @@ def _min_n_unset_findings(
     )
 
 
+def _missing_description_findings(definition: "OntologyDef") -> tuple[Finding, ...]:
+    """Warn when an action or Function has no description an agent can read."""
+    findings: list[Finding] = []
+    for kind, declarations, default in (
+        ("action", definition.registry.action_types, default_action_description),
+        ("function", definition.registry.functions, default_function_description),
+    ):
+        for api_name in sorted(declarations):
+            declaration = declarations[api_name]
+            if "MISSING_DESCRIPTION" in declaration.accept:
+                continue
+            description = declaration.description
+            if description.strip() != "" and description != default(api_name):
+                continue
+            findings.append(
+                _warn(
+                    "MISSING_DESCRIPTION",
+                    f"{kind} {api_name}",
+                    f"{kind} has no description, so an agent sees only a generic placeholder",
+                    f"say what {api_name} does and when to use it with description=...; "
+                    'if the name is self-explanatory, add accept="MISSING_DESCRIPTION"',
+                    GUIDE_URL + "#" + GUIDE_ANCHORS["MISSING_DESCRIPTION"][0],
+                )
+            )
+    return tuple(findings)
+
+
 RULES: tuple[DiagnosticRule, ...] = (
     _registry_owned_default_findings,
     _registry_link_findings,
@@ -887,6 +917,7 @@ RULES: tuple[DiagnosticRule, ...] = (
     _event_never_emitted_findings,
     _unscoped_sensitive_findings,
     _min_n_unset_findings,
+    _missing_description_findings,
 )
 
 

@@ -705,9 +705,11 @@ def test_lint_accept_typing_surface() -> None:
 
     ontology.object(layer="L0", accept="AUDIT_TYPE")
     ontology.action(Params, target=Example, roles=[], accept="MICRO_ACTION")
-    ontology.action(Params, target=Example, roles=[], accept=["MICRO_ACTION", "CRUD_ACTION_NAME"])
+    ontology.action(Params, target=Example, roles=[], accept=["MICRO_ACTION", "CRUD_ACTION_NAME", "MISSING_DESCRIPTION"])
     ontology.function(accept="CRUD_ACTION_NAME")
-    ontology.function(accept=["CRUD_ACTION_NAME"])
+    ontology.function(accept=["CRUD_ACTION_NAME", "MISSING_DESCRIPTION"])
+    ontology.function(accept="MISSING_DESCRIPTION")
+    ontology.action(Params, target=Example, roles=[], accept="MISSING_DESCRIPTION")
     ontology.function(FunctionParams, accept="CRUD_ACTION_NAME")
     ontology.function(FunctionParams, accept=["CRUD_ACTION_NAME"])
 

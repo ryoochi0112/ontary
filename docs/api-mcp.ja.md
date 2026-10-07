@@ -43,7 +43,8 @@ server = build_mcp_server(ontology, store, consumer, *, name=None,
 ない場合、エンジンが `INVALID_PARAMS`（`value_field is required`）で拒否します。`execute_action` と
 `call_function` は、Action や Function のパラメータをパラメータ名をキーとする 1 つの `params`
 オブジェクトで受け取ります。パラメータがなくても `{}` を渡してください。`list_action_types` と
-`list_functions` は各パラメータの名前・型・必須かどうかを公開します。
+`list_functions` は各パラメータの名前・型・`description`・必須かどうかを公開します。
+`description` は説明がないパラメータでは `null` です。
 
 | ツール | 必須の引数 | 任意の引数 |
 | --- | --- | --- |

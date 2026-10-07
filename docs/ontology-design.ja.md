@@ -410,6 +410,32 @@ def session_placement(
 
 *Source: Palantir, "Ontology design: Structural guidance".*
 
+### Descriptions for agents
+
+MCP カタログは、各 Action と Function の description をエージェントに見せます。
+エージェントは、操作を選ぶときにこの文章を読みます。設定するには、
+`@ontology.action` または `@ontology.function` に `description=` を渡します。
+パラメーターの説明は、フィールドの `Field(description=...)` に書きます。
+
+```python
+class EscalateTicketParams(ActionParams):
+    ticket_id: str = target(Ticket, description="The ticket to escalate.")
+    reason: str | None = Field(default=None, description="Why the ticket needs escalation.")
+
+@ontology.action(
+    EscalateTicketParams,
+    target=Ticket,
+    description="Opens an Escalation for a Ticket and assigns an Agent.",
+)
+def escalate(ctx: ActionContext, params: EscalateTicketParams) -> None: ...
+```
+
+カタログは docstring を読みません。`description=` を省くと、既定の文は
+"Executes X." や "Computes X." になり、エージェントには何も伝わりません。
+ビジネス動詞が何をするか、いつ使うかを書いてください。名前から意味が自明な場合は
+`accept="MISSING_DESCRIPTION"` で除外できます。パラメーターの説明は任意で、
+lint の対象ではありません。
+
 ### Retirement and removal
 
 リタイアはビジネス上の動詞です。`ActionTypeDef` を `OffboardEmployee` や `CancelSubscription` の

@@ -94,11 +94,11 @@ def test_action_type_struct_parameter_lists_inner_fields(server: MCPServer) -> N
     action = next(item for item in payload["action_types"] if item["api_name"] == "Reprice")
     params = {item["name"]: item for item in action["parameters"]}
     assert params["price"] == {
-        "name": "price", "type": "struct", "choices": None, "fields": FIELDS,
+        "name": "price", "type": "struct", "description": None, "choices": None, "fields": FIELDS,
         "required": True, "refers_to": None, "scope_semantics": None,
     }
     assert params["reason"] == {
-        "name": "reason", "type": "str", "choices": None, "fields": None,
+        "name": "reason", "type": "str", "description": None, "choices": None, "fields": None,
         "required": True, "refers_to": None, "scope_semantics": None,
     }
 

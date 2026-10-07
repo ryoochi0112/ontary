@@ -283,6 +283,11 @@ All take an `OntologyObject` subclass and pass extra kwargs to `Field`.
 These drive `refers_to` / `scope_semantics` on the generated `ActionParameterDef`, so
 scope enforcement is declared by the author rather than hardcoded in the engine.
 
+Set a parameter's text with `Field(description=...)`, or with `description=...` on
+`prop`, `target`, `scope_ref`, or `ref`. It reaches `ActionParameterDef.description`
+and the parameter objects in the MCP `list_action_types` and `list_functions` tools.
+A parameter without a description shows `null`. Docstrings are never read.
+
 #### `ActionParams`
 
 Base class for typed action-params models. Fields use the markers above.
@@ -395,8 +400,8 @@ the fields `code`, `severity`, `location`, `message`, `fix_hint`, and `guide`.
   | --- | --- | --- |
   | `prop(...)` | `accept=` | `STORED_DERIVABLE`, `FREE_TEXT_STATUS` |
   | `@ontology.object(...)` | `accept=` | `FORBIDDEN_TYPE_NAME`, `AUDIT_TYPE` |
-  | `@ontology.action(...)` | `accept=` | `CRUD_ACTION_NAME`, `MICRO_ACTION` |
-  | `@ontology.function(...)` | `accept=` | `CRUD_ACTION_NAME` |
+  | `@ontology.action(...)` | `accept=` | `CRUD_ACTION_NAME`, `MICRO_ACTION`, `MISSING_DESCRIPTION` |
+  | `@ontology.function(...)` | `accept=` | `CRUD_ACTION_NAME`, `MISSING_DESCRIPTION` |
   | `@ontology.event(...)` | `accept=` | `EVENT_NEVER_EMITTED` |
 
   The accepted names are the `Literal` aliases `PropertyLint`, `ObjectLint`,
@@ -483,7 +488,7 @@ data-driven ontologies; most authors should use `Ontology`.
 | `PropertyDef` | `name`, `type`, `choices`, `fields`, `transitions`, `required`, `sensitivity`, `scope_level` |
 | `LinkTypeDef` | `api_name`, `from_type`, `to_type`, `cardinality`, `description`, `identity_revealing`, `owned` |
 | `ActionTypeDef` | `api_name`, `display_name`, `target_type`, `executable_by_roles`, `description`, `parameters`, `capabilities` |
-| `ActionParameterDef` | `name`, `type`, `choices`, `fields`, `required`, `refers_to`, `scope_semantics` |
+| `ActionParameterDef` | `name`, `type`, `description`, `choices`, `fields`, `required`, `refers_to`, `scope_semantics` |
 | `StructFieldDef` | `name`, `type`, `choices`, `required` |
 | `TransitionDef` | `initial`, `moves` |
 | `RuleDef` | `name`, `message`, `check` |

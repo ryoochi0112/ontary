@@ -68,6 +68,8 @@ from ontary.meta import (
     Sensitivity,
     StructFieldDef,
     TransitionDef,
+    default_action_description,
+    default_function_description,
     target_param_mismatch,
 )
 from ontary.model import ActionParams as ActionParams
@@ -690,6 +692,7 @@ def _derive_params(
             ActionParameterDef(
                 name=field_name,
                 type=property_type,
+                description=field_info.description,
                 choices=choices,
                 fields=fields,
                 required=required,
@@ -1169,7 +1172,7 @@ class Ontology:
                 executable_by_roles=list(roles),
                 description=description
                 if description is not None
-                else f"Executes {name}.",
+                else default_action_description(name),
                 parameters=parameters,
                 capabilities=capability_names,
                 emits=event_names,
@@ -1284,7 +1287,7 @@ class Ontology:
                 api_name=resolved_name,
                 description=description
                 if description is not None
-                else f"Computes {resolved_name}.",
+                else default_function_description(resolved_name),
                 input_description=input_description,
                 output_description=output_description,
                 parameters=parameters,

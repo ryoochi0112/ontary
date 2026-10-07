@@ -42,7 +42,8 @@ also needs `value_field` for every `func` except `"count"`; without it the engin
 refuses with `INVALID_PARAMS` (`value_field is required`). `execute_action` and `call_function`
 take the action's or Function's parameters as one `params` object, keyed by
 parameter name, even when it is empty (`{}`). `list_action_types` and
-`list_functions` publish each parameter's name, type, and required status.
+`list_functions` publish each parameter's name, type, `description` (`null` when undescribed),
+and required status.
 
 | Tool | Required arguments | Optional arguments |
 | --- | --- | --- |
