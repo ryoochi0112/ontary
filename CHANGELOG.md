@@ -11,6 +11,20 @@ you**.
 
 ## [Unreleased]
 
+## [0.23.0] — 2026-10-07
+
+```bash
+uv add "ontary @ git+https://github.com/ryoochi0112/ontary@v0.23.0"
+```
+
+A minor release with breaking changes to list completeness. MCP `traverse_links`
+now returns one page of at most 100 rows by default, so callers that read every row
+must page with `limit` and `after`. MCP list results add `has_more`, and
+`next_cursor` is `null` exactly when no more rows remain. In Python, `Page` and
+`TypedPage` gain `has_more` as a required constructor field, so code that builds a
+`Page` directly must pass it. The store schema stays at v14, so a 0.22.0 store needs
+no re-ingest.
+
 ### Changed
 
 - **MCP `traverse_links` returns a default page of 100 rows (breaking).** It used to
