@@ -22,6 +22,10 @@ class _QueryHost(Protocol):
         resolved_scope: dict[str, str | None] | None = None,
     ) -> bool: ...
 
+    def _hidden_fields(
+        self, consumer: Consumer, obj_type: str, *, disclosure: Literal["supplied", "learned"],
+    ) -> set[str]: ...
+
     def _redact(
         self, consumer: Consumer, obj_type: str, obj: StoredObject,
     ) -> StoredObject: ...
