@@ -49,6 +49,7 @@ from ontary.authoring import Ontology, OntologyObject, prop
 from ontary.client import OntologyClient, OntologyRuntime
 from ontary.errors import ValidationFailed, VisibilityError
 from ontary.model import Event
+from ontary.store import StoredObject
 from ontary.testing import Scenario, consumer, scenario
 
 
@@ -260,6 +261,16 @@ def test_typed_traverse_comment_on_ticket_returns_list_of_ticket() -> None:
     tickets = client.traverse(commentOnTicket, ids["comment_id"])
     assert_type(tickets, list[Ticket])
     assert [t.id for t in tickets] == [ids["ticket_1_id"]]
+
+
+def test_string_traverse_pins_page_with_limit_and_list_without() -> None:
+    client, ids = _client()
+    page = client.traverse("Comment", "commentOnTicket", ids["comment_id"], limit=100)
+    assert_type(page, Page)
+    assert page.has_more is False
+    rows = client.traverse("Comment", "commentOnTicket", ids["comment_id"])
+    assert_type(rows, list[StoredObject])
+    assert [r.payload["id"] for r in rows] == [ids["ticket_1_id"]]
 
 
 def test_typed_traverse_comment_by_agent_denied_for_human_consumer() -> None:

@@ -41,6 +41,7 @@ from ontary.meta import (
 )
 from ontary.model import FunctionParams
 from ontary.ontology import OntologyDef
+from ontary.query import Page
 from ontary.scope import DirectProperty, ScopePolicy, SelfScope, ViaLink
 from ontary.security import Consumer
 from ontary.store import ObjectStore, Source
@@ -362,6 +363,88 @@ def test_traverse_unknown_link_raises_unknown_name(
 
     with raises_code(ValidationFailed, "UNKNOWN_NAME"):
         client.traverse("Book", "noSuchLink", "book-1")
+
+
+def _paged_traverse_client(
+    make_registry: RegistryFactory, make_policy: PolicyFactory
+) -> OntologyClient:
+    client, store = _build_client(_library_librarian(), make_registry, make_policy)
+    store.insert("Shelf", {"id": "shelf-2", "library_id": "lib-1"}, SRC)
+    store.create_link("inLibrary", "shelf-2", "lib-1")
+    store.create_link("relatedShelf", "book-1", "shelf-1")
+    store.create_link("relatedShelf", "book-1", "shelf-2")
+    return client
+
+
+def test_traverse_with_limit_returns_page_with_has_more(
+    make_registry: RegistryFactory,
+    make_policy: PolicyFactory,
+) -> None:
+    client = _paged_traverse_client(make_registry, make_policy)
+    first = client.traverse("Book", "relatedShelf", "book-1", limit=1)
+    assert isinstance(first, Page)
+    assert len(first.items) == 1
+    assert first.has_more is True
+    assert first.next_cursor is not None
+    second = client.traverse(
+        "Book", "relatedShelf", "book-1", limit=1, after=first.next_cursor
+    )
+    assert len(second.items) == 1
+    assert second.has_more is False
+    assert second.next_cursor is None
+    assert {first.items[0].payload["id"], second.items[0].payload["id"]} == {
+        "shelf-1",
+        "shelf-2",
+    }
+    whole = client.traverse("Book", "relatedShelf", "book-1", limit=2)
+    assert len(whole.items) == 2
+    assert whole.has_more is False
+
+
+def test_traverse_without_limit_returns_full_list(
+    make_registry: RegistryFactory,
+    make_policy: PolicyFactory,
+) -> None:
+    client = _paged_traverse_client(make_registry, make_policy)
+    rows = client.traverse("Book", "relatedShelf", "book-1")
+    assert isinstance(rows, list)
+    assert {r.payload["id"] for r in rows} == {"shelf-1", "shelf-2"}
+
+
+def test_traverse_after_without_limit_is_refused(
+    make_registry: RegistryFactory,
+    make_policy: PolicyFactory,
+) -> None:
+    client = _paged_traverse_client(make_registry, make_policy)
+    with raises_code(ValidationFailed, "AFTER_WITHOUT_LIMIT"):
+        client.traverse("Book", "relatedShelf", "book-1", after="c")
+
+
+def test_traverse_limit_zero_is_invalid_limit(
+    make_registry: RegistryFactory,
+    make_policy: PolicyFactory,
+) -> None:
+    client = _paged_traverse_client(make_registry, make_policy)
+    with raises_code(ValidationFailed, "INVALID_LIMIT"):
+        client.traverse("Book", "relatedShelf", "book-1", limit=0)
+
+
+def test_traverse_undeclared_anchor_wins_over_after_without_limit(
+    make_registry: RegistryFactory,
+    make_policy: PolicyFactory,
+) -> None:
+    client = _paged_traverse_client(make_registry, make_policy)
+    with raises_code(ValidationFailed, "UNKNOWN_OBJECT_TYPE"):
+        client.traverse("NoSuchType", "relatedShelf", "x", after="c")
+
+
+def test_traverse_unknown_link_wins_over_invalid_limit(
+    make_registry: RegistryFactory,
+    make_policy: PolicyFactory,
+) -> None:
+    client = _paged_traverse_client(make_registry, make_policy)
+    with raises_code(ValidationFailed, "UNKNOWN_NAME"):
+        client.traverse("Book", "noSuchLink", "book-1", limit=0)
 
 
 def test_aggregate_delegates_to_guarded_query(
