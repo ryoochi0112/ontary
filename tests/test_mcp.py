@@ -34,6 +34,7 @@ import inspect
 import json
 import re
 import sys
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -1518,6 +1519,157 @@ def test_nested_action_result_reaches_client_and_mcp() -> None:
     assert _call(
         server, "execute_action", {"api_name": "ReturnNested", "params": {}}
     ) == {"result": expected}
+
+
+# -- JSON result boundary (#167) ---------------------------------------------
+
+_DATETIME_RESULT_EXPECTED = {
+    "next_free": "2026-10-07T03:00:00+00:00",
+    "slots": [{"starts_at": "2026-10-06T09:00:00+00:00"}, {"day": "2026-10-06"}],
+}
+
+
+def _build_result_boundary_ontology() -> Ontology:
+    """`_base_library_ontology()` plus Functions and Actions whose handlers
+    return values at the JSON boundary: datetimes/dates (encoded), and
+    unencodable results (refused with `RESULT_NOT_JSON`)."""
+    ontology, Book = _base_library_ontology()
+
+    def _datetime_result() -> dict[str, Any]:
+        return {
+            "next_free": datetime(2026, 10, 7, 3, 0, tzinfo=UTC),
+            "slots": [
+                {"starts_at": datetime(2026, 10, 6, 9, 0, tzinfo=UTC)},
+                {"day": date(2026, 10, 6)},
+            ],
+        }
+
+    @ontology.function(api_name="nextFreeSlots")
+    def _next_free_slots(query: BoundQuery) -> dict[str, Any]:
+        return _datetime_result()
+
+    @ontology.function(api_name="setRows")
+    def _set_rows(query: BoundQuery) -> dict[str, Any]:
+        return {"rows": [{"when": {1, 2}}]}
+
+    @ontology.function(api_name="bareFloat")
+    def _bare_float(query: BoundQuery) -> float:
+        return 1.5
+
+    def _declare_action(api_name: str, handler: Any) -> None:
+        # One params class per action (a params class may be declared once).
+        params_cls = type(f"_{api_name}Params", (ActionParams,), {})
+        ontology.action(
+            params_cls,
+            target=Book,
+            roles=["Librarian"],
+            display_name=api_name,
+            description="Return a value at the JSON boundary",
+            api_name=api_name,
+        )(handler)
+
+    def _slots_handler(_ctx: ActionContext, _params: Any) -> dict[str, Any]:
+        return _datetime_result()
+
+    def _inf_handler(_ctx: ActionContext, _params: Any) -> dict[str, Any]:
+        return {"value": float("inf")}
+
+    def _list_handler(_ctx: ActionContext, _params: Any) -> Any:
+        return [1, 2]
+
+    _declare_action("BookSlots", _slots_handler)
+    _declare_action("BookInf", _inf_handler)
+    _declare_action("BookList", _list_handler)
+    return ontology
+
+
+def _result_boundary_client_and_server() -> tuple[OntologyClient, MCPServer]:
+    consumer = _library_librarian()
+    ontology = _build_result_boundary_ontology()
+    ontology.validate()
+    store = ObjectStore(ontology.registry)
+    store.insert("Library", {"id": "lib-1"}, SRC)
+    store.insert("Shelf", {"id": "shelf-1", "library_id": "lib-1"}, SRC)
+    store.create_link("inLibrary", "shelf-1", "lib-1")
+    store.insert("Book", {"id": "book-1", "shelf_id": "shelf-1"}, SRC)
+    client = OntologyClient(ontology, store, consumer)
+
+    server_ontology = _build_result_boundary_ontology()
+    server_ontology.validate()
+    return client, build_mcp_server(server_ontology, store, consumer)
+
+
+def _result_not_json(message: str) -> dict[str, Any]:
+    return {
+        "error": {
+            "type": "PreconditionFailed",
+            "message": message,
+            "code": "RESULT_NOT_JSON",
+            "kind": "precondition",
+        }
+    }
+
+
+def test_function_datetime_result_is_iso_strings_on_client_and_mcp() -> None:
+    client, server = _result_boundary_client_and_server()
+
+    in_process = client.call_function("nextFreeSlots", {})
+    payload = _call(server, "call_function", {"api_name": "nextFreeSlots", "params": {}})
+
+    assert in_process == _DATETIME_RESULT_EXPECTED
+    assert payload == {"result": _DATETIME_RESULT_EXPECTED}
+    assert payload["result"] == in_process
+
+
+def test_action_datetime_result_is_iso_strings_on_client_and_mcp() -> None:
+    client, server = _result_boundary_client_and_server()
+
+    in_process = client.execute("BookSlots", {})
+    payload = _call(server, "execute_action", {"api_name": "BookSlots", "params": {}})
+
+    assert in_process == _DATETIME_RESULT_EXPECTED
+    assert payload == {"result": _DATETIME_RESULT_EXPECTED}
+    assert payload["result"] == in_process
+
+
+def test_function_unencodable_result_is_a_result_not_json_envelope() -> None:
+    _client, server = _result_boundary_client_and_server()
+
+    payload = _call(server, "call_function", {"api_name": "setRows", "params": {}})
+
+    assert payload == _result_not_json(
+        "'setRows': result is not JSON-serializable at "
+        'result["rows"][0]["when"] (set)'
+    )
+
+
+def test_action_unencodable_result_is_a_result_not_json_envelope() -> None:
+    _client, server = _result_boundary_client_and_server()
+
+    payload = _call(server, "execute_action", {"api_name": "BookInf", "params": {}})
+
+    assert payload == _result_not_json(
+        "'BookInf': result is not JSON-serializable at "
+        'result["value"] (non-finite float)'
+    )
+
+
+def test_action_list_result_is_a_result_not_json_envelope() -> None:
+    _client, server = _result_boundary_client_and_server()
+
+    payload = _call(server, "execute_action", {"api_name": "BookList", "params": {}})
+
+    assert payload == _result_not_json(
+        "'BookList': handler returned list; action results must be JSON-safe dictionaries"
+    )
+
+
+def test_function_bare_float_result_succeeds_on_mcp() -> None:
+    _client, server = _result_boundary_client_and_server()
+
+    payload = _call(server, "call_function", {"api_name": "bareFloat", "params": {}})
+
+    assert payload == {"result": 1.5}
 
 
 # -- optional-extra ergonomics (M6 step 3) -----------------------------------

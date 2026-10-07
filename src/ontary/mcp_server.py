@@ -378,7 +378,10 @@ def _try(fn: Callable[[], Any]) -> tuple[Any, dict[str, Any] | None]:
         return None, _generic_error()
     try:
         # The MCP framework serializes after the tool returns, outside this
-        # envelope boundary. Normalize here so unsupported objects and
+        # envelope boundary. The engine's RESULT_NOT_JSON check (#167) runs
+        # first, inside the handler call, so Function/Action results reach
+        # here already encoded. This json.dumps round trip is the generic
+        # fallback for values that bypass it: unsupported objects and
         # non-finite floats become INTERNAL_ERROR, even though json.dumps
         # uses ValueError for the latter (a tool-body ValueError remains the
         # INVALID_PARAMS branch above).
