@@ -48,10 +48,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import datetime, timezone
 from typing import Any
 
 from mcp.server.mcpserver import MCPServer
 
+from ontary.audit import AuditEntry, EmittedEvent
 from ontary.mcp_server import _register_tools
 from ontary.meta import OntologyRegistry
 from ontary.ontology import OntologyDef
@@ -90,6 +92,7 @@ ALL_TOOLS: tuple[tuple[str, dict[str, Any]], ...] = (
     ("list_action_types", {}),
     ("list_functions", {}),
     ("list_event_types", {}),
+    ("list_events", {}),
     ("get_declarations", {}),
     ("get_object", {"obj_type": "Book", "obj_id": "b1"}),
     ("query_objects", {"obj_type": "Book", "where": None}),
@@ -120,6 +123,7 @@ DATA_TOOLS: frozenset[str] = frozenset(
         "count_objects",
         "aggregate_objects",
         "traverse_links",
+        "list_events",
         "execute_action",
         "call_function",
     }
@@ -226,6 +230,25 @@ class _FreshClient:
 
     def _link_target_type(self, link: str, *, reverse: bool) -> str:
         return "Book"
+
+    def _event_rows(
+        self,
+        event_type: str | None,
+        *,
+        about: tuple[str, str] | None,
+        since: datetime | None,
+        until: datetime | None,
+    ) -> list[tuple[tuple[int, int], AuditEntry, EmittedEvent, frozenset[str]]]:
+        entry = AuditEntry(
+            ts=datetime(2026, 10, 7, tzinfo=timezone.utc), kind="action",
+            invocation_id=f"client-{self.client_id}", actor="a", role="r",
+            action="act", target_type="Book", outcome="ok",
+        )
+        event = EmittedEvent(event_type="Evt", about_type="Book", about_id="b1", payload={})
+        return [((0, 0), entry, event, frozenset())]
+
+    def _event_scope_limited(self, event_type: str | None, about_type: str | None) -> bool:
+        return True
 
     def get(self, obj_type: str, obj_id: str) -> _Tagged:
         return _Tagged(self.client_id)

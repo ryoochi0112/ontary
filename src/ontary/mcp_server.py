@@ -17,7 +17,7 @@ schema, not consumer data, and are identical for every consumer). This
 mirrors `OntologyClient`'s own guarantee (see `ontary.client`'s docstring)
 one layer further out.
 
-All thirteen tool bodies are registered exactly once, by `_register_tools`,
+All fourteen tool bodies are registered exactly once, by `_register_tools`,
 against a `resolve_client: Callable[[], OntologyClient]` seam instead of
 each tool closing directly over an
 already-built client. `build_mcp_server` below passes a constant
@@ -62,12 +62,15 @@ is caught too and turned into that same generic envelope.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable, Mapping
+from datetime import datetime
 from functools import partial
 from typing import TYPE_CHECKING, Annotated, Any, NamedTuple, cast
 
 from pydantic import Field, SkipValidation
 
+from ontary.audit import AuditEntry, EmittedEvent
 from ontary.authoring import CapabilityHandle, Ontology
 from ontary.client import OntologyClient, OntologyRuntime
 from ontary.errors import OntaryError, PermissionDenied, ValidationFailed
@@ -101,7 +104,7 @@ if TYPE_CHECKING:
 ConsumerResolver = Callable[["AccessToken"], "Consumer | None"]
 """Maps one request's verified `AccessToken` to the `Consumer` it should act
 as, or `None` if nothing maps it. Must be
-SYNCHRONOUS -- the thirteen tool handlers are `async def`, so the resolver is
+SYNCHRONOUS -- the fourteen tool handlers are `async def`, so the resolver is
 called on the event loop inside the request's task. It must therefore be a
 plain synchronous callable that does not block (no network round-trips that
 stall the loop -- a slow resolver stalls every in-flight request), and an
@@ -544,6 +547,145 @@ def _query_objects_page(
     )
 
 
+_EVENT_CURSOR = re.compile(r"ev1\.([0-9]+)\.([0-9]+)")
+"""A `list_events` cursor: the log position `(audit_index, event_index)` of
+the last row on the previous page. Resuming keeps rows strictly after it."""
+
+
+def _event_instant(name: str, value: str | None) -> datetime | None:
+    """Parse a `since`/`until` boundary; refuse a naive or unparseable one."""
+    if value is None:
+        return None
+    try:
+        instant: datetime | None = datetime.fromisoformat(value)
+    except ValueError:
+        instant = None
+    if instant is None or instant.utcoffset() is None:
+        raise ValidationFailed(
+            f"list_events {name} must be an ISO 8601 date-time with a UTC "
+            f"offset, such as 2026-10-07T09:00:00+00:00; got {value!r}",
+            code="INVALID_PARAMS",
+        )
+    return instant
+
+
+def _event_paging(
+    limit: int | None, after: str | None, include_total: bool
+) -> tuple[int, tuple[int, int] | None]:
+    """Apply the `query_objects` paging rules; return (page limit, cursor).
+
+    A page limit of 0 means count-only mode.
+    """
+    if limit is None and after is not None:
+        raise ValidationFailed(
+            "list_events: after= was given without limit= -- pass the same "
+            "limit as the page that returned this cursor",
+            code="AFTER_WITHOUT_LIMIT",
+        )
+    if limit is not None and limit > MAX_LIMIT:
+        raise _over_cap_limit("list_events", limit)
+    if limit == 0 and include_total:
+        if after is not None:
+            raise _count_only_after()
+        return 0, None
+    if limit is not None and limit < 1:
+        raise ValidationFailed(
+            f"list_events limit must be >= 1, got {limit!r}",
+            code="INVALID_LIMIT",
+        )
+    page_limit = DEFAULT_LIMIT if limit is None else limit
+    if after is None:
+        return page_limit, None
+    match = _EVENT_CURSOR.fullmatch(after)
+    if match is None:
+        raise ValidationFailed(
+            "list_events after must be a next_cursor returned by list_events",
+            code="INVALID_CURSOR",
+        )
+    return page_limit, (int(match[1]), int(match[2]))
+
+
+def _event_row(
+    entry: AuditEntry, event: EmittedEvent, hidden: frozenset[str]
+) -> dict[str, Any]:
+    """One wire row; hidden keys are already absent from `event.payload`."""
+    return {
+        "event_type": event.event_type,
+        "about_type": event.about_type,
+        "about_id": event.about_id,
+        "ts": entry.ts.isoformat(),
+        "invocation_id": entry.invocation_id,
+        "payload": dict(event.payload),
+        "redacted_fields": sorted(hidden),
+    }
+
+
+def _list_events_page(
+    resolve_client: Callable[[], OntologyClient],
+    event_type: Any,
+    about_type: Any,
+    about_id: Any,
+    since: Any,
+    until: Any,
+    limit: Any,
+    after: Any,
+    include_total: Any,
+) -> _PagedRead:
+    """Validate, read the visible event log, and cut one page from it.
+
+    Validation order: argument shapes, `event_type` declared, `about_type`
+    declared, `about_id` needs `about_type`, the time window, the paging
+    rules, then the cursor. The engine filters scope, row policy, retired
+    subjects, and redaction; this function only pages its positioned rows.
+    """
+    client = resolve_client()
+    checked_event_type = _tool_optional_string("event_type", event_type)
+    checked_about_type = _tool_optional_string("about_type", about_type)
+    checked_about_id = _tool_optional_string("about_id", about_id)
+    checked_since = _tool_optional_string("since", since)
+    checked_until = _tool_optional_string("until", until)
+    checked_limit = _tool_optional_int("limit", limit)
+    checked_after = _tool_optional_string("after", after)
+    checked_include_total = _tool_bool("include_total", include_total)
+    if checked_event_type is not None:
+        client._require_event_type(checked_event_type)
+    if checked_about_type is not None:
+        client._require_object_type(checked_about_type)
+    if checked_about_id is not None and checked_about_type is None:
+        raise ValidationFailed(
+            "list_events about_id needs about_type: name the subject's "
+            "object type as well as its id",
+            code="INVALID_PARAMS",
+        )
+    since_at = _event_instant("since", checked_since)
+    until_at = _event_instant("until", checked_until)
+    page_limit, cursor = _event_paging(checked_limit, checked_after, checked_include_total)
+    about = (
+        None if checked_about_type is None or checked_about_id is None
+        else (checked_about_type, checked_about_id)
+    )
+    rows = client._event_rows(
+        checked_event_type, about=about, since=since_at, until=until_at
+    )
+    if checked_about_type is not None and about is None:
+        rows = [row for row in rows if row[2].about_type == checked_about_type]
+    scope_limited = client._event_scope_limited(checked_event_type, checked_about_type)
+    total = len(rows) if checked_include_total else None
+    if page_limit == 0:
+        return _PagedRead([], None, len(rows) > 0, total, scope_limited)
+    rest = rows if cursor is None else [row for row in rows if row[0] > cursor]
+    page = rest[:page_limit]
+    has_more = len(rest) > page_limit
+    next_cursor = f"ev1.{page[-1][0][0]}.{page[-1][0][1]}" if has_more else None
+    return _PagedRead(
+        [_event_row(entry, event, hidden) for _, entry, event, hidden in page],
+        next_cursor,
+        has_more,
+        total,
+        scope_limited,
+    )
+
+
 def _get_object(
     resolve_client: Callable[[], OntologyClient], obj_type: Any, obj_id: Any
 ) -> dict[str, Any] | None:
@@ -936,7 +1078,7 @@ def _register_tools(
     ontology: OntologyDef,
     resolve_client: Callable[[], OntologyClient],
 ) -> None:
-    """Register all thirteen tools onto `server`, ONE tool body each, shared by
+    """Register all fourteen tools onto `server`, ONE tool body each, shared by
     both `build_mcp_server` and `build_multi_consumer_mcp_server`.
 
     Every tool obtains its `OntologyClient` by CALLING `resolve_client()`
@@ -1236,6 +1378,109 @@ def _register_tools(
             )
         )
 
+    @server.tool(annotations=read_only)
+    async def list_events(
+        event_type: Annotated[
+            str | None,
+            SkipValidation(),
+            Field(description="Declared event type api_name; omit for every type."),
+        ] = None,
+        about_type: Annotated[
+            str | None,
+            SkipValidation(),
+            Field(description="Declared object type the events are about."),
+        ] = None,
+        about_id: Annotated[
+            str | None,
+            SkipValidation(),
+            Field(description="Subject object id; requires about_type."),
+        ] = None,
+        since: Annotated[
+            str | None,
+            SkipValidation(),
+            Field(
+                description=(
+                    "Inclusive lower bound: an ISO 8601 date-time with a UTC "
+                    "offset."
+                )
+            ),
+        ] = None,
+        until: Annotated[
+            str | None,
+            SkipValidation(),
+            Field(
+                description=(
+                    "Exclusive upper bound: an ISO 8601 date-time with a UTC "
+                    "offset."
+                )
+            ),
+        ] = None,
+        limit: Annotated[
+            int | None,
+            SkipValidation(),
+            Field(
+                description=(
+                    "Page size; defaults to 100 and has a hard maximum of 1000."
+                )
+            ),
+        ] = None,
+        after: Annotated[
+            str | None,
+            SkipValidation(),
+            Field(
+                description=(
+                    "Opaque next_cursor from the previous page; requires an "
+                    "explicit limit."
+                )
+            ),
+        ] = None,
+        include_total: Annotated[
+            bool,
+            SkipValidation(),
+            Field(
+                description=(
+                    "When true, add an integer total: the visible-event count "
+                    "across all pages (not min-N gated). With limit=0 it is "
+                    "count-only mode: no rows, just the total."
+                )
+            ),
+        ] = False,
+    ) -> dict[str, Any]:
+        """List the business events this consumer may see, in log order
+        (audit sequence, then emission order), one page at a time.
+
+        Filter by `event_type`, by subject (`about_type`, optionally with
+        `about_id`), and by time (`since` inclusive, `until` exclusive; ISO
+        8601 strings with an offset). An event is listed only when its
+        subject is visible to this consumer, using the subject's latest row
+        (retired subjects included). Each row has `event_type`, `about_type`,
+        `about_id`, `ts`, `invocation_id`, `payload`, and `redacted_fields`,
+        a sorted list of hidden field names; a redacted key is absent from
+        `payload`, never null.
+
+        Paging follows `query_objects`: `limit` defaults to 100 and has a
+        hard maximum of 1000, `after` is the previous `next_cursor` and
+        requires `limit`, `next_cursor` is `None` exactly when `has_more` is
+        false, `include_total=true` adds the visible-event `total`, and
+        `limit=0` with `include_total=true` is count-only mode.
+        `scope_limited` depends on declarations only: it is true when any
+        subject type these events can be about is scoped or has row
+        visibility. Undeclared names refuse with `UNKNOWN_EVENT_TYPE` or
+        `UNKNOWN_OBJECT_TYPE`."""
+        return _run_paged(
+            lambda: _list_events_page(
+                resolve_client,
+                event_type,
+                about_type,
+                about_id,
+                since,
+                until,
+                limit,
+                after,
+                include_total,
+            )
+        )
+
     @server.tool(annotations=destructive)
     async def execute_action(
         api_name: _ToolString = None, params: _ToolObject = None
@@ -1365,7 +1610,7 @@ def build_multi_consumer_mcp_server(
     different identities on this one server object never share any mutable
     per-call state.
 
-    **Fail-closed sequence, per invocation, ALL thirteen tools:**
+    **Fail-closed sequence, per invocation, ALL fourteen tools:**
 
     1. No verified `AccessToken` on the request (`get_access_token()`
        returns `None` -- true for stdio, or HTTP with no `token_verifier`

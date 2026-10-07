@@ -53,6 +53,7 @@ and required status.
 | `count_objects` | `obj_type` | `where` |
 | `aggregate_objects` | `obj_type` | `value_field`, `group_by`, `where`, `func` (default `"mean"`) |
 | `traverse_links` | `obj_type`, `obj_id`, `link_api_name` | `reverse` (default `false`), `limit`, `after`, `include_total` (default `false`) |
+| `list_events` | — | `event_type`, `about_type`, `about_id`, `since`, `until`, `limit`, `after`, `include_total` (default `false`) |
 | `execute_action` | `api_name`, `params` | — |
 | `call_function` | `api_name`, `params` | — |
 

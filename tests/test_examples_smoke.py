@@ -364,6 +364,7 @@ def test_run_mcp_example_builds_server_and_returns_query_envelope() -> None:
         "list_action_types",
         "list_functions",
         "list_event_types",
+        "list_events",
         "get_declarations",
         "get_object",
         "query_objects",
