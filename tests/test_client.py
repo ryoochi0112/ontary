@@ -748,15 +748,18 @@ def test_two_ontologies_coexist_without_cross_talk(
     kanban_client = OntologyClient(kanban_ontology, kanban_store, kanban_consumer)
 
     # Neither ontology sees the other's types/functions/objects: a Board is
-    # simply absent from the library store (no row of that object_type was
-    # ever written there), and calling the other ontology's function name is
-    # rejected as unregistered on THIS ontology's `FunctionRegistry`.
+    # not declared on the library ontology, so reading it refuses as an
+    # unregistered type (no cross-talk), and calling the other ontology's
+    # function name is rejected as unregistered on THIS ontology's
+    # `FunctionRegistry`.
     assert library_client.get("Book", "book-1") is not None
-    assert library_client.get("Board", "board-1") is None
+    with raises_code(ValidationFailed, "UNKNOWN_OBJECT_TYPE"):
+        library_client.get("Board", "board-1")
     with raises_code(PreconditionFailed, "FUNCTION_ERROR"):
         library_client.call_function("countCards", {})
 
     assert kanban_client.call_function("countCards", {}) == 1
-    assert kanban_client.get("Book", "book-1") is None
+    with raises_code(ValidationFailed, "UNKNOWN_OBJECT_TYPE"):
+        kanban_client.get("Book", "book-1")
     with raises_code(PreconditionFailed, "FUNCTION_ERROR"):
         kanban_client.call_function("countBooksOnShelf", {"shelf_id": "shelf-1"})

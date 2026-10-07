@@ -626,7 +626,11 @@ class GuardedQuery:
 
         Scoped to the type being read, not the whole policy: one incoherent
         entry must not turn every other type's reads into policy complaints.
+
+        Type resolution comes first, so an undeclared name never reaches a
+        policy, where, or group_by verdict: it refuses `UNKNOWN_OBJECT_TYPE`.
         """
+        self._registry.get_object_type(obj_type)
         errors = incoherent_scope_declarations(self._policy, obj_type)
         if errors:
             raise ValidationFailed("; ".join(errors), code="SCOPE_POLICY_ERROR")
@@ -727,11 +731,7 @@ class GuardedQuery:
         *filter* gate only; `_redact` above still strips them from every
         returned row.
         """
-        try:
-            obj_def = self._registry.get_object_type(obj_type)
-        except ValidationFailed:
-            return set()
-
+        obj_def = self._registry.get_object_type(obj_type)
         hidden = self._hidden_properties(consumer, obj_def.properties)
 
         if disclosure == "supplied":
@@ -1637,7 +1637,11 @@ class GuardedQuery:
         all were -- so an unknown name silently became `None` for every row
         and returned the ungrouped mean under the key `"None"`, and a
         `json`-declared name reached `dict.setdefault` with an unhashable
-        value and raised a bare `TypeError`."""
+        value and raised a bare `TypeError`.
+
+        The type resolves before the `group_by` check, like every read: an
+        undeclared type refuses `UNKNOWN_OBJECT_TYPE` whatever `group_by` is."""
+        self._registry.get_object_type(obj_type)
         if not group_by:
             raise ValidationFailed(
                 f"aggregate_by: group_by must be a non-empty string, got "
@@ -1898,13 +1902,13 @@ class GuardedQuery:
         # An unregistered type refuses as one, with the code the catalogue
         # declares for it. Without this the read simply found no rows and the
         # empty selection answered `MIN_N_VIOLATION` -- naming a contributor
-        # threshold for a population that cannot exist, and disagreeing with
-        # this same call's own `where=`-bearing spelling, which has always
-        # reached `UNKNOWN_OBJECT_TYPE` through `_validate_where_keys`. The
-        # resolution is first because every gate below reads the declaration:
-        # `_hidden_fields` and `_property_type` both swallow the unregistered
-        # case and return "nothing hidden" / "no declared type", which is a
-        # fail-OPEN answer that only stayed harmless while there were no rows.
+        # threshold for a population that cannot exist. The disclosure gate
+        # above (`_require_coherent_scope`) now resolves the type as its first
+        # statement, so this line only restates that precondition locally:
+        # every gate below reads the declaration, and `_property_type` still
+        # answers "no declared type" for an unregistered name, which would be
+        # a fail-OPEN answer here. `_hidden_fields` no longer swallows the
+        # case; it raises `UNKNOWN_OBJECT_TYPE` too.
         self._registry.get_object_type(obj_type)
 
         # The guarantee at this gate is that a consumer cannot learn an
