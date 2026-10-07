@@ -195,8 +195,8 @@ params クラスを指定しない場合、ハンドラは既定値なしの `qu
 `ValidationFailed` と `code="INVALID_PARAMS"` を送出します。入力がない Function に空でない params を
 渡した場合も、同じコードで拒否します。
 
-`FunctionDef.parameters` と MCP の `list_functions` は、型付き入力を `name`、`type`、`choices`、
-`fields`、`required`、`refers_to` を持つパラメータとして公開します。これは `scope_semantics` を
+`FunctionDef.parameters` と MCP の `list_functions` は、型付き入力を `name`、`type`、`description`、
+`choices`、`fields`、`required`、`refers_to` を持つパラメータとして公開します。これは `scope_semantics` を
 除いた Action パラメータと同じ形式です。入力がない Function では `[]` になります。
 `client.call_function` は、関数名でも `FunctionParams` のインスタンスでもない引数を
 `ValidationFailed` と `code="INVALID_PARAMS"` で拒否します。

@@ -51,7 +51,7 @@ Each tool's required and optional arguments are listed in the
 `call_function` take `api_name` plus one `params` object keyed by parameter name.
 
 `list_functions` publishes each Function's declared `parameters` alongside its
-descriptions. Typed Functions list each parameter's name, type, choices,
+descriptions. Typed Functions list each parameter's name, type, `description` (`null` when undescribed), choices,
 structured fields, required status, and referenced ontology type. A Function
 with no inputs publishes `parameters: []`. It never publishes `parameters: null`.
 

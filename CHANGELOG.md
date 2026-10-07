@@ -11,6 +11,24 @@ you**.
 
 ## [Unreleased]
 
+### Added
+
+- **Parameter `description` (#65).** `ActionParameterDef` gains an optional
+  `description` (`str | None`). MCP `list_action_types` and `list_functions` publish it
+  on every parameter object, right after `type`, and it is `null` when undescribed.
+- **`MISSING_DESCRIPTION` advisory lint (#65).** `diagnose()` and `ontary validate`
+  warn about an action or Function whose description is blank or only the default
+  "Executes X." / "Computes X.". Docstrings never count. `accept="MISSING_DESCRIPTION"`
+  silences it.
+
+### Changed
+
+- **Every MCP parameter object has a `description` key (breaking for exact-key parsers, #65).**
+  The change is additive, but a client that matches parameter keys exactly must now
+  accept `description`.
+- **`ontary validate --strict` exits 1 for undescribed actions and Functions (#65).**
+  Default mode still exits 0 on warnings.
+
 ## [0.23.0] — 2026-10-07
 
 ```bash
