@@ -8,6 +8,9 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, TypeVar
 
+from ontary._test_env import FixedClock as FixedClock
+from ontary._test_env import SequentialIds as SequentialIds
+from ontary._test_env import make_store as make_store
 from ontary._typed_api import api_name_for, declared_snapshot
 from ontary.actions import _event_payload_to_storage
 from ontary.audit import EmittedEvent
@@ -391,8 +394,6 @@ def scenario(
     capabilities: Mapping[CapabilityHandle[Any], object] | None = None,
 ) -> Scenario:
     """Bind the deterministic environment once, before any seed writes."""
-    from ontary.testing import FixedClock, SequentialIds, make_store
-
     actual_store = make_store(ontology) if store is None else store
     runtime = ontology.bind(
         actual_store,
