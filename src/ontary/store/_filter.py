@@ -54,15 +54,72 @@ _ISO_INSTANT = (
 
 def compile_filter(f: RowFilter, dialect: _sql.Dialect) -> tuple[str, list[Any]]:
     """Return fixed SQL with bind markers, and parameters in marker order."""
-    if f.scope is not None:
-        raise NotImplementedError("scope compilation belongs to the scope compiler")
     parts: list[str] = []
     params: list[Any] = []
     for term in f.where:
         fragment, values = _compile_term(term, dialect)
         parts.append(fragment)
         params.extend(values)
+    if f.scope is not None:
+        fragment, values = _compile_scope(f.scope, dialect)
+        parts.append(fragment)
+        params.extend(values)
     return " AND ".join(parts) or "TRUE", params
+
+
+def _compile_scope(scope: ScopeTerm, dialect: _sql.Dialect) -> tuple[str, list[Any]]:
+    """Preserve the first resolving rule; leave hierarchy climbing to Python."""
+    fallback = "TRUE" if scope.climb_possible else "FALSE"
+    if not scope.rules:
+        return fallback, []
+    if "\x00" in scope.scope_id or any(
+        field is not None and "\x00" in field for _, field in scope.rules
+    ):
+        return "TRUE", []
+    parts: list[str] = []
+    params: list[Any] = []
+    collate = "COLLATE BINARY" if dialect == "sqlite" else 'COLLATE "C"'
+    for kind, field in scope.rules:
+        if kind == "self":
+            parts.append(f"WHEN TRUE THEN id {collate} = {{p}}")
+            params.append(scope.scope_id)
+        elif kind == "prop" and field is not None:
+            fragment, values = _compile_scope_property(field, scope.scope_id, dialect)
+            parts.append(fragment)
+            params.extend(values)
+        else:
+            raise ValueError(f"unknown scope rule: {kind}")
+    chain = "CASE " + " ".join(parts) + f" ELSE {fallback} END"
+    # Protect every per-row JSON operation, even when self is the first rule.
+    # PostgreSQL payload is TEXT and may contain JSON that jsonb rejects.
+    valid = "json_valid(payload)" if dialect == "sqlite" else "pg_input_is_valid(payload, 'jsonb')"
+    return f"CASE WHEN {valid} THEN {chain} ELSE TRUE END", params
+
+
+def _compile_scope_property(
+    field: str, scope_id: str, dialect: _sql.Dialect,
+) -> tuple[str, list[Any]]:
+    if dialect == "sqlite":
+        field = '$.' + json.dumps(field, ensure_ascii=False)
+        value_type = "json_type(payload, {p})"
+        value = "json_extract(payload, {p})"
+        # A non-null value resolves even when it is not a string. Python's
+        # str() decides those values; NUL strings also pass through.
+        match = (
+            f"CASE WHEN {value_type} <> 'text' THEN TRUE "
+            f"WHEN instr({value}, char(0)) > 0 THEN TRUE "
+            f"ELSE {value} COLLATE BINARY = {{p}} END"
+        )
+        fields = [field] * 5
+    else:
+        value_type = "jsonb_typeof(payload::jsonb -> {p})"
+        match = (
+            f"CASE WHEN {value_type} <> 'string' THEN TRUE "
+            'ELSE (payload::jsonb ->> {p}) COLLATE "C" = {p} END'
+        )
+        fields = [field] * 4
+    resolves = f"{value_type} IS NOT NULL AND {value_type} <> 'null'"
+    return f"WHEN {resolves} THEN {match}", [*fields, scope_id]
 
 
 def _combine(terms: Iterable[WhereTerm], dialect: _sql.Dialect, join: str) -> tuple[str, list[Any]]:

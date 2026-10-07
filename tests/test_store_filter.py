@@ -47,8 +47,190 @@ def test_compiler_binds_field_names_and_operands(dialect: _sql.Dialect) -> None:
         assert any("private_field" in str(p) for p in params)
         assert fragment.count("{p}") == len(params)
     assert compile_filter(RowFilter(), dialect) == ("TRUE", [])
-    with pytest.raises(NotImplementedError):
-        compile_filter(RowFilter(scope=ScopeTerm((), "s", False)), dialect)
+    assert compile_filter(RowFilter(scope=ScopeTerm((), "s", False)), dialect) == ("FALSE", [])
+
+
+@pytest.fixture(params=["sqlite", "postgres"], scope="module")
+def scope_connection(request: pytest.FixtureRequest) -> Iterator[tuple[_sql.Dialect, Any]]:
+    if request.param == "sqlite":
+        conn = sqlite3.connect(":memory:")
+        try:
+            yield "sqlite", conn
+        finally:
+            conn.close()
+        return
+    dsn = os.environ.get("ONTARY_TEST_POSTGRES_DSN")
+    if not dsn:
+        pytest.skip("ONTARY_TEST_POSTGRES_DSN is not set")
+    import psycopg
+
+    # Keep payloads in a real TEXT column so PostgreSQL cannot constant-fold
+    # guarded JSON casts. The connection's temporary table never touches public.
+    with psycopg.connect(dsn, autocommit=True, options="-csearch_path=pg_catalog") as conn:
+        conn.execute("CREATE TEMP TABLE ontary_test_scope (row_index INTEGER, id TEXT, payload TEXT)")
+        yield "postgres", conn
+
+
+def _scope_selected(
+    connection: tuple[_sql.Dialect, Any], row_filter: RowFilter,
+    rows: list[tuple[str, dict[str, Any] | str]],
+) -> list[int]:
+    dialect, conn = connection
+    fragment, params = compile_filter(row_filter, dialect)
+    assert fragment.count("{p}") == len(params)
+    if dialect == "postgres":
+        conn.execute("TRUNCATE pg_temp.ontary_test_scope")
+        for i, (obj_id, payload) in enumerate(rows):
+            raw = payload if isinstance(payload, str) else json.dumps(payload)
+            conn.execute("INSERT INTO pg_temp.ontary_test_scope VALUES (%s, %s, %s)",
+                         [i, obj_id, raw])
+        sql = _sql.render(
+            f"SELECT row_index FROM pg_temp.ontary_test_scope WHERE ({fragment}) "
+            "ORDER BY row_index", dialect
+        )
+        result = _sql.execute(conn, sql, params, dialect=dialect).rows
+        return [row[0] for row in result]
+    sql = _sql.render(
+        f"SELECT ({fragment}) FROM (SELECT CAST({{p}} AS TEXT) AS id, "
+        "CAST({p} AS TEXT) AS payload) AS sample", dialect
+    )
+    selected = []
+    for i, (obj_id, payload) in enumerate(rows):
+        raw = payload if isinstance(payload, str) else json.dumps(payload)
+        result = _sql.execute(conn, sql, [*params, obj_id, raw], dialect=dialect).rows
+        if result[0][0]:
+            selected.append(i)
+    return selected
+
+
+@pytest.mark.parametrize("dialect", ["sqlite", "postgres"])
+def test_scope_compiler_binds_property_names_and_scope_id(dialect: _sql.Dialect) -> None:
+    scope_id = "x'); DROP TABLE objects; --"
+    field = "private_scope_field"
+    for rules in [(("self", None),), (("prop", field),),
+                  (("prop", field), ("self", None)),
+                  (("self", None), ("prop", field))]:
+        fragment, params = compile_filter(RowFilter(scope=ScopeTerm(rules, scope_id, False)),
+                                          dialect)
+        assert scope_id not in fragment
+        assert field not in fragment
+        assert scope_id in params
+        if any(kind == "prop" for kind, _ in rules):
+            assert any(field in str(p) for p in params)
+        assert fragment.count("{p}") == len(params)
+
+
+@pytest.mark.parametrize(
+    ("rules", "expected"),
+    [((("prop", "team_id"), ("self", None)), [1, 2, 3]),
+     ((("self", None), ("prop", "team_id")), [0, 2, 3])],
+)
+def test_scope_rule_order(scope_connection, rules, expected) -> None:
+    rows = [("team", {"team_id": "other"}), ("other", {"team_id": "team"}),
+            ("team", {"team_id": None}), ("team", {}), ("other", {})]
+    scope = ScopeTerm(rules, "team", False)
+    assert _scope_selected(scope_connection, RowFilter(scope=scope), rows) == expected
+
+
+@pytest.mark.parametrize("climb_possible", [False, True])
+def test_scope_null_and_missing_fall_through(scope_connection, climb_possible: bool) -> None:
+    rows = [("other", {"team_id": None, "backup_id": "team"}),
+            ("other", {"backup_id": "team"}),
+            ("other", {"team_id": "other", "backup_id": "team"}),
+            ("other", {"team_id": "", "backup_id": "team"}),
+            ("other", {"team_id": None, "backup_id": None}), ("other", {})]
+    scope = ScopeTerm((("prop", "team_id"), ("prop", "backup_id")), "team", climb_possible)
+    expected = [0, 1, 4, 5] if climb_possible else [0, 1]
+    assert _scope_selected(scope_connection, RowFilter(scope=scope), rows) == expected
+
+
+@pytest.mark.parametrize("climb_possible", [False, True])
+def test_scope_resolved_mismatch_does_not_climb(scope_connection, climb_possible: bool) -> None:
+    scope = ScopeTerm((("prop", "team_id"),), "team", climb_possible)
+    rows = [("team", {"team_id": "other"}), ("other", {"team_id": "team"})]
+    assert _scope_selected(scope_connection, RowFilter(scope=scope), rows) == [1]
+    scope = ScopeTerm((("self", None),), "team", climb_possible)
+    assert _scope_selected(scope_connection, RowFilter(scope=scope), rows) == [0]
+
+
+@pytest.mark.parametrize("actual", [0, 7, 2**53 + 1, 10**100, 1.5, True, False, [], {}])
+def test_scope_nonstring_properties_are_permissive(scope_connection, actual: Any) -> None:
+    scope = ScopeTerm((("prop", "team_id"), ("self", None)), "unmatched", False)
+    assert _scope_selected(scope_connection, RowFilter(scope=scope),
+                           [("other", {"team_id": actual})]) == [0]
+
+
+@pytest.mark.parametrize("scope_id", ["team", "", "é", "x'); DROP TABLE objects; --"])
+def test_scope_strings_compare_exactly(scope_connection, scope_id: str) -> None:
+    values = [scope_id, scope_id.upper(), scope_id + " ", scope_id + "x", "e\u0301"]
+    rows = [(value, {"team_id": value}) for value in values]
+    expected = [i for i, value in enumerate(values) if value == scope_id]
+    for rules in [(("self", None),), (("prop", "team_id"),)]:
+        scope = ScopeTerm(rules, scope_id, False)
+        assert _scope_selected(scope_connection, RowFilter(scope=scope), rows) == expected
+
+
+@pytest.mark.parametrize("rules", [(("self", None),), (("prop", "team_id"),),
+                                  (("prop", "team_id"), ("self", None))])
+@pytest.mark.parametrize("payload", ["not json", "{", '{"team_id": "other", "score": NaN}',
+                                    '{"team_id": "other", "score": Infinity}',
+                                    '{"team_id": "other", "score": -Infinity}'])
+def test_scope_invalid_json_is_permissive(scope_connection, rules, payload: str) -> None:
+    scope = ScopeTerm(rules, "team", False)
+    assert _scope_selected(scope_connection, RowFilter(scope=scope), [("other", payload)]) == [0]
+
+
+def test_scope_nul_property_value_is_permissive(scope_connection) -> None:
+    scope = ScopeTerm((("prop", "team_id"), ("self", None)), "team", False)
+    rows = [("other", {"team_id": "other\x00suffix"})]
+    assert _scope_selected(scope_connection, RowFilter(scope=scope), rows) == [0]
+
+
+def test_scope_postgres_rejected_json_is_permissive(scope_connection) -> None:
+    if scope_connection[0] != "postgres":
+        return
+    for rules in [(("self", None),), (("prop", "team_id"),)]:
+        scope = ScopeTerm(rules, "team", False)
+        rows = [("other", {"team_id": "other", "unrelated": "nul\x00"}),
+                ("other", '{"team_id": "other", "unrelated": 1e1000000}'),
+                ("other", '{"team_id": "other", "unrelated": "\\ud800"}')]
+        assert _scope_selected(scope_connection, RowFilter(scope=scope), rows) == [0, 1, 2]
+
+
+@pytest.mark.parametrize("dialect", ["sqlite", "postgres"])
+@pytest.mark.parametrize(
+    "scope",
+    [ScopeTerm((("self", None),), "team\x00", False),
+     ScopeTerm((("prop", "team_id"),), "team\x00", False),
+     ScopeTerm((("prop", "team\x00id"), ("self", None)), "team", False)],
+)
+def test_scope_nul_parameters_are_not_bound(dialect: _sql.Dialect, scope: ScopeTerm) -> None:
+    assert compile_filter(RowFilter(scope=scope), dialect) == ("TRUE", [])
+
+
+@pytest.mark.parametrize("climb_possible", [False, True])
+def test_scope_empty_rules(scope_connection, climb_possible: bool) -> None:
+    scope = ScopeTerm((), "team", climb_possible)
+    assert compile_filter(RowFilter(scope=scope), scope_connection[0]) == (
+        "TRUE" if climb_possible else "FALSE", []
+    )
+    rows = [("team", {}), ("other", {"team_id": "team"})]
+    assert _scope_selected(scope_connection, RowFilter(scope=scope), rows) == (
+        [0, 1] if climb_possible else []
+    )
+
+
+def test_scope_and_where_are_combined(scope_connection) -> None:
+    scope = ScopeTerm((("prop", "team_id"), ("self", None)), "team", False)
+    row_filter = RowFilter(where=(WhereTerm("status", "str", "eq", "open"),
+                                 WhereTerm("score", "int", "gte", 2)), scope=scope)
+    rows = [("a", {"status": "open", "score": 2, "team_id": "team"}),
+            ("b", {"status": "closed", "score": 2, "team_id": "team"}),
+            ("c", {"status": "open", "score": 2, "team_id": "other"}),
+            ("team", {"status": "open", "score": 2}),
+            ("d", {"status": "open", "score": 1, "team_id": "team"}),
+            ("e", {"status": "open", "score": float("nan"), "team_id": "other"})]
+    assert _scope_selected(scope_connection, row_filter, rows) == [0, 3, 5]
 
 
 @pytest.mark.parametrize(
