@@ -213,6 +213,10 @@ class _FreshClient:
         self.client_id = client_id
         self.declarations = _TaggedDeclarations(client_id)
         self.read_mark_types: list[str] = []
+        self.required_types: list[str] = []
+
+    def _require_object_type(self, obj_type: str) -> None:
+        self.required_types.append(obj_type)
 
     def _read_marks(self, obj_type: str) -> tuple[bool, tuple[str, ...]]:
         self.read_mark_types.append(obj_type)
@@ -319,6 +323,13 @@ def test_resolve_client_result_is_the_client_the_tool_acts_on() -> None:
             continue
 
         this_invocation_id = calls["n"]
+        if name in {
+            "get_object", "query_objects", "count_objects", "traverse_links",
+            "aggregate_objects",
+        }:
+            assert clients[-1].required_types == [arguments["obj_type"]], (
+                f"{name} did not resolve obj_type on THIS invocation's client"
+            )
         if name in {"get_object", "query_objects", "count_objects", "traverse_links"}:
             assert clients[-1].read_mark_types == ["Book"], (
                 f"{name}'s marks did not come from THIS invocation's client"
