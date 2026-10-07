@@ -32,7 +32,9 @@ you**.
   longer fail with `INTERNAL_ERROR` on these types.
 - **A result that is not JSON refuses with `RESULT_NOT_JSON` (breaking, #167).**
   Both surfaces refuse with this `precondition` code instead of `INTERNAL_ERROR`,
-  including an Action that returns a non-`dict`.
+  including an Action that returns a non-`dict`. In-process `call_function` also
+  refuses non-JSON values it used to return unchanged: tuples, sets, `Decimal`, model
+  objects, cyclic structures, and dicts with non-`str` keys.
 - **Every MCP parameter object has a `description` key (breaking for exact-key parsers, #65).**
   The change is additive, but a client that matches parameter keys exactly must now
   accept `description`.

@@ -135,6 +135,24 @@ def test_refusals_name_handler_path_and_type(result: Any, expected: str) -> None
     assert info.value.kind == "precondition"
 
 
+@pytest.mark.parametrize("make", ["list", "dict"])
+def test_cyclic_result_is_refused_not_recursion_error(make: str) -> None:
+    cyclic: Any
+    if make == "list":
+        cyclic = []
+        cyclic.append(cyclic)
+    else:
+        cyclic = {}
+        cyclic["self"] = cyclic
+    with pytest.raises(PreconditionFailed) as info:
+        encode_result("fn", {"value": cyclic}, require_dict=False)
+    assert str(info.value) == (
+        "'fn': result is not JSON-serializable at result (cyclic or too deeply nested)"
+    )
+    assert info.value.code == "RESULT_NOT_JSON"
+    assert info.value.kind == "precondition"
+
+
 @pytest.mark.parametrize("result", [[1], None, "s", 3])
 def test_require_dict_refuses_non_dict(result: Any) -> None:
     with pytest.raises(PreconditionFailed) as info:

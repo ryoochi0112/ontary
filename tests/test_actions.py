@@ -1345,6 +1345,18 @@ def _result_action_client(
     return client, EmitResultParams
 
 
+def test_action_cyclic_result_is_refused_not_recursion_error() -> None:
+    cyclic: dict[str, Any] = {}
+    cyclic["self"] = cyclic
+    client, _params_cls = _result_action_client({"value": {"rows": cyclic}})
+
+    with raises_code(PreconditionFailed, "RESULT_NOT_JSON") as exc_info:
+        client.execute("EmitResult", {"thing_id": "t1"})
+    assert "cyclic or too deeply nested" in str(exc_info.value)
+    entry = client._store.audit_entries()[-1]
+    assert (entry.outcome, entry.error_code) == ("error", "RESULT_NOT_JSON")
+
+
 @pytest.mark.parametrize("shape", ["top", "dict", "list", "list_of_dicts"])
 @pytest.mark.parametrize("kind", sorted(_RESULT_DATE_VALUES))
 def test_action_dates_come_back_as_iso_strings_on_both_call_forms(

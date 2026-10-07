@@ -73,7 +73,13 @@ def encode_result(api_name: str, result: Any, *, require_dict: bool) -> Any:
             "action results must be JSON-safe dictionaries",
             code="RESULT_NOT_JSON",
         )
-    encoded = _walk(api_name, result, "result")
+    try:
+        encoded = _walk(api_name, result, "result")
+    except RecursionError as exc:
+        # A result that refers to itself (or nests past the interpreter's
+        # limit) is something `json.dumps` rejects too; name it instead of
+        # letting a bare RecursionError escape the JSON boundary.
+        raise _refuse(api_name, "result", "cyclic or too deeply nested") from exc
     try:
         round_tripped = json.loads(json.dumps(encoded, allow_nan=False))
     except (TypeError, ValueError) as exc:

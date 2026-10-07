@@ -1189,6 +1189,17 @@ def test_function_result_that_is_not_json_is_refused_and_audited(value: Any) -> 
     ]
 
 
+def test_function_cyclic_result_is_refused_not_recursion_error() -> None:
+    cyclic: list[Any] = []
+    cyclic.append(cyclic)
+    client, _no_params = _result_client({"value": cyclic})
+
+    with raises_code(PreconditionFailed, "RESULT_NOT_JSON") as exc_info:
+        client.call_function("echo", {})
+    assert "cyclic or too deeply nested" in str(exc_info.value)
+    assert client._store.audit_entries()[-1].error_code == "RESULT_NOT_JSON"
+
+
 def test_function_result_refusal_names_handler_and_nested_key_path() -> None:
     client, no_params = _result_client({"value": {"rows": [{"when": {1, 2}}]}})
 
