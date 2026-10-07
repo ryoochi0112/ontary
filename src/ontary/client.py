@@ -55,7 +55,7 @@ from __future__ import annotations
 import builtins
 from collections.abc import Callable, Mapping
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Literal, TypeVar, overload
+from typing import Any, Literal, TypeVar, overload
 
 from ontary._runtime import default_id_factory
 from ontary._typed_api import _TypedReadMixin, list_objects
@@ -77,20 +77,17 @@ from ontary.model import (
     _class_stamp,
     _UnfilteredEvent,
 )
-from ontary.ontology import OntologyDef, resolve_definition
+from ontary.ontology import OntologyDef, SupportsDefinition, resolve_definition
 from ontary.query import (
-    _UNSET_LIMIT,
     DEFAULT_READ_LIMIT,
     GuardedQuery,
     OrderBy,
     Page,
     TypedPage,
 )
+from ontary.query._paging import _UNSET_LIMIT
 from ontary.security import Consumer
 from ontary.store import Source, Store, StoredObject
-
-if TYPE_CHECKING:
-    from ontary.authoring import Ontology
 
 __all__ = [
     "OntologyClient",
@@ -174,7 +171,7 @@ class OntologyRuntime:
 
     def __init__(
         self,
-        ontology: OntologyDef | Ontology,
+        ontology: OntologyDef | SupportsDefinition,
         store: Store,
         handlers: Mapping[str, tuple[TypedHandler, type[ActionParams]]] | None = None,
         *,
@@ -247,7 +244,7 @@ class OntologyClient(_TypedReadMixin):
 
     def __init__(
         self,
-        ontology: OntologyDef | Ontology,
+        ontology: OntologyDef | SupportsDefinition,
         store: Store,
         consumer: Consumer,
         *,

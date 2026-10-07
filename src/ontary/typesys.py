@@ -13,12 +13,11 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from datetime import date, datetime
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
-if TYPE_CHECKING:
-    from ontary.meta import StructFieldDef
+from ontary.errors import ValidationFailed
 
 PropertyType = Literal[
     "str", "int", "float", "bool", "date", "datetime", "json", "struct"
@@ -147,6 +146,47 @@ def choice_value(value: Any, choices: tuple[str, ...] | None) -> Any:
     if choices is not None and isinstance(value, Enum):
         return value.value
     return value
+
+
+def _choices_declaration_violation(
+    prop_type: object, choices: Sequence[object] | None
+) -> str | None:
+    """Why a property's ``choices`` declaration is invalid, or ``None``."""
+    if choices is None:
+        return None
+    if prop_type != "str":
+        return "choices are only valid on 'str' properties"
+    if not choices:
+        return "choices must not be empty"
+    for member in choices:
+        if not isinstance(member, str):
+            return f"choices contains non-string member {member!r}"
+    if len(set(choices)) != len(choices):
+        return "choices contains a duplicate member"
+    return None
+
+
+class StructFieldDef(BaseModel):
+    name: str
+    type: PropertyType
+    choices: tuple[str, ...] | None = None
+    required: bool = True
+
+    @model_validator(mode="before")
+    @classmethod
+    def _valid_declaration(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        name = data.get("name")
+        if data.get("type") not in {"str", "int", "float", "bool", "date", "datetime"}:
+            raise ValidationFailed(
+                f"StructFieldDef {name!r}: type must be a scalar str/int/float/bool/date/datetime",
+                code="ONTOLOGY_INVALID",
+            )
+        violation = _choices_declaration_violation(data.get("type"), data.get("choices"))
+        if violation is not None:
+            raise ValidationFailed(f"StructFieldDef {name!r}: {violation}", code="ONTOLOGY_INVALID")
+        return data
 
 
 def struct_value(value: Any, fields: Sequence[StructFieldDef]) -> Any:

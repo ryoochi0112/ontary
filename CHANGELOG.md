@@ -11,6 +11,21 @@ you**.
 
 ## [Unreleased]
 
+### Changed
+
+- `ontary.query` is now a package of concern submodules, and `src/ontary` has no
+  static import cycles (#66). Public imports are unchanged: `ontary.query` still
+  exports the same seven names, and `ontary.__all__` is the same. Behavior does not
+  change. Some classes report a new `__module__`, because their definitions moved to
+  break the cycles: `Consumer` (`ontary._consumer`), `StructFieldDef`
+  (`ontary.typesys`), `FixedClock`, `SequentialIds`, and `make_store`
+  (`ontary._test_env`), `Page` and `TypedPage` (`ontary.query._paging`), and
+  `GuardedQuery` (`ontary.query._guarded`). Import them from their documented paths,
+  which still work. Private names that were importable from `ontary.query` now live
+  only in their submodule. `OntologyRuntime` and `OntologyClient` now annotate
+  `ontology` as `OntologyDef | SupportsDefinition`, which accepts everything the old
+  annotation did. No migration.
+
 ## [0.25.0] — 2026-10-07
 
 ```bash

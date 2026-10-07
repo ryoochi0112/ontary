@@ -27,7 +27,7 @@ from ontary.client import OntologyClient
 from ontary.errors import InternalError, ValidationFailed, VisibilityError
 from ontary.functions import BoundQuery
 from ontary.meta import Cardinality, Sensitivity
-from ontary.query import _AUTHOR_DISPATCH
+from ontary.query._aggregate import _AUTHOR_DISPATCH
 from ontary.scope import DirectProperty
 from ontary.security import Consumer
 from ontary.store import Lineage, Source, StoredObject

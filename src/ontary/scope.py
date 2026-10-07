@@ -78,9 +78,9 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from ontary._consumer import Consumer
 from ontary.errors import ValidationFailed
 from ontary.meta import OntologyRegistry
-from ontary.security import Consumer
 from ontary.store import Store, StoredObject
 
 Direction = Literal["from", "to"]
