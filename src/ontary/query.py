@@ -797,6 +797,28 @@ class GuardedQuery:
         before reading audit. Events outside those checked types are hidden.
         Reads cost O(audit log); there is no paging or SQL pushdown yet.
         """
+        return [
+            (entry, event, hidden)
+            for _, entry, event, hidden in self._positioned_visible_events(
+                consumer, event_type=event_type, about=about, since=since, until=until,
+            )
+        ]
+
+    def _positioned_visible_events(
+        self,
+        consumer: Consumer,
+        *,
+        event_type: str | None,
+        about: tuple[str, str] | None,
+        since: datetime | None,
+        until: datetime | None,
+    ) -> list[tuple[tuple[int, int], AuditEntry, EmittedEvent, frozenset[str]]]:
+        """`visible_events` rows, each led by its log position (#109).
+
+        A position is ``(index in store.audit_entries(), emission index in
+        that entry)``. The audit log is append-only, so a position never
+        changes as the log grows; positions strictly increase in result order.
+        """
         for boundary in (since, until):
             if boundary is not None:
                 iso_instant(boundary)
@@ -813,12 +835,12 @@ class GuardedQuery:
             self._require_coherent_scope(subject_type)
 
         candidates = [
-            (entry, event)
-            for entry in self._store.audit_entries()
+            ((entry_index, event_index), entry, event)
+            for entry_index, entry in enumerate(self._store.audit_entries())
             if entry.kind == "action" and entry.outcome == "ok"
             and (since is None or entry.ts >= since)
             and (until is None or entry.ts < until)
-            for event in entry.events
+            for event_index, event in enumerate(entry.events)
             if event.event_type in event_types
             and event.about_type in subject_types
             and (event_type is None or event.event_type == event_type)
@@ -826,8 +848,8 @@ class GuardedQuery:
         ]
 
         scope_cache = _ScopeReadCache()
-        visible: list[tuple[AuditEntry, EmittedEvent, frozenset[str]]] = []
-        for entry, event in candidates:
+        visible: list[tuple[tuple[int, int], AuditEntry, EmittedEvent, frozenset[str]]] = []
+        for position, entry, event in candidates:
             subject = scope_cache.read_last(self._store, event.about_type, event.about_id)
             if subject is None:
                 continue
@@ -845,7 +867,7 @@ class GuardedQuery:
                 consumer, event_types[event.event_type].properties,
             ))
             payload = {key: value for key, value in event.payload.items() if key not in hidden}
-            visible.append((entry, event.model_copy(update={"payload": payload}), hidden))
+            visible.append((position, entry, event.model_copy(update={"payload": payload}), hidden))
         return visible
 
     def _validate_where_keys(

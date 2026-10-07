@@ -60,7 +60,7 @@ from typing import TYPE_CHECKING, Any, Literal, TypeVar, overload
 from ontary._runtime import default_id_factory
 from ontary._typed_api import _TypedReadMixin, list_objects
 from ontary.actions import ActionError, ActionExecutor, TypedHandler
-from ontary.audit import AuditEntry, CapabilityAccessRecord, _audit_error_code
+from ontary.audit import AuditEntry, CapabilityAccessRecord, EmittedEvent, _audit_error_code
 from ontary.declarations import Declarations, declarations
 from ontary.errors import ValidationFailed
 from ontary.functions import BoundQuery
@@ -330,6 +330,45 @@ class OntologyClient(_TypedReadMixin):
                 f"unregistered event type: {name!r}",
                 code="UNKNOWN_EVENT_TYPE",
             ) from exc
+
+    def _event_rows(
+        self,
+        event_type: str | None,
+        *,
+        about: tuple[str, str] | None,
+        since: datetime | None,
+        until: datetime | None,
+    ) -> builtins.list[tuple[tuple[int, int], AuditEntry, EmittedEvent, frozenset[str]]]:
+        """Positioned visible events for string-form filters, unhydrated."""
+        if event_type is not None:
+            self._require_event_type(event_type)
+        if about is not None:
+            self._require_object_type(about[0])
+        return self._query._positioned_visible_events(
+            self._consumer, event_type=event_type, about=about, since=since, until=until,
+        )
+
+    def _event_subject_types(
+        self, event_type: str | None, about_type: str | None,
+    ) -> builtins.list[str]:
+        """Sorted subject types the selected event types can be about."""
+        registry = self._ontology.registry
+        event_types = registry.event_types
+        selected = set(event_types) if event_type is None else {event_type} & event_types.keys()
+        subject_types = {
+            action.target_type for action in registry.action_types.values()
+            if selected.intersection(action.emits)
+        }
+        if about_type is not None:
+            subject_types.add(about_type)
+        return sorted(subject_types)
+
+    def _event_scope_limited(self, event_type: str | None, about_type: str | None) -> bool:
+        """Declaration-only scope mark across every possible event subject type."""
+        return any(
+            self._query.scope_limited(subject_type)
+            for subject_type in self._event_subject_types(event_type, about_type)
+        )
 
     def _link_target_type(self, link: str, *, reverse: bool) -> str:
         """Resolve the result type of a declared link traversal."""

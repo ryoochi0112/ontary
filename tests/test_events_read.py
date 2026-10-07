@@ -648,3 +648,146 @@ def test_require_event_type_accepts_a_declared_api_name(
     domain: ReadDomain, name: str,
 ) -> None:
     domain.client()._require_event_type(name)
+
+
+def _positions(rows: list[Any]) -> list[tuple[int, int]]:
+    return [row[0] for row in rows]
+
+
+def test_positioned_events_index_the_audit_log_and_emission_order(domain: ReadDomain) -> None:
+    domain.append("function", kind="function")
+    domain.append("first", "second")
+    domain.append("denied", outcome="denied")
+    domain.append("third")
+    rows = domain.client()._event_rows(None, about=None, since=None, until=None)
+    assert _positions(rows) == [(1, 0), (1, 1), (3, 0)]
+    assert [event.payload["carrier"] for _, _, event, _ in rows] == ["first", "second", "third"]
+    assert _positions(rows) == sorted(set(_positions(rows)))  # strictly increasing
+
+
+def test_positions_of_earlier_events_are_stable_as_the_log_grows(domain: ReadDomain) -> None:
+    domain.append("first", "second")
+    client = domain.client()
+    before = client._event_rows(None, about=None, since=None, until=None)
+    domain.append("hidden", about_id="order-2")
+    domain.append("later")
+    after = client._event_rows(None, about=None, since=None, until=None)
+    assert after[: len(before)] == before
+    assert _positions(after) == [(0, 0), (0, 1), (2, 0)]
+
+
+@pytest.mark.parametrize("kind", ["human", "ai"])
+def test_visible_events_is_the_positioned_read_without_positions(
+    domain: ReadDomain, kind: Literal["human", "ai"],
+) -> None:
+    domain.append("first", "second", payload={"ai_secret": "a", "human_secret": "h"})
+    domain.append("packed", event_type="Packed")
+    domain.append("outside", about_id="order-2")
+    domain.append("other", about_type="OtherOrder")
+    query = domain.ontology.bind(domain.store).query
+    actor = consumer(scope_level="org", scope_id="org-1", kind=kind)
+    filters: list[dict[str, Any]] = [
+        {},
+        {"event_type": "OrderShipped"},
+        {"about": ("OtherOrder", "order-1")},
+        {"since": INSTANT, "until": INSTANT + timedelta(microseconds=1)},
+    ]
+    for kwargs in filters:
+        positioned = query._positioned_visible_events(
+            actor, event_type=kwargs.get("event_type"), about=kwargs.get("about"),
+            since=kwargs.get("since"), until=kwargs.get("until"),
+        )
+        assert [row[1:] for row in positioned] == query.visible_events(actor, **kwargs)
+
+
+def test_event_rows_filter_by_event_type_name(domain: ReadDomain) -> None:
+    domain.append("shipped")
+    domain.append("packed", event_type="Packed")
+    rows = domain.client()._event_rows("Packed", about=None, since=None, until=None)
+    assert [(pos, event.event_type, event.payload["carrier"]) for pos, _, event, _ in rows] == [
+        ((1, 0), "Packed", "packed"),
+    ]
+
+
+def test_event_rows_filter_by_about_tuple(domain: ReadDomain) -> None:
+    domain.append("match", about_type="OtherOrder")
+    domain.append("wrong-type")
+    domain.append("wrong-id", about_type="OtherOrder", about_id="order-2")
+    rows = domain.client()._event_rows(None, about=("OtherOrder", "order-1"), since=None, until=None)
+    assert [(pos, event.payload["carrier"]) for pos, _, event, _ in rows] == [((0, 0), "match")]
+
+
+def test_event_rows_window_is_inclusive_then_exclusive(domain: ReadDomain) -> None:
+    domain.append("before", ts=INSTANT - timedelta(microseconds=1))
+    domain.append("at")
+    domain.append("after", ts=INSTANT + timedelta(microseconds=1))
+    rows = domain.client()._event_rows(
+        None, about=None, since=INSTANT, until=INSTANT + timedelta(microseconds=1),
+    )
+    assert [(pos, entry.ts, event.payload["carrier"]) for pos, entry, event, _ in rows] == [
+        ((1, 0), INSTANT, "at"),
+    ]
+
+
+def test_event_rows_remove_hidden_payload_keys_and_name_them(domain: ReadDomain) -> None:
+    domain.append("yamato", payload={"ai_secret": "a", "human_secret": "h"})
+    _, _, event, hidden = domain.client(kind="ai")._event_rows(
+        "OrderShipped", about=None, since=None, until=None,
+    )[0]
+    assert hidden == frozenset({"ai_secret"})
+    assert "ai_secret" not in event.payload
+    assert event.payload["human_secret"] == "h"
+
+
+def test_event_rows_refuse_an_undeclared_event_type(domain: ReadDomain) -> None:
+    with pytest.raises(ValidationFailed) as caught:
+        domain.client()._event_rows("Shiped", about=None, since=None, until=None)
+    assert caught.value.code == "UNKNOWN_EVENT_TYPE"
+
+
+def test_event_rows_refuse_an_undeclared_about_type(domain: ReadDomain) -> None:
+    with pytest.raises(ValidationFailed) as caught:
+        domain.client()._event_rows(None, about=("Ordr", "order-1"), since=None, until=None)
+    assert caught.value.code == "UNKNOWN_OBJECT_TYPE"
+
+
+@pytest.mark.parametrize(("event_type", "about_type", "expected"), [
+    (None, None, ["Order", "OtherOrder"]),
+    ("OrderShipped", None, ["Order", "OtherOrder"]),
+    ("Packed", None, ["Order"]),
+    ("Packed", "Order", ["Order"]),
+    ("Packed", "OtherOrder", ["Order", "OtherOrder"]),
+])
+def test_event_subject_types_are_sorted_emitting_targets_plus_about_type(
+    domain: ReadDomain, event_type: str | None, about_type: str | None, expected: list[str],
+) -> None:
+    assert domain.client()._event_subject_types(event_type, about_type) == expected
+
+
+def test_event_subject_types_of_an_event_no_action_emits(domain: ReadDomain) -> None:
+    domain.ontology.registry.get_action_type("ShipOrder").emits = ["OrderShipped"]
+    client = domain.client()
+    assert client._event_subject_types("Packed", None) == []
+    assert client._event_subject_types("Packed", "OtherOrder") == ["OtherOrder"]
+
+
+def test_event_scope_limited_is_true_for_a_scoped_subject_with_no_events(domain: ReadDomain) -> None:
+    assert domain.store.audit_entries() == []
+    assert domain.client()._event_scope_limited("Packed", None) is True
+    assert domain.client()._event_scope_limited(None, None) is True
+
+
+def test_event_scope_limited_is_false_for_an_unscoped_subject_without_row_policy(
+    domain: ReadDomain,
+) -> None:
+    domain.ontology.registry.get_action_type("ShipOrder").emits = ["Packed"]
+    client = domain.client()
+    assert client._event_scope_limited("OrderShipped", None) is False
+    assert client._event_scope_limited("OrderShipped", "Order") is True
+    domain.ontology.definition.policy.row_visibility["OtherOrder"] = lambda *_: True
+    assert client._event_scope_limited("OrderShipped", None) is True
+
+
+def test_event_scope_limited_is_false_for_an_event_no_action_emits(domain: ReadDomain) -> None:
+    domain.ontology.registry.get_action_type("ShipOrder").emits = ["OrderShipped"]
+    assert domain.client()._event_scope_limited("Packed", None) is False
