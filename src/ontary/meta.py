@@ -48,9 +48,19 @@ ScopeLevel = str | None
 
 PropertyLint = Literal["STORED_DERIVABLE", "FREE_TEXT_STATUS"]
 ObjectLint = Literal["FORBIDDEN_TYPE_NAME", "AUDIT_TYPE"]
-ActionLint = Literal["CRUD_ACTION_NAME", "MICRO_ACTION"]
-FunctionLint = Literal["CRUD_ACTION_NAME"]
+ActionLint = Literal["CRUD_ACTION_NAME", "MICRO_ACTION", "MISSING_DESCRIPTION"]
+FunctionLint = Literal["CRUD_ACTION_NAME", "MISSING_DESCRIPTION"]
 EventLint = Literal["EVENT_NEVER_EMITTED"]
+
+
+def default_action_description(api_name: str) -> str:
+    """The placeholder description an action gets when none is declared."""
+    return f"Executes {api_name}."
+
+
+def default_function_description(api_name: str) -> str:
+    """The placeholder description a Function gets when none is declared."""
+    return f"Computes {api_name}."
 
 
 def _validated_accept(

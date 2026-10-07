@@ -11,8 +11,8 @@ from ontary.errors import ValidationFailed
 KINDS = {
     "PropertyDef": ("STORED_DERIVABLE", "FREE_TEXT_STATUS"),
     "ObjectTypeDef": ("FORBIDDEN_TYPE_NAME", "AUDIT_TYPE"),
-    "ActionTypeDef": ("CRUD_ACTION_NAME", "MICRO_ACTION"),
-    "FunctionDef": ("CRUD_ACTION_NAME",),
+    "ActionTypeDef": ("CRUD_ACTION_NAME", "MICRO_ACTION", "MISSING_DESCRIPTION"),
+    "FunctionDef": ("CRUD_ACTION_NAME", "MISSING_DESCRIPTION"),
 }
 
 

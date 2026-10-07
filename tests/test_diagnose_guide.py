@@ -13,17 +13,18 @@ from ontary.diagnose import Finding
 
 def _assert_guide_targets_exist() -> None:
     root = Path(__file__).resolve().parents[1]
-    headings = re.findall(
-        r"^#+\s+(.+)$", (root / "docs/ontology-design.md").read_text(), re.MULTILINE
-    )
-    slugs = {
-        re.sub(r"[^\w\s-]", "", heading.lower()).replace(" ", "-")
-        for heading in headings
-    }
-    for anchors in diagnose_module.GUIDE_ANCHORS.values():
-        assert anchors
-        for anchor in anchors:
-            assert anchor in slugs, f"Guide heading missing: {anchor}"
+    for guide in ("docs/ontology-design.md", "docs/ontology-design.ja.md"):
+        headings = re.findall(
+            r"^#+\s+(.+)$", (root / guide).read_text(), re.MULTILINE
+        )
+        slugs = {
+            re.sub(r"[^\w\s-]", "", heading.lower()).replace(" ", "-")
+            for heading in headings
+        }
+        for anchors in diagnose_module.GUIDE_ANCHORS.values():
+            assert anchors
+            for anchor in anchors:
+                assert anchor in slugs, f"Guide heading missing: {anchor}"
     site_url = re.search(
         r"^site_url:\s*(\S+)$", (root / "mkdocs.yml").read_text(), re.MULTILINE
     )
@@ -45,6 +46,7 @@ def test_guide_contract_maps_all_current_advisory_codes() -> None:
         "FREE_TEXT_STATUS": ("choice-properties",),
         "AUDIT_TYPE": ("the-golden-hammer",),
         "EVENT_NEVER_EMITTED": ("events",),
+        "MISSING_DESCRIPTION": ("descriptions-for-agents",),
     }
     assert diagnose_module.ADVISORY_CODES == diagnose_module.GUIDE_ANCHORS.keys()
 
