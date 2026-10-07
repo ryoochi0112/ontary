@@ -90,7 +90,7 @@ consumer surface（`OntologyClient` と `GuardedQuery`）では、`limit` を省
 
 ### ページネーション — `Page` / `TypedPage[T]`
 
-どちらも `items` と不透明な `next_cursor: str | None` を持ちます。consumer surface では
+どちらも `items`、不透明な `next_cursor: str | None`、`has_more: bool` を持ちます。consumer surface では
 `limit` の省略で上記の既定上限を使ったページになり、`limit=None` は明示的な上限なしリストの
 指定です。宣言された Function 内では `BoundQuery.list` は `limit` の省略または `None` で bare
 list を返し、正の `limit` を渡すとページを返します。
@@ -102,9 +102,12 @@ list を返し、正の `limit` を渡すとページを返します。
   ありません。短いページは常に「もう行が無い」を意味し、「一部が隠された」ではありません。
 - **カーソルは不透明。** 行ごとのランダムなトークンです。行 id でも件数でも順序でも
   ありません。パースせず、保存して `after=` に返すだけにしてください。
-- **`next_cursor is None` は「埋まる前に尽きた」の意味。** 最後の行でちょうど埋まった
-  ページもカーソルを持ち、次の呼び出しが最後の空ページを返します。よって
-  `while next_cursor is not None` のループは 1 ページ早く止まることなく正しく終了します。
+- **`next_cursor` が `None` になるのは `has_more` が `False` のときだけです。**
+  `has_more` が `True` のとき、`next_cursor` は最後に返した行の不透明なキーです。
+  ちょうど埋まった最後のページが、空ページへ続くカーソルを返すことはなくなりました。
+  よって `while page.next_cursor is not None:` のループは常に正しく終了します。
+- **`has_more` は可視な行だけを数えます。** スコープで見えない行が原因で `True` に
+  なることはありません。
 - **順序なしの walk では、途中の更新で行が重複することはありますが、取りこぼしは
   起こりません。** ストアは close-old / insert-new です。順序付き walk では、ソート値が
   カーソルより前に移動した行は静かに取りこぼされ、後ろに移動した行は重複します。
@@ -125,7 +128,16 @@ list を返し、正の `limit` を渡すとページを返します。
 型付き形式は `client.traverse(link_cls, from_obj_or_id)` です。文字列形式は
 `client.traverse("Comment", "commentOnTicket", comment_id)` のように、ソース型・
 リンク API 名・ソース id をこの順で渡します。Function 内の `BoundQuery` も同じ
-ハンドル先頭の型付き形式を受け付けます。
+ハンドル先頭の型付き形式を受け付けます。型付きハンドル形式にページネーションはありません。
+
+文字列形式はページングできます。
+`client.traverse("Team", "inTeam", "a", reverse=True, limit=100, after=cursor)` は
+`Page` を返します。`limit` を省略すると、従来どおり全件のリストを返します。
+`limit` なしの `after` は `AFTER_WITHOUT_LIMIT`、`limit < 1` は `INVALID_LIMIT` に
+なります。現在の可視なリンク先の行を指さなくなった traverse カーソル（リンクが
+閉じられた、または行が retire された、もしくは見えなくなった場合）は
+`STALE_CURSOR` になります。先頭ページからやり直してください。ループは他のページと
+同じく `while page.next_cursor is not None:` で回します。
 
 返される対象行にも通常どおり可視性チェックが適用されます。identity-revealing な
 リンクの traverse は、human コンシューマーに対しては対象を返す前に `VisibilityError`
