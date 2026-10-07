@@ -16,11 +16,15 @@ Uses a small standalone "library" registry/store (same toy domain as
 from __future__ import annotations
 
 from collections.abc import Callable
+from datetime import date, datetime, timezone
+from enum import Enum
 from typing import Any, cast
 
 import pytest
 from conftest import raises_code
 
+from ontary.authoring import Ontology, OntologyObject, prop
+from ontary.client import OntologyClient
 from ontary.errors import PreconditionFailed, ValidationFailed, VisibilityError
 from ontary.functions import BoundQuery, FunctionRegistry
 from ontary.meta import (
@@ -1039,3 +1043,172 @@ def test_bound_query_count_and_exists_return_empty_for_scoped_away_rows(
 
     assert bq.count("Note") == 0
     assert bq.exists("Note") is False
+
+
+# -- result encoding (#167) ---------------------------------------------------
+#
+# A Function's result crosses the JSON boundary exactly like an Action's. The
+# encoder runs inside `FunctionRegistry.call`, so these tests drive the real
+# `OntologyClient.call_function` in both of its branches (string name and typed
+# params) and read the function audit through the store.
+
+AWARE = datetime(2026, 10, 6, 9, 0, tzinfo=timezone.utc)
+NAIVE = datetime(2026, 10, 6, 9, 0)
+DAY = date(2026, 10, 6)
+
+_DATE_VALUES = {
+    "aware": (AWARE, "2026-10-06T09:00:00+00:00"),
+    "naive": (NAIVE, "2026-10-06T09:00:00"),
+    "date": (DAY, "2026-10-06"),
+}
+
+
+def _nested(value: Any) -> dict[str, Any]:
+    return {
+        "top": value,
+        "dict": {"at": value, "n": 1},
+        "list": [value, "x"],
+        "list_of_dicts": [{"at": value}, {"at": value, "k": None}],
+    }
+
+
+def _result_client(
+    box: dict[str, Any],
+) -> tuple[OntologyClient, type[FunctionParams]]:
+    """A client whose two audited Functions return whatever `box["value"]`
+    holds: `echo` takes no params, `echoTyped` takes a no-field params class.
+    `readWhen` returns the `when` property of a stored `Stamp`; `returnWhen`
+    returns the same instant as a Python `datetime`."""
+    ontology = Ontology(name="fnresult", scope_levels=["org"], min_n=1)
+
+    # Declared per client: a params class binds to exactly one Ontology.
+    class NoParams(FunctionParams):
+        pass
+
+    @ontology.object(layer="L0", scope="unscoped")
+    class Stamp(OntologyObject):
+        id: str = prop(primary_key=True)
+        when: datetime
+
+    @ontology.function(api_name="echo", audit=True)
+    def _echo(_query: BoundQuery) -> Any:
+        return box["value"]
+
+    @ontology.function(NoParams, api_name="echoTyped", audit=True)
+    def _echo_typed(_query: BoundQuery, _params: NoParams) -> Any:
+        return box["value"]
+
+    @ontology.function(api_name="readWhen", audit=True)
+    def _read_when(query: BoundQuery) -> Any:
+        stamp = query.get(Stamp, "s1")
+        assert stamp is not None
+        return stamp.when
+
+    @ontology.function(api_name="returnWhen", audit=True)
+    def _return_when(_query: BoundQuery) -> Any:
+        return AWARE
+
+    ontology.validate()
+    store = ObjectStore(ontology.registry)
+    store.insert("Stamp", {"id": "s1", "when": AWARE}, SRC)
+    consumer = Consumer(
+        actor_id="a1", role="Admin", scope_level="org", scope_id="org-1", kind="ai"
+    )
+    return OntologyClient(ontology, store, consumer), NoParams
+
+
+@pytest.mark.parametrize("shape", ["top", "dict", "list", "list_of_dicts"])
+@pytest.mark.parametrize("kind", sorted(_DATE_VALUES))
+def test_function_dates_come_back_as_iso_strings_on_both_call_forms(
+    kind: str, shape: str
+) -> None:
+    value, iso = _DATE_VALUES[kind]
+    box: dict[str, Any] = {"value": _nested(value)[shape]}
+    client, no_params = _result_client(box)
+    expected = _nested(iso)[shape]
+
+    assert client.call_function("echo", {}) == expected
+    assert client.call_function(no_params()) == expected
+
+    entries = client._store.audit_entries()
+    assert [(e.action, e.outcome) for e in entries] == [
+        ("echo", "ok"),
+        ("echoTyped", "ok"),
+    ]
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param(7, id="int"),
+        pytest.param(2.5, id="float"),
+        pytest.param("text", id="str"),
+        pytest.param(True, id="bool"),
+        pytest.param(None, id="none"),
+        pytest.param([1, "a", None, {"k": [2]}], id="list"),
+    ],
+)
+def test_function_may_return_scalar_none_or_list_unchanged(value: Any) -> None:
+    client, no_params = _result_client({"value": value})
+
+    assert client.call_function("echo", {}) == value
+    assert client.call_function(no_params()) == value
+    assert [e.outcome for e in client._store.audit_entries()] == ["ok", "ok"]
+
+
+class _Plain(Enum):
+    A = "a"
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param(float("inf"), id="inf"),
+        pytest.param(float("nan"), id="nan"),
+        pytest.param({1, 2}, id="set"),
+        pytest.param((1, 2), id="tuple"),
+        pytest.param({1: "x"}, id="non-str-key"),
+        pytest.param(_Plain.A, id="plain-enum"),
+    ],
+)
+def test_function_result_that_is_not_json_is_refused_and_audited(value: Any) -> None:
+    client, no_params = _result_client({"value": value})
+
+    for call in (
+        lambda: client.call_function("echo", {}),
+        lambda: client.call_function(no_params()),
+    ):
+        with raises_code(PreconditionFailed, "RESULT_NOT_JSON") as exc_info:
+            call()
+        assert exc_info.value.kind == "precondition"
+
+    entries = client._store.audit_entries()
+    assert [(e.action, e.outcome, e.error_code) for e in entries] == [
+        ("echo", "error", "RESULT_NOT_JSON"),
+        ("echoTyped", "error", "RESULT_NOT_JSON"),
+    ]
+
+
+def test_function_result_refusal_names_handler_and_nested_key_path() -> None:
+    client, no_params = _result_client({"value": {"rows": [{"when": {1, 2}}]}})
+
+    with pytest.raises(PreconditionFailed) as exc_info:
+        client.call_function("echo", {})
+
+    assert exc_info.value.code == "RESULT_NOT_JSON"
+    assert str(exc_info.value) == (
+        "'echo': result is not JSON-serializable at "
+        'result["rows"][0]["when"] (set)'
+    )
+
+
+def test_function_returning_a_read_property_and_the_python_datetime_agree() -> None:
+    """AC3: the string for a datetime read back from the store is the string
+    for the same Python datetime returned directly."""
+    client, no_params = _result_client({"value": None})
+
+    read_back = client.call_function("readWhen", {})
+    direct = client.call_function("returnWhen", {})
+
+    assert read_back == direct == "2026-10-06T09:00:00+00:00"
+    assert isinstance(read_back, str)

@@ -55,17 +55,24 @@ def _provider_ontology() -> tuple[Ontology, dict[str, Any]]:
     def run(_ctx: ActionContext, _params: RunParams) -> dict[str, str]:
         return {"status": "ok"}
 
+    # The provider map is keyed by `CapabilityHandle`, so it cannot be the
+    # Function's *result* (results cross the JSON boundary, #167). The handler
+    # records what it was bound to here and returns only the call count.
+    observed: list[dict[Any, Any]] = []
+
     @ontology.function(
         api_name="boundProviders",
         capabilities=[read_primary, read_secondary],
     )
-    def bound_providers(query: BoundQuery) -> dict[str, Any]:
-        return {"capabilities": dict(query._capability_providers)}
+    def bound_providers(query: BoundQuery) -> dict[str, int]:
+        observed.append(dict(query._capability_providers))
+        return {"calls": len(observed)}
 
     ontology.validate()
     return ontology, {
         "read_primary": read_primary,
         "read_secondary": read_secondary,
+        "observed": observed,
     }
 
 
@@ -102,8 +109,8 @@ def test_bind_copies_maps_and_for_consumer_overrides_per_key(
     )
     capability_overrides[handles["read_primary"]] = replacement
 
-    bound = client.call_function("boundProviders", {})
-    assert bound["capabilities"] == {
+    client.call_function("boundProviders", {})
+    assert handles["observed"][-1] == {
         handles["read_primary"]: override,
         handles["read_secondary"]: secondary,
     }
@@ -153,12 +160,13 @@ def test_shared_runtime_clients_interleave_without_provider_crosstalk(
         "_id_factory",
     }
 
-    first_a = client_a.call_function("boundProviders", {})
-    only_b = client_b.call_function("boundProviders", {})
-    second_a = client_a.call_function("boundProviders", {})
-    assert first_a["capabilities"][handles["read_primary"]] is provider_a
-    assert only_b["capabilities"][handles["read_primary"]] is provider_b
-    assert second_a["capabilities"][handles["read_primary"]] is provider_a
+    client_a.call_function("boundProviders", {})
+    client_b.call_function("boundProviders", {})
+    client_a.call_function("boundProviders", {})
+    first_a, only_b, second_a = handles["observed"]
+    assert first_a[handles["read_primary"]] is provider_a
+    assert only_b[handles["read_primary"]] is provider_b
+    assert second_a[handles["read_primary"]] is provider_a
 
 
 def test_direct_client_copies_maps_and_threads_them_to_action_execute(
@@ -190,8 +198,8 @@ def test_direct_client_copies_maps_and_threads_them_to_action_execute(
     )
     capabilities[handles["read_primary"]] = replacement
 
-    bound = client.call_function("boundProviders", {})
-    assert bound["capabilities"][handles["read_primary"]] is provider
+    client.call_function("boundProviders", {})
+    assert handles["observed"][-1][handles["read_primary"]] is provider
 
     with patch.object(
         client.actions,
