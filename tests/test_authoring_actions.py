@@ -17,6 +17,7 @@ from typing import Any, Protocol
 
 import pytest
 from conftest import raises_code
+from pydantic import Field
 
 from examples.tickets.ontology import build_ontology
 from ontary.actions import ActionContext, ActionError, ActionExecutor
@@ -76,9 +77,9 @@ class TestDerivedMatchesHandWritten:
         ontology, Ticket, _Team = _build_tickets_ontology()
 
         class EscalateTicketParams(ActionParams):
-            ticket_id: str = target(Ticket)
-            agent_id: str
-            reason: str | None = None
+            ticket_id: str = target(Ticket, description="The ticket to escalate.")
+            agent_id: str = Field(description="The agent who takes the escalation.")
+            reason: str | None = Field(default=None, description="Why the ticket needs escalation.")
 
         @ontology.action(
             EscalateTicketParams,

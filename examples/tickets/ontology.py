@@ -12,6 +12,8 @@ from __future__ import annotations
 
 from typing import Literal
 
+from pydantic import Field
+
 from ontary import (
     ActionContext,
     ActionError,
@@ -123,9 +125,9 @@ escalationAssignedTo: LinkHandle[Escalation, Agent] = _ontology.link(
 
 
 class EscalateTicketParams(ActionParams):
-    ticket_id: str = target(Ticket)
-    agent_id: str
-    reason: str | None = None
+    ticket_id: str = target(Ticket, description="The ticket to escalate.")
+    agent_id: str = Field(description="The agent who takes the escalation.")
+    reason: str | None = Field(default=None, description="Why the ticket needs escalation.")
 
 
 @_ontology.action(

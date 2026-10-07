@@ -201,7 +201,13 @@ def get_order(ctx: ActionContext, order_id: str) -> WorkOrder:
     return order
 
 
-@ontology.action(ReportFault, api_name="report_fault", target=WorkOrder, roles=ROLES)
+@ontology.action(
+    ReportFault,
+    api_name="report_fault",
+    target=WorkOrder,
+    roles=ROLES,
+    description="Open a work order for a fault on an asset.",
+)
 def report_fault(ctx: ActionContext, p: ReportFault) -> dict[str, str]:
     asset = ctx.get(Asset, p.asset_id)
     if asset is None:
@@ -219,7 +225,13 @@ def report_fault(ctx: ActionContext, p: ReportFault) -> dict[str, str]:
     return {"order_id": order.id}
 
 
-@ontology.action(Triage, api_name="triage", target=WorkOrder, roles=ROLES)
+@ontology.action(
+    Triage,
+    api_name="triage",
+    target=WorkOrder,
+    roles=ROLES,
+    description="Mark a reported work order as triaged.",
+)
 def triage(ctx: ActionContext, p: Triage) -> dict[str, str]:
     order = get_order(ctx, p.order_id)
     order.status = "triaged"
@@ -227,7 +239,13 @@ def triage(ctx: ActionContext, p: Triage) -> dict[str, str]:
     return {"status": order.status}
 
 
-@ontology.action(Schedule, api_name="schedule", target=WorkOrder, roles=ROLES)
+@ontology.action(
+    Schedule,
+    api_name="schedule",
+    target=WorkOrder,
+    roles=ROLES,
+    description="Assign a technician at the asset's site to a work order, optionally reserving a part.",
+)
 def schedule(ctx: ActionContext, p: Schedule) -> dict[str, str]:
     order = get_order(ctx, p.order_id)
     technician = ctx.get(Technician, p.technician_id)
@@ -251,7 +269,12 @@ def schedule(ctx: ActionContext, p: Schedule) -> dict[str, str]:
 
 
 @ontology.action(
-    Complete, api_name="complete", target=WorkOrder, roles=ROLES, emits=[WorkOrderCompleted]
+    Complete,
+    api_name="complete",
+    target=WorkOrder,
+    roles=ROLES,
+    emits=[WorkOrderCompleted],
+    description="Mark a work order done and announce its completion.",
 )
 def complete(ctx: ActionContext, p: Complete) -> dict[str, str]:
     order = get_order(ctx, p.order_id)
@@ -261,7 +284,13 @@ def complete(ctx: ActionContext, p: Complete) -> dict[str, str]:
     return {"status": order.status}
 
 
-@ontology.action(Cancel, api_name="cancel", target=WorkOrder, roles=ROLES)
+@ontology.action(
+    Cancel,
+    api_name="cancel",
+    target=WorkOrder,
+    roles=ROLES,
+    description="Cancel a work order and release its part reservations.",
+)
 def cancel(ctx: ActionContext, p: Cancel) -> dict[str, str]:
     order = get_order(ctx, p.order_id)
     order.status = "cancelled"
@@ -271,7 +300,13 @@ def cancel(ctx: ActionContext, p: Cancel) -> dict[str, str]:
     return {"status": order.status}
 
 
-@ontology.action(RecordPartsUsed, api_name="record_parts_used", target=WorkOrder, roles=ROLES)
+@ontology.action(
+    RecordPartsUsed,
+    api_name="record_parts_used",
+    target=WorkOrder,
+    roles=ROLES,
+    description="Record parts consumed on a scheduled work order, drawing down reservations.",
+)
 def record_parts_used(ctx: ActionContext, p: RecordPartsUsed) -> dict[str, str]:
     order = get_order(ctx, p.order_id)
     part = ctx.get(Part, p.part_id)

@@ -102,6 +102,7 @@ Amina 25
 An action expresses the business operation of submitting a request.
 Add this block after the link. `SubmitRequest` types the inputs.
 `ref(Employee)` declares which employee the input names.
+The `description=` is a sentence an agent reads to choose the action.
 
 ```python
 class SubmitRequest(ActionParams):
@@ -109,7 +110,10 @@ class SubmitRequest(ActionParams):
     start_date: date
     days: int
 
-@ontology.action(SubmitRequest, target=LeaveRequest, roles=["Employee"])
+@ontology.action(
+    SubmitRequest, target=LeaveRequest, roles=["Employee"],
+    description="Submit a leave request for the signed-in employee.",
+)
 def submit(ctx: ActionContext, params: SubmitRequest) -> dict[str, str]:
     if params.employee_id != ctx.consumer.actor_id:
         raise ActionError("employees submit their own requests", code="PERMISSION_DENIED")
@@ -195,7 +199,10 @@ class ApproveRequest(ActionParams):
 class RejectRequest(ActionParams):
     request_id: str = target(LeaveRequest)
 
-@ontology.action(ApproveRequest, target=LeaveRequest, roles=["Manager"])
+@ontology.action(
+    ApproveRequest, target=LeaveRequest, roles=["Manager"],
+    description="Approve a submitted leave request.",
+)
 def approve(ctx: ActionContext, params: ApproveRequest) -> dict[str, str]:
     request = ctx.get(LeaveRequest, params.request_id)
     if request is None:
@@ -204,7 +211,10 @@ def approve(ctx: ActionContext, params: ApproveRequest) -> dict[str, str]:
     ctx.save(request)
     return {"request_id": request.id}
 
-@ontology.action(RejectRequest, target=LeaveRequest, roles=["Manager"])
+@ontology.action(
+    RejectRequest, target=LeaveRequest, roles=["Manager"],
+    description="Reject a submitted leave request.",
+)
 def reject(ctx: ActionContext, params: RejectRequest) -> dict[str, str]:
     request = ctx.get(LeaveRequest, params.request_id)
     if request is None:
@@ -221,7 +231,10 @@ so an employee can cancel only their own request:
 class CancelRequest(ActionParams):
     request_id: str = target(LeaveRequest)
 
-@ontology.action(CancelRequest, target=LeaveRequest, roles=["Employee"])
+@ontology.action(
+    CancelRequest, target=LeaveRequest, roles=["Employee"],
+    description="Cancel the signed-in employee's own leave request.",
+)
 def cancel(ctx: ActionContext, params: CancelRequest) -> dict[str, str]:
     request = ctx.get(LeaveRequest, params.request_id)
     if request is None:
@@ -275,7 +288,10 @@ from ontary import BoundQuery, FunctionParams
 class RemainingDays(FunctionParams):
     employee_id: str = ref(Employee)
 
-@ontology.function(RemainingDays)
+@ontology.function(
+    RemainingDays,
+    description="Leave days an employee still has: allowance minus approved days.",
+)
 def remaining_days(query: BoundQuery, params: RemainingDays) -> int:
     employee = query.get(Employee, params.employee_id)
     if employee is None:
@@ -325,6 +341,7 @@ class RejectRequest(ActionParams):
 
 @ontology.action(
     ApproveRequest, target=LeaveRequest, roles=["Manager"], emits=[RequestDecided],
+    description="Approve a submitted leave request and announce the decision.",
 )
 def approve(ctx: ActionContext, params: ApproveRequest) -> dict[str, str]:
     request = ctx.get(LeaveRequest, params.request_id)
@@ -337,6 +354,7 @@ def approve(ctx: ActionContext, params: ApproveRequest) -> dict[str, str]:
 
 @ontology.action(
     RejectRequest, target=LeaveRequest, roles=["Manager"], emits=[RequestDecided],
+    description="Reject a submitted leave request and announce the decision.",
 )
 def reject(ctx: ActionContext, params: RejectRequest) -> dict[str, str]:
     request = ctx.get(LeaveRequest, params.request_id)

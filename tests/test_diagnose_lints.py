@@ -98,6 +98,7 @@ def _ontology_with_action_name(api_name: str, *, accept: ActionLint | None = Non
         roles=["Operator"],
         api_name=api_name,
         display_name="Update status",
+        description="Update a ticket's status.",
         accept=accept,
     )
     def handler(_ctx: Any, _params: Params) -> dict[str, Any]:
@@ -191,6 +192,7 @@ def _ontology_with_micro_action(
         target=Ticket,
         roles=["Operator"],
         api_name=api_name,
+        description="Set a ticket's status.",
         accept=accept,
     )
     def handler(_ctx: Any, _params: Params) -> dict[str, Any]:
@@ -305,6 +307,7 @@ def test_combined_ontology_reports_three_lints_in_one_sweep() -> None:
         target=Ticket,
         roles=["Operator"],
         api_name="UpdateStatus",
+        description="Update a ticket's status.",
     )
     def handler(_ctx: Any, _params: UpdateParams) -> dict[str, Any]:
         return {}
@@ -342,7 +345,7 @@ def test_each_lint_is_pinned_in_rules_tuple(code: str, rule_name: str) -> None:
 def _ontology_with_function_name(api_name: str, *, accept: FunctionLint | None = None) -> Ontology:
     ontology = _scoped_ontology("function-name")
 
-    @ontology.function(api_name=api_name, accept=accept)
+    @ontology.function(api_name=api_name, description="Return a number.", accept=accept)
     def handler(_query: Any) -> int:
         return 0
 
@@ -753,6 +756,7 @@ def _event_ontology(
     @ontology.action(
         ApproveTicket, target=Ticket, roles=["Operator"],
         emits=[Approved] if emits else [],
+        description="Approve a ticket.",
     )
     def handler(_ctx: Any, _params: ApproveTicket) -> dict[str, Any]:
         return {}
