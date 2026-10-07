@@ -432,6 +432,7 @@ def test_typed_function_parameters_are_published_and_validated() -> None:
             {
                 "name": "queue_id",
                 "type": "str",
+                "description": None,
                 "choices": None,
                 "fields": None,
                 "required": True,
@@ -446,6 +447,7 @@ def test_typed_function_parameters_are_published_and_validated() -> None:
         {
             "name": "shelf_id",
             "type": "str",
+            "description": None,
             "choices": None,
             "fields": None,
             "required": True,

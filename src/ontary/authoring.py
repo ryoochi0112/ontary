@@ -690,6 +690,7 @@ def _derive_params(
             ActionParameterDef(
                 name=field_name,
                 type=property_type,
+                description=field_info.description,
                 choices=choices,
                 fields=fields,
                 required=required,

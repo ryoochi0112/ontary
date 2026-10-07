@@ -484,10 +484,13 @@ class ActionParameterDef(BaseModel):
       object (e.g. a team) that must itself be covered by the consumer's
       scope, regardless of whether it "exists" as a target of the action.
     - `choices`: the allowed string values, as on `PropertyDef` (#42).
+    - `description`: the author's one-line explanation of the parameter,
+      read from the params field's `description=` (#65); `None` if undeclared.
     """
 
     name: str
     type: PropertyType
+    description: str | None = None
     choices: tuple[str, ...] | None = None
     fields: tuple[StructFieldDef, ...] | None = None
     required: bool = True

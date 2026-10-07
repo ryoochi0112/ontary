@@ -803,6 +803,7 @@ def _parameter_payload(parameter: ActionParameterDef) -> dict[str, Any]:
     return {
         "name": parameter.name,
         "type": parameter.type,
+        "description": parameter.description,
         "choices": None if parameter.choices is None else list(parameter.choices),
         "fields": None
         if parameter.fields is None
