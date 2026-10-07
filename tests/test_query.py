@@ -20,7 +20,7 @@ from typing import Any
 import pytest
 from conftest import raises_code
 
-import ontary.query as query_module
+import ontary.query._guarded as query_module
 from ontary import OntologyObject, _typed_api
 from ontary.actions import ActionContext, ActionExecutor
 from ontary.authoring import ActionParams

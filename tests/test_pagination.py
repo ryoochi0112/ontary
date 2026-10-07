@@ -21,7 +21,7 @@ from typing import Any
 import pytest
 from conftest import raises_code
 
-import ontary.query as query_module
+import ontary.query._guarded as query_module
 from ontary.authoring import Ontology, OntologyObject, prop
 from ontary.client import OntologyClient
 from ontary.errors import ValidationFailed
