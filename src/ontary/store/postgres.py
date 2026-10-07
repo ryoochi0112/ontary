@@ -6,6 +6,9 @@ roadmap called a Postgres backend "a fill-in rather than a rewrite" because
 being cashed. Every behavioral assertion in `tests/test_store_conformance.py`
 runs against this class unchanged.
 
+`PostgresStore` subclasses `StoreCore` and supplies the Postgres storage
+steps.
+
 The write path (order of steps, refusals, cardinality, the clock, and write
 capture) is `ontary.store._core.StoreCore`'s; this module supplies the
 advisory-lock transaction and the storage steps it calls, plus its own reads.

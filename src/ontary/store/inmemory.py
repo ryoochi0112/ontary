@@ -1,6 +1,6 @@
 """In-memory `Store` implementation: dict-backed, no SQL.
 
-`InMemoryStore` implements the same `Store` Protocol as
+`InMemoryStore` subclasses `ontary.store._core.StoreCore` and implements the same `Store` Protocol as
 `ontary.store.ObjectStore` and passes the shared conformance suite
 (`tests/test_store_conformance.py`) unchanged -- CRUD, links + cardinality,
 authority refusals, audit, and transaction rollback all behave identically.

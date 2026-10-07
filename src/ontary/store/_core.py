@@ -214,6 +214,18 @@ class StoreCore(abc.ABC):
     def capture_action_writes(
         self, *, at: str | None = None
     ) -> Iterator[list[WriteRecord]]:
+        """Context manager that, while active, enforces authority
+        declarations on action writes and records each allowed create,
+        update, retire, link, or unlink as a `WriteRecord` in the yielded
+        list.
+
+        Outside a capture context the store enforces nothing -- writes from
+        trusted loader/fixture code are unrestricted (declared, not
+        defended). `at`, when given, is the one instant every write inside
+        the capture is stamped with, overriding the store clock. Nesting is a
+        programming error (the executor owns one capture context per action
+        call) and raises `RuntimeError`.
+        """
         with self._write_capture.capture(at=at) as records:
             yield records
 
@@ -232,17 +244,29 @@ class StoreCore(abc.ABC):
     # storage step.
 
     def read_current(self, obj_type: str, obj_id: str) -> StoredObject | None:
+        """Raw (unredacted, unscoped) read of one object's current row, or `None`
+        if it does not exist. Trusted-caller-only."""
         return self._current_row(obj_type, canonical_id(obj_id))
 
     def read_last(self, obj_type: str, obj_id: str) -> StoredObject | None:
+        """Raw read of one object's newest row -- live or retired -- or `None` if
+        it was never stored. Unlike `read_current`, a retired object is still
+        found. Trusted-caller-only."""
         return self._last_row(obj_type, canonical_id(obj_id))
 
     def read_all(self, obj_type: str) -> list[StoredObject]:
+        """Raw read of every current row of `obj_type`, in `read_page` order.
+        Trusted-caller-only."""
         return self._all_rows(obj_type)
 
     def read_page(
         self, obj_type: str, after_key: str | None = None, batch: int = DEFAULT_BATCH
     ) -> list[PagedRow]:
+        """Raw read of current rows of `obj_type` in the store's own per-row
+        order, strictly after `after_key` (or from the start when `None`),
+        capped at `batch`. Each `PagedRow` carries its own cursor key; an
+        unknown `after_key` or an invalid `batch` is refused.
+        Trusted-caller-only."""
         check_read_page_batch(batch)
         after_row_id: int | None = None
         if after_key is not None:
@@ -252,11 +276,15 @@ class StoreCore(abc.ABC):
         return self._page_rows(obj_type, after_row_id, batch)
 
     def links_from(self, link_type: str, from_id: str) -> list[str]:
+        """Ids of every current target reachable from `from_id` via `link_type`;
+        raises `UNKNOWN_LINK_TYPE` for an undeclared type."""
         from_id = canonical_id(from_id)
         resolve_link_type(self._registry, link_type)
         return self._link_ids_from(link_type, from_id)
 
     def links_to(self, link_type: str, to_id: str) -> list[str]:
+        """Ids of every current source reaching `to_id` via `link_type`; raises
+        `UNKNOWN_LINK_TYPE` for an undeclared type."""
         to_id = canonical_id(to_id)
         resolve_link_type(self._registry, link_type)
         return self._link_ids_to(link_type, to_id)
@@ -264,11 +292,15 @@ class StoreCore(abc.ABC):
     def links_from_asof(
         self, link_type: str, from_id: str, asof: str
     ) -> list[str]:
+        """`links_from`, as of the instant `asof`: links live then, including
+        links since closed (for example by retiring the object)."""
         from_id = canonical_id(from_id)
         resolve_link_type(self._registry, link_type)
         return self._link_ids_from_asof(link_type, from_id, asof)
 
     def links_to_asof(self, link_type: str, to_id: str, asof: str) -> list[str]:
+        """`links_to`, as of the instant `asof`: links live then, including links
+        since closed."""
         to_id = canonical_id(to_id)
         resolve_link_type(self._registry, link_type)
         return self._link_ids_to_asof(link_type, to_id, asof)
@@ -420,4 +452,5 @@ class StoreCore(abc.ABC):
             self._append_audit_row(fields)
 
     def audit_entries(self) -> list[AuditEntry]:
+        """Every persisted audit entry, in append order."""
         return self._audit_rows()

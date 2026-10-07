@@ -5,6 +5,10 @@ Domain-agnostic storage layer for any ontology declared via
 (valid_from/valid_to, close-old-insert-new), links with cardinality
 enforcement, and an append-only audit log.
 
+`ObjectStore` subclasses `ontary.store._core.StoreCore`, which owns the write
+and read paths, and supplies the SQLite storage steps (connection,
+transaction, SQL).
+
 The raw read API (`read_current`, `read_all`) is public but
 *engine/trusted-caller-only*: the guarded, security-aware query layer
 (`ontary.query.GuardedQuery`) is the only read path a CONSUMER (human/AI

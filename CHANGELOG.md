@@ -25,6 +25,36 @@ you**.
   only in their submodule. `OntologyRuntime` and `OntologyClient` now annotate
   `ontology` as `OntologyDef | SupportsDefinition`, which accepts everything the old
   annotation did. No migration.
+- All three stores (`InMemoryStore`, `ObjectStore`, `PostgresStore`) now run one
+  shared write and read path, `StoreCore` (#67). Each backend supplies only its
+  storage steps, so a write rule is fixed in one place. The public `Store` surface,
+  the SQLite and Postgres schema, and `SCHEMA_VERSION` are unchanged.
+
+### Fixed
+
+- A refused `create_link` for a cardinality limit now gives the same message on
+  `PostgresStore` as on the other two stores (#67).
+- The reads that decide a `create_link` refusal or no-op (endpoint existence, an
+  identical live link, and the cardinality count) now run inside the store
+  transaction on every backend. Before, they ran outside it, so a concurrent write
+  could slip between the check and the write. This affected the endpoint and
+  identical-link reads on all three backends, and the cardinality read on
+  `InMemoryStore` and `ObjectStore` (#67).
+- `update` with a payload that cannot be JSON-encoded now fails before any row
+  changes on `InMemoryStore` and `ObjectStore`. Before, inside an outer transaction,
+  a caught `TypeError` left the old row closed and no new version written (#67).
+- `insert` and `update` now encode the payload before they read the clock on every
+  backend. An unencodable payload now raises `TypeError` rather than a clock error,
+  and a fake clock no longer spends a tick on it. `InMemoryStore` and `ObjectStore`
+  used to read the clock first (#67).
+- `create_link` now reads the clock after the cardinality check on every backend. On
+  `PostgresStore`, a link refused for cardinality used to spend a clock tick, and a
+  naive clock raised its error instead of `CARDINALITY_VIOLATION` (#67).
+- `retire_object` now checks the not-before-`valid_from` rule on every live row of
+  the object, closes all of them, and returns the newest closed row, on every
+  backend. `ObjectStore` and `PostgresStore` used to check only the newest row.
+  This only differs when an object has more than one live row, which the SQL unique
+  index forbids (#67).
 
 ## [0.25.0] — 2026-10-07
 
