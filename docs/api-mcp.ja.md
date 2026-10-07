@@ -49,10 +49,10 @@ server = build_mcp_server(ontology, store, consumer, *, name=None,
 | --- | --- | --- |
 | `list_object_types`, `list_link_types`, `list_action_types`, `list_functions`, `get_declarations` | — | — |
 | `get_object` | `obj_type`, `obj_id` | — |
-| `query_objects` | `obj_type` | `where`, `order_by`, `limit`, `after` |
+| `query_objects` | `obj_type` | `where`, `order_by`, `limit`, `after`, `include_total` （既定値 `false`） |
 | `count_objects` | `obj_type` | `where` |
 | `aggregate_objects` | `obj_type` | `value_field`, `group_by`, `where`, `func` （既定値 `"mean"`） |
-| `traverse_links` | `obj_type`, `obj_id`, `link_api_name` | `reverse` （既定値 `false`） |
+| `traverse_links` | `obj_type`, `obj_id`, `link_api_name` | `reverse` （既定値 `false`）, `limit`, `after`, `include_total` （既定値 `false`） |
 | `execute_action` | `api_name`, `params` | — |
 | `call_function` | `api_name`, `params` | — |
 
@@ -165,9 +165,9 @@ stateful セッションでも、各 request はその request 自身のトー�
 | ツール | トップレベルのキー | 行のキー | `result` の値 | スコープの方針 |
 | --- | --- | --- | --- | --- |
 | `get_object` | `result` | `payload`, `lineage`, `redacted_fields` | オブジェクト行、または存在しない・退役したオブジェクトに対する `null` です。 | `scope_limited` はありません。スコープ外の ID は `VISIBILITY_DENIED` で拒否します。 |
-| `query_objects` | `result`, `next_cursor`, `scope_limited` | `payload`, `lineage`, `redacted_fields` | オブジェクト行のリストです。 | `scope_limited` は検索対象の型の宣言に従います。 |
+| `query_objects` | `result`, `next_cursor`, `has_more`, `scope_limited` | `payload`, `lineage`, `redacted_fields` | オブジェクト行のリストです。 | `scope_limited` は検索対象の型の宣言に従います。 |
 | `count_objects` | `result`, `scope_limited` | — | 可視行の件数を表す整数です。 | `scope_limited` は件数を数える型の宣言に従います。 |
-| `traverse_links` | `result`, `scope_limited` | `payload`, `lineage`, `redacted_fields` | オブジェクト行のリストです。 | `scope_limited` は結果の型の宣言に従います。 |
+| `traverse_links` | `result`, `next_cursor`, `has_more`, `scope_limited` | `payload`, `lineage`, `redacted_fields` | オブジェクト行のリストです。 | `scope_limited` は結果の型の宣言に従います。 |
 
 `scope_limited` は、成功した検索・件数取得・リンク走査で常に返す真偽値です。
 空のリストや件数がゼロの場合も返します。

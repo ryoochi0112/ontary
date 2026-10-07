@@ -48,10 +48,10 @@ parameter name, even when it is empty (`{}`). `list_action_types` and
 | --- | --- | --- |
 | `list_object_types`, `list_link_types`, `list_action_types`, `list_functions`, `get_declarations` | — | — |
 | `get_object` | `obj_type`, `obj_id` | — |
-| `query_objects` | `obj_type` | `where`, `order_by`, `limit`, `after` |
+| `query_objects` | `obj_type` | `where`, `order_by`, `limit`, `after`, `include_total` (default `false`) |
 | `count_objects` | `obj_type` | `where` |
 | `aggregate_objects` | `obj_type` | `value_field`, `group_by`, `where`, `func` (default `"mean"`) |
-| `traverse_links` | `obj_type`, `obj_id`, `link_api_name` | `reverse` (default `false`) |
+| `traverse_links` | `obj_type`, `obj_id`, `link_api_name` | `reverse` (default `false`), `limit`, `after`, `include_total` (default `false`) |
 | `execute_action` | `api_name`, `params` | — |
 | `call_function` | `api_name`, `params` | — |
 
@@ -160,9 +160,9 @@ key in an object row. Errors use the error envelope instead.
 | Tool | Top-level keys | Row keys | `result` value | Scope policy |
 | --- | --- | --- | --- | --- |
 | `get_object` | `result` | `payload`, `lineage`, `redacted_fields` | Object row, or `null` for a missing or retired object | No `scope_limited`; an out-of-scope ID refuses with `VISIBILITY_DENIED`. |
-| `query_objects` | `result`, `next_cursor`, `scope_limited` | `payload`, `lineage`, `redacted_fields` | List of object rows | `scope_limited` follows the queried type's declarations. |
+| `query_objects` | `result`, `next_cursor`, `has_more`, `scope_limited` | `payload`, `lineage`, `redacted_fields` | List of object rows | `scope_limited` follows the queried type's declarations. |
 | `count_objects` | `result`, `scope_limited` | — | Integer count of visible rows | `scope_limited` follows the counted type's declarations. |
-| `traverse_links` | `result`, `scope_limited` | `payload`, `lineage`, `redacted_fields` | List of object rows | `scope_limited` follows the result type's declarations. |
+| `traverse_links` | `result`, `next_cursor`, `has_more`, `scope_limited` | `payload`, `lineage`, `redacted_fields` | List of object rows | `scope_limited` follows the result type's declarations. |
 
 `scope_limited` is a boolean on every successful query, count, and traversal,
 including empty lists and zero counts.

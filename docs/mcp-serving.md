@@ -83,6 +83,7 @@ The response also includes `scope_limited` and a `redacted_fields` list on each 
 {
   "result": [{"payload": {"id": "book-1"}, "lineage": {}, "redacted_fields": []}],
   "next_cursor": "opaque-page-token",
+  "has_more": true,
   "scope_limited": true
 }
 ```
@@ -232,6 +233,7 @@ allows. `content` carries the same result as text for clients that do not read
         }
       ],
       "next_cursor": null,
+      "has_more": false,
       "scope_limited": true
     }
   }
