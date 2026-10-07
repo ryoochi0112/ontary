@@ -17,7 +17,14 @@ from typing import Any, Literal, get_args
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ontary.errors import ValidationFailed
-from ontary.typesys import PropertyType, choice_value, struct_value, validate_scalar
+from ontary.typesys import (
+    PropertyType,
+    StructFieldDef,
+    _choices_declaration_violation,
+    choice_value,
+    struct_value,
+    validate_scalar,
+)
 
 __all__ = [
     "PropertyType",
@@ -87,47 +94,6 @@ class Sensitivity(BaseModel):
 
     ai_usable: bool = True
     human_visible: bool = True
-
-
-def _choices_declaration_violation(
-    prop_type: object, choices: Sequence[object] | None
-) -> str | None:
-    """Why a property's ``choices`` declaration is invalid, or ``None``."""
-    if choices is None:
-        return None
-    if prop_type != "str":
-        return "choices are only valid on 'str' properties"
-    if not choices:
-        return "choices must not be empty"
-    for member in choices:
-        if not isinstance(member, str):
-            return f"choices contains non-string member {member!r}"
-    if len(set(choices)) != len(choices):
-        return "choices contains a duplicate member"
-    return None
-
-
-class StructFieldDef(BaseModel):
-    name: str
-    type: PropertyType
-    choices: tuple[str, ...] | None = None
-    required: bool = True
-
-    @model_validator(mode="before")
-    @classmethod
-    def _valid_declaration(cls, data: Any) -> Any:
-        if not isinstance(data, dict):
-            return data
-        name = data.get("name")
-        if data.get("type") not in {"str", "int", "float", "bool", "date", "datetime"}:
-            raise ValidationFailed(
-                f"StructFieldDef {name!r}: type must be a scalar str/int/float/bool/date/datetime",
-                code="ONTOLOGY_INVALID",
-            )
-        violation = _choices_declaration_violation(data.get("type"), data.get("choices"))
-        if violation is not None:
-            raise ValidationFailed(f"StructFieldDef {name!r}: {violation}", code="ONTOLOGY_INVALID")
-        return data
 
 
 def _str_enum_value(state: Any) -> Any:
