@@ -18,7 +18,7 @@ import uuid
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import datetime, timezone
-from typing import Any, NamedTuple, Protocol
+from typing import Any, Literal, NamedTuple, Protocol
 
 from ontary import _runtime
 from ontary.audit import (
@@ -30,6 +30,7 @@ from ontary.audit import (
 )
 from ontary.errors import AuthorityError, ConflictError, PreconditionFailed, ValidationFailed
 from ontary.meta import (
+    Cardinality,
     LinkTypeDef,
     ObjectTypeDef,
     OntologyRegistry,
@@ -505,10 +506,10 @@ def check_link_write_authority(
     registry: OntologyRegistry, link_type: str, *, capturing: bool
 ) -> LinkTypeDef:
     """`create_link`'s preamble: resolve the type and refuse a captured
-    write of a non-owned link type. Cardinality enforcement stays
-    per-backend -- the SQL backends check it inside their own transactions
-    and their messages are not identical, so it is storage mechanics, not
-    shared contract."""
+    write of a non-owned link type. Cardinality is not checked here: the
+    shared store core owns it, reading the live links inside the write
+    transaction and raising `cardinality_violation` -- one check and one
+    message for every backend."""
     link_def = resolve_link_type(registry, link_type)
 
     if capturing and link_def.owned is not True:
@@ -518,6 +519,22 @@ def check_link_write_authority(
             code="UNDECLARED_SOURCE_WRITE",
         )
     return link_def
+
+
+def cardinality_violation(
+    link_type: str,
+    side: Literal["from_id", "to_id"],
+    id_: str,
+    cardinality: Cardinality,
+) -> ConflictError:
+    """Build the coded refusal for a link that would give `id_` a second
+    live link on a side its cardinality limits to one. Worded once for
+    every backend."""
+    return ConflictError(
+        f"{link_type}: {side} {id_!r} already has an active "
+        f"link ({cardinality.value} forbids a second)",
+        code="CARDINALITY_VIOLATION",
+    )
 
 
 class WriteCapture:
