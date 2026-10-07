@@ -29,15 +29,10 @@ from ontary.store import _sql
 from ontary.store._core import StoreCore
 from ontary.store._shared import (
     AuditRowFields,
-    canonical_id,
-    check_read_page_batch,
     decode_audit_entry,
-    resolve_link_type,
-    unknown_page_token,
 )
 from ontary.store.migration import SqliteSchemaGate
 from ontary.store.values import (
-    DEFAULT_BATCH,
     DEFAULT_TENANT,
     Lineage,
     PagedRow,
@@ -230,24 +225,10 @@ class ObjectStore(SqliteSchemaGate, StoreCore):
             ),
         )
 
-    def read_current(self, obj_type: str, obj_id: str) -> StoredObject | None:
-        """Public but *trusted-caller-only* raw read of a single object's
-        current row.
-
-        This is NOT the guarded consumer read path -- it returns the full,
-        unredacted payload with no scope/sensitivity/min-N checks applied.
-        It exists so registered action-handler bodies (which already run
-        inside `ActionExecutor.execute`'s audited, permission/scope-checked,
-        transactional pipeline -- see `actions.py`), the engine's own
-        `GuardedQuery`/`scope`/`ingest` internals, and other trusted
-        authoring/loader code have a public method to call. It must never
-        be handed to, or called on behalf of, a CONSUMER (human/AI client,
-        MCP tool, Function body): `GuardedQuery` remains the only read path
-        a consumer may use -- that invariant is about there being no
-        *ungated* read path a consumer can reach, not about `ObjectStore`
-        having zero public methods.
-        """
-        obj_id = canonical_id(obj_id)
+    def _current_row(self, obj_type: str, obj_id: str) -> StoredObject | None:
+        """The live row of one object: a raw, unredacted read for trusted
+        callers only (see `StoreCore`); consumers read through
+        `ontary.query.GuardedQuery`."""
         rows = _sql.execute(
             self._conn,
             _sql.render(_sql.OBJECT_CURRENT_SELECT_TEMPLATE, "sqlite"),
@@ -257,11 +238,9 @@ class ObjectStore(SqliteSchemaGate, StoreCore):
         row = rows[0] if rows else None
         return None if row is None else self._row_to_stored(row)
 
-    def read_last(self, obj_type: str, obj_id: str) -> StoredObject | None:
-        """Raw (unredacted, unscoped) read of one object's newest row, live
-        or retired -- the trusted-caller seam `read_current` cannot serve
-        because it filters on `valid_to IS NULL` (see the protocol)."""
-        obj_id = canonical_id(obj_id)
+    def _last_row(self, obj_type: str, obj_id: str) -> StoredObject | None:
+        """One object's newest row, live or retired -- what `_current_row`
+        cannot serve because it filters on `valid_to IS NULL`."""
         rows = _sql.execute(
             self._conn,
             _sql.render(_sql.OBJECT_LAST_SELECT_TEMPLATE, "sqlite"),
@@ -271,7 +250,7 @@ class ObjectStore(SqliteSchemaGate, StoreCore):
         row = rows[0] if rows else None
         return None if row is None else self._row_to_stored(row)
 
-    def read_all(self, obj_type: str) -> list[StoredObject]:
+    def _all_rows(self, obj_type: str) -> list[StoredObject]:
         """Raw (unredacted, unscoped) read of every current row of
         `obj_type`, ordered by the same per-row identity as `read_page`. Its
         OWN single query/pass -- NOT a `read_page` loop: looping would
@@ -287,7 +266,7 @@ class ObjectStore(SqliteSchemaGate, StoreCore):
         ).rows
         return [self._row_to_stored(row) for row in rows]
 
-    def _resolve_page_token(self, obj_type: str, token: str) -> int:
+    def _page_token_row_id(self, obj_type: str, token: str) -> int | None:
         """Resolve an untrusted `after_key` PAGE TOKEN to the `row_id` it
         was issued for, via `idx_objects_page_token`'s unique index -- one
         indexed lookup, exactly like every other point-lookup path in this
@@ -299,11 +278,10 @@ class ObjectStore(SqliteSchemaGate, StoreCore):
         accepted as a valid resume point into the CALLER's requested type
         -- silently reinterpreted as an arbitrary positional offset into an
         unrelated type's ordering (a fail-open, not an error) -- rather
-        than refused. Raises a validation-kind `INVALID_CURSOR` failure if
-        `token` was never issued
-        for `obj_type` specifically (never a bare `None`/empty result a
-        caller could mistake for "start of table" -- see the page-token
-        docstring)."""
+        than refused. Returns `None` if `token` was never issued for
+        `obj_type` specifically; the core turns that into the cursor refusal
+        (a caller never sees a bare `None` it could mistake for "start of
+        table" -- see the page-token docstring)."""
         rows = _sql.execute(
             self._conn,
             _sql.render(_sql.OBJECT_PAGE_TOKEN_SELECT_TEMPLATE, "sqlite"),
@@ -311,33 +289,22 @@ class ObjectStore(SqliteSchemaGate, StoreCore):
             dialect="sqlite",
         ).rows
         row = rows[0] if rows else None
-        if row is None:
-            raise unknown_page_token(obj_type, token)
-        return int(row["row_id"])
+        return None if row is None else int(row["row_id"])
 
-    def read_page(
-        self, obj_type: str, after_key: str | None = None, batch: int = DEFAULT_BATCH
+    def _page_rows(
+        self, obj_type: str, after_row_id: int | None, batch: int
     ) -> list[PagedRow]:
-        """See `Store.read_page`'s docstring for the full contract.
-
-        Orders by `row_id` -- `objects`' own `INTEGER PRIMARY KEY`, i.e.
+        """Orders by `row_id` -- `objects`' own `INTEGER PRIMARY KEY`, i.e.
         SQLite's physical ROWID: a real, already-indexed column (see
         `idx_objects_type_rowid`), so no `json_extract`, no `CAST`, and no
         registry lookup is needed (unlike a payload-pk-keyed cursor, which
         also can't express the ties the store allows among current rows).
-        `row_id` itself never leaves this method except resolved-into
+        `row_id` itself never leaves the store except resolved-into
         internally: the CURSOR a caller actually receives, `PagedRow.key`,
         is a random per-row page token instead (see `PagedRow`'s docstring
-        for why), resolved back to `row_id` via `_resolve_page_token` when
-        it comes back as `after_key`."""
-        check_read_page_batch(batch)
-        after = (
-            None
-            if after_key is None
-            else self._resolve_page_token(obj_type, after_key)
-        )
-
-        if after is None:
+        for why), resolved back to `row_id` by `_page_token_row_id` when it
+        comes back as `after_key`."""
+        if after_row_id is None:
             cur = self._conn.execute(
                 """
                 SELECT * FROM objects
@@ -356,7 +323,7 @@ class ObjectStore(SqliteSchemaGate, StoreCore):
                 ORDER BY row_id ASC
                 LIMIT ?
                 """,
-                (obj_type, after, self._tenant, batch),
+                (obj_type, after_row_id, self._tenant, batch),
             )
         rows = cur.fetchall()
         return [
@@ -398,9 +365,7 @@ class ObjectStore(SqliteSchemaGate, StoreCore):
 
     # -- reads: links ------------------------------------------------------
 
-    def links_from(self, link_type: str, from_id: str) -> list[str]:
-        from_id = canonical_id(from_id)
-        resolve_link_type(self._registry, link_type)
+    def _link_ids_from(self, link_type: str, from_id: str) -> list[str]:
         rows = _sql.execute(
             self._conn,
             _sql.render(_sql.LINKS_FROM_SELECT_TEMPLATE, "sqlite"),
@@ -409,9 +374,7 @@ class ObjectStore(SqliteSchemaGate, StoreCore):
         ).rows
         return [str(row["to_id"]) for row in rows]
 
-    def links_to(self, link_type: str, to_id: str) -> list[str]:
-        to_id = canonical_id(to_id)
-        resolve_link_type(self._registry, link_type)
+    def _link_ids_to(self, link_type: str, to_id: str) -> list[str]:
         rows = _sql.execute(
             self._conn,
             _sql.render(_sql.LINKS_TO_SELECT_TEMPLATE, "sqlite"),
@@ -420,11 +383,9 @@ class ObjectStore(SqliteSchemaGate, StoreCore):
         ).rows
         return [str(row["from_id"]) for row in rows]
 
-    def links_from_asof(
+    def _link_ids_from_asof(
         self, link_type: str, from_id: str, asof: str
     ) -> list[str]:
-        from_id = canonical_id(from_id)
-        resolve_link_type(self._registry, link_type)
         rows = _sql.execute(
             self._conn,
             _sql.render(_sql.LINKS_FROM_ASOF_SELECT_TEMPLATE, "sqlite"),
@@ -433,9 +394,7 @@ class ObjectStore(SqliteSchemaGate, StoreCore):
         ).rows
         return [str(row["to_id"]) for row in rows]
 
-    def links_to_asof(self, link_type: str, to_id: str, asof: str) -> list[str]:
-        to_id = canonical_id(to_id)
-        resolve_link_type(self._registry, link_type)
+    def _link_ids_to_asof(self, link_type: str, to_id: str, asof: str) -> list[str]:
         rows = _sql.execute(
             self._conn,
             _sql.render(_sql.LINKS_TO_ASOF_SELECT_TEMPLATE, "sqlite"),
@@ -476,7 +435,7 @@ class ObjectStore(SqliteSchemaGate, StoreCore):
             dialect="sqlite",
         )
 
-    def audit_entries(self) -> list[AuditEntry]:
+    def _audit_rows(self) -> list[AuditEntry]:
         cur = self._conn.execute(
             "SELECT * FROM audit_log WHERE tenant = ? ORDER BY seq ASC",
             (self._tenant,),

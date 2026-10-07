@@ -8,7 +8,7 @@ It also doubles as a fast, dependency-free test double for user code.
 
 The write path (order of steps, refusals, cardinality, the clock, and write
 capture) is `ontary.store._core.StoreCore`'s; this module supplies the
-dict-backed transaction and storage steps it calls, plus its own reads. Pure
+dict-backed transaction and storage steps it calls, reads included. Pure
 contract logic shared with the other backends lives in
 `ontary.store._shared`.
 """
@@ -27,15 +27,10 @@ from ontary.meta import OntologyRegistry
 from ontary.store._core import StoreCore
 from ontary.store._shared import (
     AuditRowFields,
-    canonical_id,
-    check_read_page_batch,
     decode_audit_entry,
-    resolve_link_type,
-    unknown_page_token,
 )
 from ontary.store.protocol import Store
 from ontary.store.values import (
-    DEFAULT_BATCH,
     DEFAULT_TENANT,
     Lineage,
     PagedRow,
@@ -274,8 +269,7 @@ class InMemoryStore(StoreCore):
             ),
         )
 
-    def read_current(self, obj_type: str, obj_id: str) -> StoredObject | None:
-        obj_id = canonical_id(obj_id)
+    def _current_row(self, obj_type: str, obj_id: str) -> StoredObject | None:
         # Every public read below briefly takes `_transaction_lock` (reentrant,
         # so the writing thread's own reads pass through): rows are mutated in
         # place inside a transaction and only snapshot-restored on rollback, so
@@ -292,7 +286,7 @@ class InMemoryStore(StoreCore):
                     return self._row_to_stored(row)
             return None
 
-    def read_last(self, obj_type: str, obj_id: str) -> StoredObject | None:
+    def _last_row(self, obj_type: str, obj_id: str) -> StoredObject | None:
         """Raw (unredacted, unscoped) read of one object's newest row, live
         or retired. `self._objects` is append-ordered and `update` appends
         the replacement row, so the LAST match is the newest state.
@@ -307,7 +301,6 @@ class InMemoryStore(StoreCore):
         from `read_current`: the two disagreeing let the gate authorize
         against a scope no consumer read can see.
         """
-        obj_id = canonical_id(obj_id)
         with self._transaction_lock:
             newest: _ObjectRow | None = None
             for row in self._objects:
@@ -322,7 +315,7 @@ class InMemoryStore(StoreCore):
                 newest = row
             return None if newest is None else self._row_to_stored(newest)
 
-    def read_all(self, obj_type: str) -> list[StoredObject]:
+    def _all_rows(self, obj_type: str) -> list[StoredObject]:
         """Raw (unredacted, unscoped) read of every current row of
         `obj_type`, ordered by the same per-row identity as `read_page`. Its
         OWN single pass -- NOT a `read_page` loop: looping would
@@ -340,7 +333,7 @@ class InMemoryStore(StoreCore):
             current.sort(key=lambda row: row["row_id"])
             return [self._row_to_stored(row) for row in current]
 
-    def _resolve_page_token(self, obj_type: str, token: str) -> int:
+    def _page_token_row_id(self, obj_type: str, token: str) -> int | None:
         """Resolve an untrusted `after_key` PAGE TOKEN to the `row_id` it
         was issued for -- a linear scan here rather than a maintained `token
         -> row_id` dict, unlike `ObjectStore`'s real unique SQL index: this
@@ -355,39 +348,30 @@ class InMemoryStore(StoreCore):
         still resolve to that row's `row_id` and be accepted as a valid
         resume point into the CALLER's requested type, silently
         reinterpreted as an arbitrary positional offset into an unrelated
-        type's ordering instead of refused. Raises a validation-kind
-        `INVALID_CURSOR` failure if `token` was never issued for `obj_type`
-        specifically."""
-        for row in self._objects:
-            if (
-                row["page_token"] == token
-                and row["object_type"] == obj_type
-                and row["tenant"] == self._tenant
-            ):
-                return row["row_id"]
-        raise unknown_page_token(obj_type, token)
+        type's ordering instead of refused. Returns `None` if `token` was
+        never issued for `obj_type` specifically; the core refuses it."""
+        with self._transaction_lock:
+            for row in self._objects:
+                if (
+                    row["page_token"] == token
+                    and row["object_type"] == obj_type
+                    and row["tenant"] == self._tenant
+                ):
+                    return row["row_id"]
+            return None
 
-    def read_page(
-        self, obj_type: str, after_key: str | None = None, batch: int = DEFAULT_BATCH
+    def _page_rows(
+        self, obj_type: str, after_row_id: int | None, batch: int
     ) -> list[PagedRow]:
-        """See `Store.read_page`'s docstring for the full contract.
-
-        Orders by `row_id` -- this store's own monotonic per-row counter
+        """Orders by `row_id` -- this store's own monotonic per-row counter
         (mirroring `ObjectStore`'s physical SQLite ROWID), not the payload
         primary key (which also can't express the ties the store allows
-        among current rows). `row_id` never leaves this method except
+        among current rows). `row_id` never leaves the store except
         resolved-into internally: the CURSOR a caller actually receives,
         `PagedRow.key`, is a random per-row page token instead (see
-        `PagedRow`'s docstring for why), resolved back to `row_id` via
-        `_resolve_page_token` when it comes back as `after_key`."""
-        check_read_page_batch(batch)
+        `PagedRow`'s docstring for why), resolved back to `row_id` by
+        `_page_token_row_id` when it comes back as `after_key`."""
         with self._transaction_lock:
-            after = (
-                None
-                if after_key is None
-                else self._resolve_page_token(obj_type, after_key)
-            )
-
             current = [
                 row
                 for row in self._objects
@@ -396,8 +380,8 @@ class InMemoryStore(StoreCore):
                 and row["valid_to"] is None
             ]
             current.sort(key=lambda row: row["row_id"])
-            if after is not None:
-                current = [row for row in current if row["row_id"] > after]
+            if after_row_id is not None:
+                current = [row for row in current if row["row_id"] > after_row_id]
             page = current[:batch]
             return [
                 PagedRow(key=row["page_token"], obj=self._row_to_stored(row))
@@ -447,9 +431,7 @@ class InMemoryStore(StoreCore):
             if self._matches_link(row, link_type, from_id, to_id):
                 self._links[index] = {**row, "valid_to": valid_to}
 
-    def links_from(self, link_type: str, from_id: str) -> list[str]:
-        from_id = canonical_id(from_id)
-        resolve_link_type(self._registry, link_type)
+    def _link_ids_from(self, link_type: str, from_id: str) -> list[str]:
         with self._transaction_lock:
             return _ordered_link_ids(
                 (
@@ -463,9 +445,7 @@ class InMemoryStore(StoreCore):
                 "to_id",
             )
 
-    def links_to(self, link_type: str, to_id: str) -> list[str]:
-        to_id = canonical_id(to_id)
-        resolve_link_type(self._registry, link_type)
+    def _link_ids_to(self, link_type: str, to_id: str) -> list[str]:
         with self._transaction_lock:
             return _ordered_link_ids(
                 (
@@ -479,11 +459,9 @@ class InMemoryStore(StoreCore):
                 "from_id",
             )
 
-    def links_from_asof(
+    def _link_ids_from_asof(
         self, link_type: str, from_id: str, asof: str
     ) -> list[str]:
-        from_id = canonical_id(from_id)
-        resolve_link_type(self._registry, link_type)
         with self._transaction_lock:
             return _ordered_link_ids(
                 (
@@ -497,9 +475,7 @@ class InMemoryStore(StoreCore):
                 "to_id",
             )
 
-    def links_to_asof(self, link_type: str, to_id: str, asof: str) -> list[str]:
-        to_id = canonical_id(to_id)
-        resolve_link_type(self._registry, link_type)
+    def _link_ids_to_asof(self, link_type: str, to_id: str, asof: str) -> list[str]:
         with self._transaction_lock:
             return _ordered_link_ids(
                 (
@@ -521,7 +497,7 @@ class InMemoryStore(StoreCore):
         # replaced by placeholders -- with no field list kept here to drift.
         self._audit.append(decode_audit_entry(fields._asdict()))
 
-    def audit_entries(self) -> list[AuditEntry]:
+    def _audit_rows(self) -> list[AuditEntry]:
         """Deep copies, so a reader cannot rewrite the append-only log.
 
         Whole-branch review finding (2026-07-26): `list(self._audit)` copied the

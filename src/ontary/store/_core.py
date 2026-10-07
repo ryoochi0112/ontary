@@ -1,4 +1,4 @@
-"""The one write path every `Store` backend shares.
+"""The one read and write path every `Store` backend shares.
 
 Backends supply storage steps only. `StoreCore` owns the order of steps of
 every public write -- canonical ids, the authority and contract checks, the
@@ -26,6 +26,10 @@ The order of steps of each write:
    the write closes, then the storage steps write and close rows.
 5. The write record is captured after the transaction exits.
 
+Every public read canonicalizes ids, resolves a link type against the
+registry, and checks the page batch and cursor here; backends supply only the
+read storage steps.
+
 Transaction mechanics (`transaction`, `in_transaction`) stay backend-owned.
 """
 
@@ -50,6 +54,7 @@ from ontary.store._shared import (
     check_link_removal_authority,
     check_link_write_authority,
     check_object_removal_authority,
+    check_read_page_batch,
     check_update_authority,
     encode_audit_entry,
     ensure_not_before,
@@ -57,9 +62,11 @@ from ontary.store._shared import (
     merge_update,
     object_already_exists,
     prepare_insert,
+    resolve_link_type,
     retire_object_refusal,
+    unknown_page_token,
 )
-from ontary.store.values import Source, StoredObject
+from ontary.store.values import DEFAULT_BATCH, PagedRow, Source, StoredObject
 
 _FROM_SIDE_CARDINALITIES = (Cardinality.ONE_TO_ONE, Cardinality.MANY_TO_ONE)
 _TO_SIDE_CARDINALITIES = (Cardinality.ONE_TO_ONE, Cardinality.ONE_TO_MANY)
@@ -99,20 +106,6 @@ class StoreCore(abc.ABC):
     @abc.abstractmethod
     def in_transaction(self) -> bool:
         """`True` while this thread is inside `transaction()`."""
-
-    # -- reads the write path calls ------------------------------------
-
-    @abc.abstractmethod
-    def read_current(self, obj_type: str, obj_id: str) -> StoredObject | None: ...
-
-    @abc.abstractmethod
-    def read_last(self, obj_type: str, obj_id: str) -> StoredObject | None: ...
-
-    @abc.abstractmethod
-    def links_from(self, link_type: str, from_id: str) -> list[str]: ...
-
-    @abc.abstractmethod
-    def links_to(self, link_type: str, to_id: str) -> list[str]: ...
 
     # -- storage steps -------------------------------------------------
 
@@ -161,6 +154,55 @@ class StoreCore(abc.ABC):
     def _append_audit_row(self, fields: AuditRowFields) -> None:
         """Persist one encoded audit entry."""
 
+    @abc.abstractmethod
+    def _current_row(self, obj_type: str, obj_id: str) -> StoredObject | None:
+        """The live row of one object in this tenant, or `None`."""
+
+    @abc.abstractmethod
+    def _last_row(self, obj_type: str, obj_id: str) -> StoredObject | None:
+        """The newest row of one object in this tenant, live or retired. A
+        live row wins over a newer closed one; among live rows the pick is
+        `_current_row`'s own."""
+
+    @abc.abstractmethod
+    def _all_rows(self, obj_type: str) -> list[StoredObject]:
+        """Every live row of `obj_type` in this tenant, in row order."""
+
+    @abc.abstractmethod
+    def _page_token_row_id(self, obj_type: str, token: str) -> int | None:
+        """The row identity `token` was issued for, scoped to this tenant
+        and to `obj_type` (a token issued for another type is unknown), or
+        `None` when no such token exists."""
+
+    @abc.abstractmethod
+    def _page_rows(
+        self, obj_type: str, after_row_id: int | None, batch: int
+    ) -> list[PagedRow]:
+        """Up to `batch` live rows of `obj_type` in this tenant in row order,
+        starting after `after_row_id` (from the start when `None`)."""
+
+    @abc.abstractmethod
+    def _link_ids_from(self, link_type: str, from_id: str) -> list[str]:
+        """`to_id` of every live link out of `from_id`, in link order."""
+
+    @abc.abstractmethod
+    def _link_ids_to(self, link_type: str, to_id: str) -> list[str]:
+        """`from_id` of every live link into `to_id`, in link order."""
+
+    @abc.abstractmethod
+    def _link_ids_from_asof(
+        self, link_type: str, from_id: str, asof: str
+    ) -> list[str]:
+        """`to_id` of every link out of `from_id` that was live at `asof`."""
+
+    @abc.abstractmethod
+    def _link_ids_to_asof(self, link_type: str, to_id: str, asof: str) -> list[str]:
+        """`from_id` of every link into `to_id` that was live at `asof`."""
+
+    @abc.abstractmethod
+    def _audit_rows(self) -> list[AuditEntry]:
+        """Every audit entry of this tenant, oldest first, as fresh objects."""
+
     # -- clock and write capture ---------------------------------------
 
     def bind_clock(
@@ -180,6 +222,56 @@ class StoreCore(abc.ABC):
 
     def _now(self) -> str:
         return self._clock_state.now_iso(self._write_capture)
+
+    # -- reads ---------------------------------------------------------
+    #
+    # Raw (unredacted, unscoped) reads for trusted callers: the engine's own
+    # internals and registered action handlers. A consumer reads through
+    # `ontary.query.GuardedQuery`, never here. Each read canonicalizes the
+    # id, resolves a link type against the registry, and then calls its
+    # storage step.
+
+    def read_current(self, obj_type: str, obj_id: str) -> StoredObject | None:
+        return self._current_row(obj_type, canonical_id(obj_id))
+
+    def read_last(self, obj_type: str, obj_id: str) -> StoredObject | None:
+        return self._last_row(obj_type, canonical_id(obj_id))
+
+    def read_all(self, obj_type: str) -> list[StoredObject]:
+        return self._all_rows(obj_type)
+
+    def read_page(
+        self, obj_type: str, after_key: str | None = None, batch: int = DEFAULT_BATCH
+    ) -> list[PagedRow]:
+        check_read_page_batch(batch)
+        after_row_id: int | None = None
+        if after_key is not None:
+            after_row_id = self._page_token_row_id(obj_type, after_key)
+            if after_row_id is None:
+                raise unknown_page_token(obj_type, after_key)
+        return self._page_rows(obj_type, after_row_id, batch)
+
+    def links_from(self, link_type: str, from_id: str) -> list[str]:
+        from_id = canonical_id(from_id)
+        resolve_link_type(self._registry, link_type)
+        return self._link_ids_from(link_type, from_id)
+
+    def links_to(self, link_type: str, to_id: str) -> list[str]:
+        to_id = canonical_id(to_id)
+        resolve_link_type(self._registry, link_type)
+        return self._link_ids_to(link_type, to_id)
+
+    def links_from_asof(
+        self, link_type: str, from_id: str, asof: str
+    ) -> list[str]:
+        from_id = canonical_id(from_id)
+        resolve_link_type(self._registry, link_type)
+        return self._link_ids_from_asof(link_type, from_id, asof)
+
+    def links_to_asof(self, link_type: str, to_id: str, asof: str) -> list[str]:
+        to_id = canonical_id(to_id)
+        resolve_link_type(self._registry, link_type)
+        return self._link_ids_to_asof(link_type, to_id, asof)
 
     # -- objects -------------------------------------------------------
 
@@ -326,3 +418,6 @@ class StoreCore(abc.ABC):
         fields = encode_audit_entry(entry)
         with self.transaction():
             self._append_audit_row(fields)
+
+    def audit_entries(self) -> list[AuditEntry]:
+        return self._audit_rows()

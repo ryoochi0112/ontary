@@ -48,15 +48,10 @@ from ontary.store import _sql
 from ontary.store._core import StoreCore
 from ontary.store._shared import (
     AuditRowFields,
-    canonical_id,
-    check_read_page_batch,
     decode_audit_entry,
-    resolve_link_type,
-    unknown_page_token,
 )
 from ontary.store.schema import SCHEMA_VERSION
 from ontary.store.values import (
-    DEFAULT_BATCH,
     DEFAULT_TENANT,
     Lineage,
     PagedRow,
@@ -384,8 +379,7 @@ class PostgresStore(StoreCore):
             ),
         )
 
-    def read_current(self, obj_type: str, obj_id: str) -> StoredObject | None:
-        obj_id = canonical_id(obj_id)
+    def _current_row(self, obj_type: str, obj_id: str) -> StoredObject | None:
         rows = _sql.execute(
             self._conn,
             _sql.render(_sql.OBJECT_CURRENT_SELECT_TEMPLATE, "postgres"),
@@ -395,8 +389,7 @@ class PostgresStore(StoreCore):
         row = rows[0] if rows else None
         return None if row is None else self._row_to_stored(row)
 
-    def read_last(self, obj_type: str, obj_id: str) -> StoredObject | None:
-        obj_id = canonical_id(obj_id)
+    def _last_row(self, obj_type: str, obj_id: str) -> StoredObject | None:
         rows = _sql.execute(
             self._conn,
             _sql.render(_sql.OBJECT_LAST_SELECT_TEMPLATE, "postgres"),
@@ -406,7 +399,7 @@ class PostgresStore(StoreCore):
         row = rows[0] if rows else None
         return None if row is None else self._row_to_stored(row)
 
-    def read_all(self, obj_type: str) -> list[StoredObject]:
+    def _all_rows(self, obj_type: str) -> list[StoredObject]:
         rows = _sql.execute(
             self._conn,
             _sql.render(_sql.OBJECT_ALL_SELECT_TEMPLATE, "postgres"),
@@ -415,8 +408,9 @@ class PostgresStore(StoreCore):
         ).rows
         return [self._row_to_stored(row) for row in rows]
 
-    def _resolve_page_token(self, obj_type: str, token: str) -> int:
-        """Resolve a cursor token to a row identity, scoped to `obj_type`.
+    def _page_token_row_id(self, obj_type: str, token: str) -> int | None:
+        """Resolve a cursor token to a row identity, scoped to `obj_type`;
+        `None` when the token is unknown (the core refuses it).
 
         The `object_type` guard is load-bearing and the conformance suite caught
         its absence on this backend's first run: a `page_token` is globally unique
@@ -432,15 +426,11 @@ class PostgresStore(StoreCore):
             dialect="postgres",
         ).rows
         row = rows[0] if rows else None
-        if row is None:
-            raise unknown_page_token(obj_type, token)
-        return int(row[0])
+        return None if row is None else int(row[0])
 
-    def read_page(
-        self, obj_type: str, after_key: str | None = None, batch: int = DEFAULT_BATCH
+    def _page_rows(
+        self, obj_type: str, after_row_id: int | None, batch: int
     ) -> list[PagedRow]:
-        check_read_page_batch(batch)
-        after_row_id = None if after_key is None else self._resolve_page_token(obj_type, after_key)
         with self._conn.cursor() as cur:
             if after_row_id is None:
                 cur.execute(
@@ -497,9 +487,7 @@ class PostgresStore(StoreCore):
             dialect="postgres",
         )
 
-    def links_from(self, link_type: str, from_id: str) -> list[str]:
-        from_id = canonical_id(from_id)
-        resolve_link_type(self._registry, link_type)
+    def _link_ids_from(self, link_type: str, from_id: str) -> list[str]:
         rows = _sql.execute(
             self._conn,
             _sql.render(_sql.LINKS_FROM_SELECT_TEMPLATE, "postgres"),
@@ -508,9 +496,7 @@ class PostgresStore(StoreCore):
         ).rows
         return [str(row[0]) for row in rows]
 
-    def links_to(self, link_type: str, to_id: str) -> list[str]:
-        to_id = canonical_id(to_id)
-        resolve_link_type(self._registry, link_type)
+    def _link_ids_to(self, link_type: str, to_id: str) -> list[str]:
         rows = _sql.execute(
             self._conn,
             _sql.render(_sql.LINKS_TO_SELECT_TEMPLATE, "postgres"),
@@ -519,11 +505,9 @@ class PostgresStore(StoreCore):
         ).rows
         return [str(row[0]) for row in rows]
 
-    def links_from_asof(
+    def _link_ids_from_asof(
         self, link_type: str, from_id: str, asof: str
     ) -> list[str]:
-        from_id = canonical_id(from_id)
-        resolve_link_type(self._registry, link_type)
         rows = _sql.execute(
             self._conn,
             _sql.render(_sql.LINKS_FROM_ASOF_SELECT_TEMPLATE, "postgres"),
@@ -532,9 +516,7 @@ class PostgresStore(StoreCore):
         ).rows
         return [str(row[0]) for row in rows]
 
-    def links_to_asof(self, link_type: str, to_id: str, asof: str) -> list[str]:
-        to_id = canonical_id(to_id)
-        resolve_link_type(self._registry, link_type)
+    def _link_ids_to_asof(self, link_type: str, to_id: str, asof: str) -> list[str]:
         rows = _sql.execute(
             self._conn,
             _sql.render(_sql.LINKS_TO_ASOF_SELECT_TEMPLATE, "postgres"),
@@ -575,7 +557,7 @@ class PostgresStore(StoreCore):
             dialect="postgres",
         )
 
-    def audit_entries(self) -> list[AuditEntry]:
+    def _audit_rows(self) -> list[AuditEntry]:
         rows = _sql.execute(
             self._conn,
             _sql.render(_sql.AUDIT_LOG_SELECT_TEMPLATE, "postgres"),
