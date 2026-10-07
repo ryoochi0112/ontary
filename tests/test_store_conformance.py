@@ -4351,3 +4351,139 @@ def test_event_history_follows_retired_or_rescoped_subject_on_every_backend(
         assert [r.ts for r in records] == [_T0, _T1]
         assert [r.invocation_id for r in records] == ["inv-1", "inv-2"]
     assert all(r.about_type == "Order" and r.about_id == "order-1" for r in records)
+
+
+# --- MCP events page parity (#109 AC11) -----------------------------------------
+
+
+def _events_page_ontology() -> Ontology:
+    from ontary.meta import Sensitivity
+    from ontary.scope import DirectProperty
+
+    ontology = Ontology("events-page", scope_levels=["team"], min_n=1)
+
+    @ontology.object(layer="L0", scope=[DirectProperty(level="team", property_name="team")])
+    class PageTicket(OntologyObject):
+        id: str = prop(primary_key=True)
+        team: str
+
+    @ontology.event()
+    class PageEscalated(Event):
+        reason: str
+        customer_email: str | None = prop(default=None, sensitivity=Sensitivity(ai_usable=False))
+
+    class PageEscalateParams(ActionParams):
+        ticket_id: str = target(PageTicket)
+
+    @ontology.action(
+        PageEscalateParams, target=PageTicket, roles=["Agent"], api_name="page_escalate",
+        emits=[PageEscalated],
+    )
+    def page_escalate(ctx: ActionContext, params: PageEscalateParams) -> dict[str, Any]:
+        ctx.emit(PageEscalated(reason=f"r-{params.ticket_id}", customer_email="x@example.com"))
+        return {}
+
+    return ontology
+
+
+def _events_page_setup(store_factory: StoreFactory) -> tuple[Any, Any, Any, Any]:
+    """Events about T-1, T-3, T-2 (team b), T-4, T-1, T-5; then T-1 is retired.
+
+    Five events are visible to the team-a consumer, so `limit=2` pages end on a
+    partial page and the paging peek is exercised.
+    """
+    from ontary.mcp_server import build_mcp_server
+    from ontary.testing import consumer
+
+    ontology = _events_page_ontology()
+    store = store_factory(ontology.registry)
+    source = Source(source_system="seed")
+    teams = {"T-1": "a", "T-2": "b", "T-3": "a", "T-4": "a", "T-5": "a"}
+    for ticket_id, team in teams.items():
+        store.insert("PageTicket", {"id": ticket_id, "team": team}, source)
+    for ticket_id in ["T-1", "T-3", "T-2", "T-4", "T-1", "T-5"]:
+        operator = consumer(actor_id="op", role="Agent", scope_level="team", scope_id=teams[ticket_id])
+        ontology.bind(store).for_consumer(operator).execute("page_escalate", {"ticket_id": ticket_id})
+    store.retire_object("PageTicket", "T-1")
+    ai = consumer(actor_id="ai", role="Agent", scope_level="team", scope_id="a", kind="ai")
+    server = build_mcp_server(ontology, store, ai)
+    return ontology, server, ai, store
+
+
+def _events_page_call(server: Any, arguments: dict[str, Any]) -> dict[str, Any]:
+    import asyncio
+
+    result = asyncio.run(server.call_tool("list_events", arguments))
+    if result.structured_content is not None:
+        return dict(result.structured_content)
+    return dict(json.loads(result.content[0].text))
+
+
+def _events_page_all(server: Any) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    after: str | None = None
+    pages = 0
+    while True:
+        envelope = _events_page_call(server, {"limit": 2, **({"after": after} if after else {})})
+        pages += 1
+        rows.extend(envelope["result"])
+        if not envelope["has_more"]:
+            assert envelope["next_cursor"] is None
+            break
+        assert len(envelope["result"]) == 2
+        after = envelope["next_cursor"]
+    assert pages == 3
+    return rows
+
+
+def test_events_page_matches_client_events_in_order_and_content(
+    store_factory: StoreFactory,
+) -> None:
+    ontology, server, ai, store = _events_page_setup(store_factory)
+    client = ontology.bind(store).for_consumer(ai)
+    expected = [
+        {
+            "event_type": record.event_type,
+            "about_type": record.about_type,
+            "about_id": record.about_id,
+            "ts": record.ts.isoformat(),
+            "invocation_id": record.invocation_id,
+            # The client sets redacted keys to None; the MCP row omits them.
+            "payload": {
+                key: value
+                for key, value in record.payload.model_dump().items()
+                if key not in record.redacted_fields
+            },
+            "redacted_fields": sorted(record.redacted_fields),
+        }
+        for record in client.events()
+    ]
+    rows = _events_page_all(server)
+    assert [(r["about_id"], r["payload"]) for r in rows] == [
+        ("T-1", {"reason": "r-T-1"}),
+        ("T-3", {"reason": "r-T-3"}),
+        ("T-4", {"reason": "r-T-4"}),
+        ("T-1", {"reason": "r-T-1"}),
+        ("T-5", {"reason": "r-T-5"}),
+    ]
+    assert all(r["redacted_fields"] == ["customer_email"] for r in rows)
+    assert rows == expected
+
+
+def test_events_page_never_lists_the_hidden_subject(store_factory: StoreFactory) -> None:
+    _, server, _, _ = _events_page_setup(store_factory)
+    assert "T-2" not in [r["about_id"] for r in _events_page_all(server)]
+    for arguments in (
+        {"about_type": "PageTicket", "about_id": "T-2"},
+        {"about_type": "PageTicket", "about_id": "T-2", "event_type": "PageEscalated"},
+    ):
+        assert _events_page_call(server, arguments)["result"] == []
+    scoped = _events_page_call(server, {"about_type": "PageTicket", "limit": 10})
+    assert [r["about_id"] for r in scoped["result"]] == ["T-1", "T-3", "T-4", "T-1", "T-5"]
+
+
+def test_events_page_still_lists_the_retired_subject(store_factory: StoreFactory) -> None:
+    _, server, _, _ = _events_page_setup(store_factory)
+    retired = _events_page_call(server, {"about_type": "PageTicket", "about_id": "T-1"})
+    assert [r["about_id"] for r in retired["result"]] == ["T-1", "T-1"]
+    assert [r["about_id"] for r in _events_page_all(server)].count("T-1") == 2
