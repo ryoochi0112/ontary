@@ -60,12 +60,13 @@ parameter name, even when it is empty (`{}`). `list_action_types` and
 state list and `moves` mapping when it does. Each object type also has a `rules`
 list containing each rule's `name` and `message`; rule code is never included.
 
-`query_objects(obj_type, where=None, order_by=None, limit=None, after=None)` is always bounded
+`query_objects(obj_type, where=None, order_by=None, limit=None, after=None, include_total=False)` is always bounded
 on the MCP surface: an omitted `limit` uses the server default cap of 100 rows,
 and an explicit limit may be at most 1000. The underlying paged read supplies an
 opaque `next_cursor`; a successful response keeps the existing rows under
-`result` and adds `next_cursor` alongside it (`null` when exhausted). Pass that
-cursor back with the same explicit `limit` to continue. `after` without an
+`result` and adds `next_cursor` and `has_more` alongside it. `next_cursor` is
+`null` exactly when `has_more` is `false`, so a page that ends exactly at the
+last visible row has no cursor. Pass that cursor back with the same explicit `limit` to continue. `after` without an
 explicit `limit` returns `AFTER_WITHOUT_LIMIT`; values below 1 or above 1000
 return `INVALID_LIMIT`.
 
@@ -87,9 +88,21 @@ with `"mean"` as the default; every function keeps the same min-N release
 discipline, including refusal of grouped-empty `{}` selections. `value_field` is
 optional for `func="count"` — omitting it counts every visible row; every other
 func requires it and raises `INVALID_PARAMS` if it is missing.
-`traverse_links` remains an unpaged list because the underlying
-`OntologyClient.traverse`/`GuardedQuery.traverse` API has no `limit`/`after`
-cursor surface to delegate to. Pass `reverse=true` to traverse from the link's
+`traverse_links` pages the same way: an omitted `limit` returns one default page of
+100 rows (at most 1000 when explicit), `next_cursor` and `has_more` follow the same
+rules, and `after` without `limit` returns `AFTER_WITHOUT_LIMIT`.
+
+Both paged tools accept `include_total` (default `false`). When `true`, the
+response adds a top-level `total`: the number of rows visible to the caller, the
+same figure `count_objects` returns. It is not min-N gated, and it is not
+transactional with the page: rows written between the two reads can make `total`
+and the page disagree. Without `include_total` the `total` key is absent.
+`limit=0` with `include_total=true` is count-only mode: `result` is `[]`,
+`next_cursor` is `null`, `has_more` is `total > 0`, `order_by` is ignored, and
+`after` is refused with `INVALID_LIMIT`. `limit=0` without `include_total` is
+`INVALID_LIMIT`.
+
+Pass `reverse=true` to traverse from the link's
 target side and return source-side objects; identity-revealing denial is symmetric.
 
 See [Read results](#read-results) for response keys and object row serialization.
@@ -160,9 +173,9 @@ key in an object row. Errors use the error envelope instead.
 | Tool | Top-level keys | Row keys | `result` value | Scope policy |
 | --- | --- | --- | --- | --- |
 | `get_object` | `result` | `payload`, `lineage`, `redacted_fields` | Object row, or `null` for a missing or retired object | No `scope_limited`; an out-of-scope ID refuses with `VISIBILITY_DENIED`. |
-| `query_objects` | `result`, `next_cursor`, `has_more`, `scope_limited` | `payload`, `lineage`, `redacted_fields` | List of object rows | `scope_limited` follows the queried type's declarations. |
+| `query_objects` | `result`, `next_cursor`, `has_more`, `total`, `scope_limited` | `payload`, `lineage`, `redacted_fields` | List of object rows | `scope_limited` follows the queried type's declarations. |
 | `count_objects` | `result`, `scope_limited` | — | Integer count of visible rows | `scope_limited` follows the counted type's declarations. |
-| `traverse_links` | `result`, `next_cursor`, `has_more`, `scope_limited` | `payload`, `lineage`, `redacted_fields` | List of object rows | `scope_limited` follows the result type's declarations. |
+| `traverse_links` | `result`, `next_cursor`, `has_more`, `total`, `scope_limited` | `payload`, `lineage`, `redacted_fields` | List of object rows | `scope_limited` follows the result type's declarations. |
 
 `scope_limited` is a boolean on every successful query, count, and traversal,
 including empty lists and zero counts.
@@ -183,6 +196,21 @@ A redacted key is absent from `payload`; it is never set to `null`.
 For human consumers, a field with `human_visible=False` is listed.
 For AI consumers, a field with `ai_usable=False` is listed.
 A hidden scope-routing key declared through `DirectProperty` is listed too.
+
+`total` appears only when the call sets `include_total=true`.
+
+An agent asks, "How many tickets are linked to team `a`, and show me the first
+two." It calls `traverse_links` with `obj_type="Team"`, `obj_id="a"`,
+`link_api_name="inTeam"`, `reverse=true`, `limit=2`, and `include_total=true`. It gets:
+
+```json
+{"result": [{"payload": {...}, "lineage": {...}, "redacted_fields": []},
+            {"payload": {...}, "lineage": {...}, "redacted_fields": []}],
+ "next_cursor": "<opaque>", "has_more": true, "total": 218, "scope_limited": true}
+```
+
+The agent says: "218 tickets are linked to team a (that is what you can see; scope
+may hide others). Here are the first two; I can page through the rest."
 
 A short page or `next_cursor: null` means "no more rows" in the caller's visible
 selection, never "some were hidden".
