@@ -11,6 +11,17 @@ you**.
 
 ## [Unreleased]
 
+### Added
+
+- Two MCP tools, `list_event_types` and `list_events`, expose the event log to agents.
+  `list_event_types` lists every declared event type with its properties, the object
+  types it can be about, and the actions that emit it. `list_events` pages the business
+  events the consumer may see, filtered by event type, subject, and time window
+  (`since` inclusive, `until` exclusive). It follows the `query_objects` paging rules,
+  hides events whose subject is out of scope, and omits redacted payload keys. The
+  server now exposes fourteen tools. New error code `UNKNOWN_EVENT_TYPE` (kind
+  `validation`) refuses an undeclared event type. Additive; no migration.
+
 ## [0.24.0] — 2026-10-07
 
 ```bash

@@ -232,7 +232,7 @@ See [Stores & ingest](api-stores.md#date-and-datetime-values) for the value writ
 
 ## MCP server
 
-`build_mcp_server` exposes twelve guarded tools for introspection, reads, actions, and functions; `build_multi_consumer_mcp_server` serves many verified identities through a shared runtime. Full reference: [MCP server](api-mcp.md).
+`build_mcp_server` exposes fourteen guarded tools for introspection, reads, actions, and functions; `build_multi_consumer_mcp_server` serves many verified identities through a shared runtime. Full reference: [MCP server](api-mcp.md).
 
 ## Descriptor authoring
 

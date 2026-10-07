@@ -37,12 +37,12 @@ asserted identity.
 
 ## Tools, bounded queries, and safety annotations
 
-The twelve tools are registered with these MCP safety hints:
+The fourteen tools are registered with these MCP safety hints:
 
 | Tools | Annotation |
 | --- | --- |
-| `list_object_types`, `list_link_types`, `list_action_types`, `list_functions` | `readOnlyHint=True` |
-| `get_declarations`, single-object reads, `query_objects`, `count_objects`, `traverse_links`, `call_function` | `readOnlyHint=True` |
+| `list_object_types`, `list_link_types`, `list_action_types`, `list_functions`, `list_event_types` | `readOnlyHint=True` |
+| `get_declarations`, single-object reads, `query_objects`, `count_objects`, `traverse_links`, `list_events`, `call_function` | `readOnlyHint=True` |
 | `aggregate_objects` | `readOnlyHint=True` |
 | `execute_action` | `destructiveHint=True` |
 

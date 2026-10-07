@@ -18,7 +18,7 @@ server = build_mcp_server(ontology, store, consumer, *, name=None,
 1 サーバープロセスにつき 1 つの `Consumer` アイデンティティ。宣言済みハンドラは
 **バインド済みで届きます** — 登録用コールバックはありません。
 
-12 個のツール。いずれも Python surface と同じガードの対象です。読み取り専用ツールには
+14 個のツール。いずれも Python surface と同じガードの対象です。読み取り専用ツールには
 `ToolAnnotations(readOnlyHint=True)`、`execute_action` には
 `ToolAnnotations(destructiveHint=True)` が付きます。
 
@@ -28,12 +28,14 @@ server = build_mcp_server(ontology, store, consumer, *, name=None,
 | `list_link_types` | イントロスペクション | `readOnlyHint=True` |
 | `list_action_types` | イントロスペクション（パラメータ定義を含む） | `readOnlyHint=True` |
 | `list_functions` | イントロスペクション | `readOnlyHint=True` |
+| `list_event_types` | イントロスペクション | `readOnlyHint=True` |
 | `get_declarations` | 宣言された契約のバンドル | `readOnlyHint=True` |
 | `get_object` | 単一読み取り | `readOnlyHint=True` |
 | `query_objects` | フィルタ／ページ付き読み取り | `readOnlyHint=True` |
 | `count_objects` | 可視行の件数 | `readOnlyHint=True` |
 | `aggregate_objects` | 集計読み取り | `readOnlyHint=True` |
 | `traverse_links` | リンクを辿る | `readOnlyHint=True` |
+| `list_events` | ビジネスイベントのページ付き読み取り | `readOnlyHint=True` |
 | `execute_action` | Action の実行 | `destructiveHint=True` |
 | `call_function` | Function の呼び出し | `readOnlyHint=True` |
 
@@ -110,6 +112,76 @@ lineage フィールドは対象外で、未知のキーは `UNKNOWN_FIELD` に�
 
 `mcp` エクストラが必要です。
 
+### `list_event_types` と `list_events`
+
+`list_event_types` は引数を取らず、宣言済みのイベント型ごとに 1 エントリを並べた
+`{"event_types": [...]}` を返します。各エントリは `api_name`、`description`、
+`properties`（`list_object_types` と同じプロパティごとのキーで、`ai_usable` と
+`human_visible` を含みます）、`about_types`（そのイベントを発行する Action の対象型を
+ソートしたもの）、`emitted_by`（それらの Action の `api_name` をソートしたもの）を持ちます。
+他のイントロスペクションツールと同じく読み取り専用で、マルチコンシューマーサーバーでは
+未認証の呼び出しを拒否します。
+
+`list_events(event_type=None, about_type=None, about_id=None, since=None, until=None, limit=None, after=None, include_total=False)`
+は、このコンシューマーが見られるビジネスイベントを、ログ順（監査シーケンス、次に発行順）で
+返します。引数はすべて任意です。
+
+- `event_type` は、宣言済みの 1 つのイベント型に絞ります。
+- `about_type` は、可視性を適用したうえで、1 つの宣言済みオブジェクト型についてのイベントに
+  絞ります。`about_id` は 1 つの対象にさらに絞り、`about_type` が必要です。
+- `since` は含む下限、`until` は含まない上限です。どちらも UTC オフセット付きの ISO 8601
+  日時で、たとえば `2026-10-07T09:00:00+00:00` のように指定します。
+
+イベントは、その対象がこのコンシューマーに見えるときだけ一覧に載ります。判定には対象の
+最新の行を使います。廃止（retire）された対象も判定の対象なので、最新の行がスコープ外でない限り、
+そのイベントは一覧に残ります。
+
+レスポンスは `query_objects` と同じエンベロープのページ付き読み取りです。`result`、
+`next_cursor`、`has_more`、`scope_limited` を持ち、`include_total=true` のときは `total` も持ちます。
+`limit` の既定値は 100 で、最大は 1000 です。`after` には前回の `next_cursor` を渡し、明示的な
+`limit` が必要です。`next_cursor` は `has_more` が `false` のときに限って `null` です。`total` は
+全ページを通した可視イベント数で、min-N では制限されません。`limit=0` と `include_total=true` の
+組み合わせは件数のみのモードで、`result` は `[]`、`next_cursor` は `null`、`has_more` は
+`total > 0` です。`scope_limited` は宣言だけで決まります。選ばれたイベントが対象にしうる
+型のいずれかがスコープ付き、または `row_visibility` ルールを持つとき `true` です。
+
+各行は `event_type`、`about_type`、`about_id`、`ts`（オフセット付き ISO 8601 文字列）、
+`invocation_id`、`payload`、`redacted_fields` のキーを持ちます。`redacted_fields` は隠された
+フィールド名をソートしたリストで、なければ `[]` です。マスクされたキーは `payload` に
+存在せず、`null` にもなりません。例として、チーム `a` にスコープされたコンシューマー `ai` が
+`list_events(event_type="TicketEscalated", about_type="Ticket", about_id="T-1", limit=10)` を
+呼びます。`customer_email` は `ai_usable=False` と宣言されています。
+
+```json
+{
+  "result": [
+    {
+      "event_type": "TicketEscalated",
+      "about_type": "Ticket",
+      "about_id": "T-1",
+      "ts": "2026-10-07T09:12:03.120000+00:00",
+      "invocation_id": "inv_8f2c",
+      "payload": {"reason": "SLA breach"},
+      "redacted_fields": ["customer_email"]
+    }
+  ],
+  "next_cursor": null,
+  "has_more": false,
+  "scope_limited": true
+}
+```
+
+`list_events` は次のコードで拒否します。検査はこの順に行われます。
+
+| コード | 条件 |
+| --- | --- |
+| `UNKNOWN_EVENT_TYPE` | `event_type` が宣言済みのイベント型ではない。 |
+| `UNKNOWN_OBJECT_TYPE` | `about_type` が宣言済みのオブジェクト型ではない。 |
+| `INVALID_PARAMS` | `about_type` なしで `about_id` を渡した、または `since` / `until` が UTC オフセットなし、もしくは解析できない。 |
+| `AFTER_WITHOUT_LIMIT` | `limit` なしで `after` を渡した。 |
+| `INVALID_LIMIT` | `limit` が 1000 超または 1 未満、もしくは件数のみのモードで `after` を渡した。 |
+| `INVALID_CURSOR` | `after` が `list_events` の返した `next_cursor` ではない。 |
+
 ### マルチコンシューマー配信
 
 ```python
@@ -134,7 +206,7 @@ contextvar から読み取り、呼び出し元が渡した `ConsumerResolver`
 そのため resolver は誰が認証したかを偽装できません。解決結果はキャッシュされません。
 失効・再スコープされたトークンが古いバインディングのまま提供されることはありません。
 
-`build_mcp_server` と同じ 12 個のツールで、イントロスペクションを含め同じ 3 通りの
+`build_mcp_server` と同じ 14 個のツールで、イントロスペクションを含め同じ 3 通りの
 fail-closed 挙動をします。
 
 | 条件 | コード |
