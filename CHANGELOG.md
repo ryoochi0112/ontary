@@ -11,6 +11,17 @@ you**.
 
 ## [Unreleased]
 
+## [0.22.0] — 2026-10-07
+
+```bash
+uv add "ontary @ git+https://github.com/ryoochi0112/ontary@v0.22.0"
+```
+
+A minor release with one breaking change: reads refuse an unregistered object type
+instead of returning an empty result. Callers that relied on `[]`, `0`, or `None` for
+an unknown type must handle `UNKNOWN_OBJECT_TYPE`. Reads of declared types do not
+change. The store schema stays at v14, so a 0.21.0 store needs no re-ingest.
+
 ### Changed
 
 - **Reads refuse an unregistered object type (breaking for callers that relied on
