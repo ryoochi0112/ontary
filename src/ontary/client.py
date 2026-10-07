@@ -317,6 +317,10 @@ class OntologyClient(_TypedReadMixin):
             self._query.redacted_fields(self._consumer, obj_type),
         )
 
+    def _require_object_type(self, obj_type: str) -> None:
+        """Refuse an undeclared `obj_type` with `UNKNOWN_OBJECT_TYPE`."""
+        self._ontology.registry.get_object_type(obj_type)
+
     def _link_target_type(self, link: str, *, reverse: bool) -> str:
         """Resolve the result type of a declared link traversal."""
         try:
@@ -516,6 +520,9 @@ class OntologyClient(_TypedReadMixin):
                 "string-form traverse requires obj_type, link, and from_id",
                 code="INVALID_PARAMS",
             )
+        # The anchor type resolves before the link: an undeclared anchor is
+        # `UNKNOWN_OBJECT_TYPE`, whatever the link name.
+        self._ontology.registry.get_object_type(obj_type)
         try:
             link_def = self._ontology.registry.get_link_type(link)
         except ValidationFailed as exc:

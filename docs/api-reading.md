@@ -229,9 +229,13 @@ the rows that lack it and collides with a row carrying the literal string
 group as each is released, after that group's min-N test, so a selection that
 min-N would withhold still raises `MIN_N_VIOLATION`.
 
-`aggregate`, `aggregate_by`, and `count_contributors` refuse an unregistered
-object type with `UNKNOWN_OBJECT_TYPE`, matching what the same calls have always
-done when a `where=` is present.
+Every string-form read refuses an unregistered object type with
+`UNKNOWN_OBJECT_TYPE`. This covers `list`, `count`, `get`, `exists`, `traverse`,
+`aggregate`, `aggregate_by`, `count_contributors`, the `GuardedQuery` methods, and
+`BoundQuery` string reads in Function bodies. The type check runs before any other
+check and before any row is read, so the refusal is the same for every caller,
+whatever their scope. For `traverse`, an unregistered anchor type is refused this
+way; an unknown link stays `UNKNOWN_NAME`.
 
 ### `GuardedQuery(store, registry, policy)`
 

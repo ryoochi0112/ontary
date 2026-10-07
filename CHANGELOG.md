@@ -11,6 +11,19 @@ you**.
 
 ## [Unreleased]
 
+### Changed
+
+- **Reads refuse an unregistered object type (breaking for callers that relied on
+  an empty result).** Python string-form reads (`list`, `count`, `get`, `exists`,
+  `traverse`, `aggregate`, `aggregate_by`, `count_contributors`, the `GuardedQuery`
+  methods, and `BoundQuery` reads in Functions) and the MCP read tools
+  `query_objects`, `count_objects`, `get_object`, and `traverse_links` now raise
+  `UNKNOWN_OBJECT_TYPE` for an undeclared type, where they used to return `[]`, `0`,
+  or `None`. The type check runs before any other check and before any row is read.
+  `traverse` with an unregistered anchor type now raises `UNKNOWN_OBJECT_TYPE`
+  instead of `UNKNOWN_NAME`; an unknown link stays `UNKNOWN_NAME`
+  ([#194](https://github.com/ryoochi0112/ontary/issues/194)).
+
 ## [0.21.0] — 2026-10-07
 
 ```bash

@@ -11,8 +11,8 @@ from mcp.server.mcpserver import MCPServer
 
 from ontary.authoring import Ontology, OntologyObject, prop
 from ontary.client import OntologyClient
-from ontary.errors import OntaryError, ValidationFailed
-from ontary.mcp_server import _register_tools, build_mcp_server
+from ontary.errors import OntaryError
+from ontary.mcp_server import MAX_LIMIT, _register_tools, build_mcp_server
 from ontary.meta import Cardinality, Sensitivity
 from ontary.scope import DirectProperty, RowVisibilityStore, SelfScope, ViaLink
 from ontary.security import Consumer, ConsumerKind
@@ -281,7 +281,7 @@ def _python_read(client: OntologyClient, tool: str, arguments: dict[str, Any]) -
 
 
 @pytest.mark.parametrize(("tool", "failure", "code"), [
-    *[(tool, "unknown-type", "UNKNOWN_NAME") for tool in READ_TOOLS],
+    *[(tool, "unknown-type", "UNKNOWN_OBJECT_TYPE") for tool in READ_TOOLS],
     *[(tool, "policy", "SCOPE_POLICY_ERROR") for tool in READ_TOOLS],
     ("get_object", "invisible", "VISIBILITY_DENIED"),
     ("traverse_links", "identity-link", "VISIBILITY_DENIED"),
@@ -300,17 +300,8 @@ def test_failed_reads_keep_the_error_envelope_and_never_compute_marks(
     server, client = _server(ontology, store)
     arguments = _arguments(tool)
     if failure == "unknown-type":
+        # The real path (#194): no monkeypatch; the engine itself refuses.
         arguments["obj_type"] = "Unknown"
-        # Bare-string misses can return empty data; pin the error path when
-        # the resolved client's read does refuse, without changing that behavior.
-        def unknown_type(*args: Any, **kwargs: Any) -> Any:
-            raise ValidationFailed("unknown object type 'Unknown'", code="UNKNOWN_NAME")
-
-        method = {
-            "get_object": "get", "query_objects": "list",
-            "count_objects": "count", "traverse_links": "traverse",
-        }[tool]
-        monkeypatch.setattr(client, method, unknown_type)
     elif failure == "policy":
         ontology.definition.policy.unscoped_types.add("Ticket")
     elif failure == "invisible":
@@ -414,3 +405,75 @@ def test_live_read_tool_descriptions_explain_the_marks() -> None:
         if name != "get_object":
             assert "scope_limited" in description
             assert "declarations only" in description
+
+
+GOLDEN_UNKNOWN_TYPE = {"error": {
+    "type": "ValidationFailed",
+    "message": "unregistered object type: 'Tickte'",
+    "code": "UNKNOWN_OBJECT_TYPE",
+    "kind": "validation",
+}}
+
+
+@pytest.mark.parametrize("arguments", [
+    pytest.param({"tool": "query_objects", "obj_type": "Tickte"}, id="query_objects"),
+    pytest.param({"tool": "count_objects", "obj_type": "Tickte"}, id="count_objects"),
+    pytest.param({"tool": "get_object", "obj_type": "Tickte", "obj_id": "t-1"}, id="get_object"),
+    pytest.param({
+        "tool": "traverse_links", "obj_type": "Tickte", "obj_id": "t-1",
+        "link_api_name": "inTeam",
+    }, id="traverse_links-forward"),
+    pytest.param({
+        "tool": "traverse_links", "obj_type": "Tickte", "obj_id": "a",
+        "link_api_name": "inTeam", "reverse": True,
+    }, id="traverse_links-reverse"),
+    pytest.param({"tool": "aggregate_objects", "obj_type": "Tickte", "func": "count"},
+                 id="aggregate_objects"),
+    pytest.param({"tool": "aggregate_objects", "obj_type": "Tickte", "func": "count",
+                  "group_by": "team_id"}, id="aggregate_objects-grouped"),
+])
+def test_every_read_tool_returns_the_golden_envelope_for_an_undeclared_type(
+    arguments: dict[str, Any],
+) -> None:
+    ontology = _ontology()
+    store = ObjectStore(ontology.registry)
+    store.insert("Team", {"id": "a"}, SRC)
+    _insert_ticket(store, "t-1")
+    server, _ = _server(ontology, store)
+    tool = arguments.pop("tool")
+
+    assert _call(server, tool, arguments) == GOLDEN_UNKNOWN_TYPE
+
+
+@pytest.mark.parametrize(("tool", "arguments"), [
+    pytest.param("query_objects", {"obj_type": "Tickte", "limit": MAX_LIMIT + 1},
+                 id="over-cap-limit"),
+    pytest.param("query_objects", {"obj_type": "Tickte", "after": "cursor"},
+                 id="after-without-limit"),
+    pytest.param("traverse_links", {
+        "obj_type": "Tickte", "obj_id": "t-1", "link_api_name": "Nope",
+    }, id="unknown-link"),
+])
+def test_the_type_refusal_precedes_every_other_mcp_check(
+    tool: str, arguments: dict[str, Any],
+) -> None:
+    ontology = _ontology()
+    server, _ = _server(ontology, ObjectStore(ontology.registry))
+
+    assert _call(server, tool, arguments) == GOLDEN_UNKNOWN_TYPE
+
+
+@pytest.mark.parametrize("tool", [*READ_TOOLS, "aggregate_objects"])
+def test_a_non_string_obj_type_stays_invalid_params(tool: str) -> None:
+    ontology = _ontology()
+    server, _ = _server(ontology, ObjectStore(ontology.registry))
+    arguments: dict[str, Any] = {
+        "get_object": {"obj_id": "t-1"},
+        "query_objects": {},
+        "count_objects": {},
+        "traverse_links": {"obj_id": "a", "link_api_name": "inTeam"},
+        "aggregate_objects": {"func": "count"},
+    }[tool]
+    arguments["obj_type"] = 7
+
+    assert _call(server, tool, arguments)["error"]["code"] == "INVALID_PARAMS"

@@ -455,6 +455,10 @@ def _query_objects_page(
     where = _tool_optional_object("where", where)
     limit = _tool_optional_int("limit", limit)
     after = _tool_optional_string("after", after)
+    # Once the arguments have their shape, an undeclared type is refused
+    # before any other check (#194), so an over-cap limit or a stray cursor
+    # never masks UNKNOWN_OBJECT_TYPE.
+    client._require_object_type(obj_type)
     if limit is None and after is not None:
         # Delegate this refusal to the underlying client so its existing
         # AFTER_WITHOUT_LIMIT code/message remains the only validation for
@@ -488,7 +492,9 @@ def _get_object(
     """Read one object, adding declaration-only redaction names after success."""
     client = resolve_client()
     checked_obj_type = _tool_string("obj_type", obj_type)
-    obj = client.get(checked_obj_type, _tool_string("obj_id", obj_id))
+    checked_obj_id = _tool_string("obj_id", obj_id)
+    client._require_object_type(checked_obj_type)
+    obj = client.get(checked_obj_type, checked_obj_id)
     if obj is None:
         return None
     _, redacted = client._read_marks(checked_obj_type)
@@ -501,7 +507,9 @@ def _count_objects(
     """Count visible rows, then compute the declaration-only scope mark."""
     client = resolve_client()
     checked_obj_type = _tool_string("obj_type", obj_type)
-    count = client.count(checked_obj_type, _tool_optional_object("where", where))
+    checked_where = _tool_optional_object("where", where)
+    client._require_object_type(checked_obj_type)
+    count = client.count(checked_obj_type, checked_where)
     scope_limited, _ = client._read_marks(checked_obj_type)
     return count, scope_limited
 
@@ -518,6 +526,9 @@ def _traverse_links(
     checked_link = _tool_string("link_api_name", link_api_name)
     checked_obj_id = _tool_string("obj_id", obj_id)
     checked_reverse = _tool_bool("reverse", reverse)
+    # The anchor type resolves before the link lookup (#194): an undeclared
+    # anchor is UNKNOWN_OBJECT_TYPE even when the link is unknown too.
+    client._require_object_type(checked_obj_type)
     if checked_reverse:
         rows = client.traverse(
             checked_obj_type,
@@ -547,6 +558,7 @@ def _aggregate_objects(
     checked_group_by = _tool_optional_string("group_by", group_by)
     checked_where = _tool_optional_object("where", where)
     checked_func = cast(AggregateFunc, _tool_string("func", func))
+    client._require_object_type(checked_obj_type)
     # `value_field` is optional only for func="count"; for every other func a
     # `None` value_field is invalid and must reach the engine's
     # `INVALID_PARAMS` refusal rather than be rejected here. The typed

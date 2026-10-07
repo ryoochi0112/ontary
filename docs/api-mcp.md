@@ -188,4 +188,15 @@ A short page or `next_cursor: null` means "no more rows" in the caller's visible
 selection, never "some were hidden".
 Neither signal says whether rows exist outside that selection.
 
+An undeclared `obj_type` on any of the five read tools (`query_objects`,
+`count_objects`, `get_object`, `traverse_links`, `aggregate_objects`) returns the
+error envelope with `UNKNOWN_OBJECT_TYPE`. The check runs before every other
+check, such as the `limit` cap or the link lookup. The response has no `result`
+and no `scope_limited`, so an empty list with `scope_limited: true` always means a
+declared type. For example, `obj_type="Tickte"` returns:
+
+```json
+{"error": {"type": "ValidationFailed", "message": "unregistered object type: 'Tickte'", "code": "UNKNOWN_OBJECT_TYPE", "kind": "validation"}}
+```
+
 ---
