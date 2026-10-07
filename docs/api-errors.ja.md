@@ -93,6 +93,7 @@
 | `UNDECLARED_EVENT` | An action emitted an event type it did not declare. |
 | `EVENT_SUBJECT_INVALID` | An emitted event's subject could not be resolved to a valid target object. |
 | `UNKNOWN_ACTION` | An action name is unregistered on the OntologyRegistry, or has no handler bound to it. |
+| `UNKNOWN_EVENT_TYPE` | An operation referenced an unregistered event type. |
 | `UNKNOWN_FIELD` | A typed `get`/`list` call named a key that is not one of the target class's declared properties. The existence-only check runs client-side before the guarded read layer; a hidden-but-declared key still reaches the visibility kind unchanged, and the string-form surface keeps its silent-non-match behavior. The error lives here (previously `ontary.functions`, which re-exports it). |
 | `UNKNOWN_LINK_TYPE` | An operation referenced an unregistered link type. |
 | `UNKNOWN_NAME` | A typed `BoundQuery`/`OntologyClient` call named an unregistered object, link, action, or function -- e.g. an undecorated class, a class/`LinkHandle` registered on a different `Ontology`, or a link api_name absent from this registry. Typed lookup failures use the validation kind and live here so `ontary._typed_api` can raise them below the runtime modules. |
@@ -108,7 +109,7 @@
 | `MIN_N_VIOLATION` | An aggregate would be computed over fewer than min_n distinct contributors. |
 | `VISIBILITY_DENIED` | A single-object read/write targeted an object outside the consumer's scope. |
 
-*全 58 コード / 7 種別。*
+*全 59 コード / 7 種別。*
 
 ---
 

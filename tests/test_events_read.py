@@ -632,3 +632,19 @@ def test_events_typing_narrows_filtered_payload_and_defaults_to_event(tmp_path: 
         capture_output=True, text=True, check=False,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_require_event_type_refuses_an_undeclared_name_with_its_own_code(
+    domain: ReadDomain,
+) -> None:
+    with pytest.raises(ValidationFailed) as caught:
+        domain.client()._require_event_type("Shiped")
+    assert caught.value.code == "UNKNOWN_EVENT_TYPE"
+    assert "Shiped" in str(caught.value)
+
+
+@pytest.mark.parametrize("name", ["OrderShipped", "Packed"])
+def test_require_event_type_accepts_a_declared_api_name(
+    domain: ReadDomain, name: str,
+) -> None:
+    domain.client()._require_event_type(name)

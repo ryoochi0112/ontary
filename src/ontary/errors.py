@@ -146,6 +146,10 @@ ERROR_CODES: dict[str, ErrorCodeInfo] = {
         kind="validation",
         description="An operation referenced an unregistered link type.",
     ),
+    "UNKNOWN_EVENT_TYPE": ErrorCodeInfo(
+        kind="validation",
+        description="An operation referenced an unregistered event type.",
+    ),
     "OBJECT_NOT_FOUND": ErrorCodeInfo(
         kind="validation",
         description="An update targeted a non-existent object.",

@@ -321,6 +321,16 @@ class OntologyClient(_TypedReadMixin):
         """Refuse an undeclared `obj_type` with `UNKNOWN_OBJECT_TYPE`."""
         self._ontology.registry.get_object_type(obj_type)
 
+    def _require_event_type(self, name: str) -> None:
+        """Refuse an undeclared event `name` with `UNKNOWN_EVENT_TYPE`."""
+        try:
+            self._ontology.registry.get_event_type(name)
+        except ValidationFailed as exc:
+            raise ValidationFailed(
+                f"unregistered event type: {name!r}",
+                code="UNKNOWN_EVENT_TYPE",
+            ) from exc
+
     def _link_target_type(self, link: str, *, reverse: bool) -> str:
         """Resolve the result type of a declared link traversal."""
         try:
