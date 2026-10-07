@@ -229,7 +229,9 @@ def list_objects(
     )
     if isinstance(stored, Page):
         items = [hydrate(obj_type, so, consumer.kind) for so in stored.items]
-        return TypedPage(items=items, next_cursor=stored.next_cursor)
+        return TypedPage(
+            items=items, next_cursor=stored.next_cursor, has_more=stored.has_more
+        )
     return [hydrate(obj_type, so, consumer.kind) for so in stored]
 
 
