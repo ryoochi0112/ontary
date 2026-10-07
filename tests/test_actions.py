@@ -16,7 +16,8 @@ import itertools
 import os
 import re
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
+from enum import Enum
 from pathlib import Path
 from typing import Any, NamedTuple, get_args
 
@@ -31,6 +32,7 @@ from ontary.errors import (
     ConflictError,
     InternalError,
     PermissionDenied,
+    PreconditionFailed,
     ValidationFailed,
 )
 from ontary.meta import (
@@ -1229,7 +1231,7 @@ def test_nested_json_handler_return_round_trips_to_caller(
     assert result == expected
 
 
-def test_non_json_handler_return_is_internal_error_and_audited(
+def test_non_json_handler_return_is_result_not_json_and_audited(
     make_registry: RegistryFactory,
     make_store: StoreFactory,
     make_policy: PolicyFactory,
@@ -1242,12 +1244,19 @@ def test_non_json_handler_return_is_internal_error_and_audited(
     store = make_store(registry)
     executor = _setup(registry, store, make_policy)
 
-    with pytest.raises(InternalError) as exc_info:
+    with pytest.raises(PreconditionFailed) as exc_info:
         executor.execute(_librarian(), "ReturnUnserializable", {})
 
-    assert exc_info.value.code == "INTERNAL_ERROR"
+    assert exc_info.value.code == "RESULT_NOT_JSON"
+    assert exc_info.value.kind == "precondition"
+    # The nested set is named by key path (AC5).
+    assert str(exc_info.value) == (
+        "'ReturnUnserializable': result is not JSON-serializable at "
+        'result["nested"]["bad"] (set)'
+    )
     entry = store.audit_entries()[-1]
     assert entry.outcome == "error"
+    assert entry.error_code == "RESULT_NOT_JSON"
 
 
 @pytest.mark.parametrize(
@@ -1258,18 +1267,180 @@ def test_non_json_handler_return_is_internal_error_and_audited(
         pytest.param(float("nan"), id="nan"),
     ],
 )
-def test_non_finite_handler_result_is_refused_as_internal_error(
+def test_non_finite_handler_result_is_refused_as_result_not_json(
     non_finite: float,
 ) -> None:
-    with pytest.raises(InternalError) as exc_info:
+    with pytest.raises(PreconditionFailed) as exc_info:
         ActionExecutor._validate_result_json_safe(
             "ReturnNonFinite", {"value": non_finite}
         )
 
-    assert exc_info.value.code == "INTERNAL_ERROR"
-    assert exc_info.value.kind == "internal"
+    assert exc_info.value.code == "RESULT_NOT_JSON"
+    assert exc_info.value.kind == "precondition"
     assert str(exc_info.value) == (
-        "'ReturnNonFinite': handler result is not JSON-serializable"
+        "'ReturnNonFinite': result is not JSON-serializable at "
+        'result["value"] (non-finite float)'
+    )
+
+
+# -- result encoding (#167) ---------------------------------------------------
+
+_RESULT_AWARE = datetime(2026, 10, 6, 9, 0, tzinfo=timezone.utc)
+_RESULT_NAIVE = datetime(2026, 10, 6, 9, 0)
+_RESULT_DAY = date(2026, 10, 6)
+
+_RESULT_DATE_VALUES = {
+    "aware": (_RESULT_AWARE, "2026-10-06T09:00:00+00:00"),
+    "naive": (_RESULT_NAIVE, "2026-10-06T09:00:00"),
+    "date": (_RESULT_DAY, "2026-10-06"),
+}
+
+
+def _result_shapes(value: Any) -> dict[str, dict[str, Any]]:
+    """Action results are always dicts, so every shape is rooted in one."""
+    return {
+        "top": {"at": value},
+        "dict": {"outer": {"at": value, "n": 1}},
+        "list": {"items": [value, "x"]},
+        "list_of_dicts": {"rows": [{"at": value}, {"at": value, "k": None}]},
+    }
+
+
+def _result_action_client(
+    box: dict[str, Any],
+) -> tuple[OntologyClient, type[ActionParams]]:
+    """A client with one action, `EmitResult`, that returns `box["value"]`."""
+    ontology = Ontology(name="actresult", scope_levels=["org"], min_n=1)
+
+    @ontology.object(layer="L0", scope="unscoped")
+    class Thing(OntologyObject):
+        id: str = prop(primary_key=True)
+
+    class EmitResultParams(ActionParams):
+        thing_id: str = target(Thing)
+
+    @ontology.action(
+        EmitResultParams,
+        target=Thing,
+        roles=["Operator"],
+        api_name="EmitResult",
+    )
+    def emit_result(ctx: ActionContext, params: EmitResultParams) -> Any:
+        return box["value"]
+
+    ontology.validate()
+    store = ObjectStore(ontology.registry)
+    store.insert("Thing", {"id": "t1"}, SRC)
+    client = OntologyClient(
+        ontology,
+        store,
+        Consumer(
+            actor_id="operator-1",
+            role="Operator",
+            scope_level="org",
+            scope_id="org-1",
+            kind="human",
+        ),
+    )
+    return client, EmitResultParams
+
+
+def test_action_cyclic_result_is_refused_not_recursion_error() -> None:
+    cyclic: dict[str, Any] = {}
+    cyclic["self"] = cyclic
+    client, _params_cls = _result_action_client({"value": {"rows": cyclic}})
+
+    with raises_code(PreconditionFailed, "RESULT_NOT_JSON") as exc_info:
+        client.execute("EmitResult", {"thing_id": "t1"})
+    assert "cyclic or too deeply nested" in str(exc_info.value)
+    entry = client._store.audit_entries()[-1]
+    assert (entry.outcome, entry.error_code) == ("error", "RESULT_NOT_JSON")
+
+
+@pytest.mark.parametrize("shape", ["top", "dict", "list", "list_of_dicts"])
+@pytest.mark.parametrize("kind", sorted(_RESULT_DATE_VALUES))
+def test_action_dates_come_back_as_iso_strings_on_both_call_forms(
+    kind: str, shape: str
+) -> None:
+    value, iso = _RESULT_DATE_VALUES[kind]
+    client, params_cls = _result_action_client(
+        {"value": _result_shapes(value)[shape]}
+    )
+    expected = _result_shapes(iso)[shape]
+
+    assert client.execute("EmitResult", {"thing_id": "t1"}) == expected
+    assert client.execute(params_cls(thing_id="t1")) == expected
+
+    entries = client._store.audit_entries()
+    assert [(e.action, e.outcome) for e in entries] == [
+        ("EmitResult", "ok"),
+        ("EmitResult", "ok"),
+    ]
+
+
+class _PlainEnum(Enum):
+    A = "a"
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param({"v": float("inf")}, id="inf"),
+        pytest.param({"v": float("nan")}, id="nan"),
+        pytest.param({"v": {1, 2}}, id="set"),
+        pytest.param({"v": (1, 2)}, id="tuple"),
+        pytest.param({"v": {1: "x"}}, id="non-str-key"),
+        pytest.param({"v": _PlainEnum.A}, id="plain-enum"),
+    ],
+)
+def test_action_result_that_is_not_json_is_refused_and_audited(
+    value: Any,
+) -> None:
+    client, _ = _result_action_client({"value": value})
+
+    with raises_code(PreconditionFailed, "RESULT_NOT_JSON") as exc_info:
+        client.execute("EmitResult", {"thing_id": "t1"})
+
+    assert exc_info.value.kind == "precondition"
+    entry = client._store.audit_entries()[-1]
+    assert (entry.outcome, entry.error_code) == ("error", "RESULT_NOT_JSON")
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param(None, id="none"),
+        pytest.param(["a"], id="list"),
+        pytest.param("text", id="str"),
+    ],
+)
+def test_action_result_that_is_not_a_dict_is_refused_and_audited(
+    value: Any,
+) -> None:
+    client, _ = _result_action_client({"value": value})
+
+    with pytest.raises(PreconditionFailed) as exc_info:
+        client.execute("EmitResult", {"thing_id": "t1"})
+
+    assert exc_info.value.code == "RESULT_NOT_JSON"
+    assert str(exc_info.value) == (
+        f"'EmitResult': handler returned {type(value).__name__}; "
+        "action results must be JSON-safe dictionaries"
+    )
+    entry = client._store.audit_entries()[-1]
+    assert (entry.outcome, entry.error_code) == ("error", "RESULT_NOT_JSON")
+
+
+def test_action_result_refusal_names_handler_and_nested_key_path() -> None:
+    client, _ = _result_action_client({"value": {"rows": [{"when": {1, 2}}]}})
+
+    with pytest.raises(PreconditionFailed) as exc_info:
+        client.execute("EmitResult", {"thing_id": "t1"})
+
+    assert exc_info.value.code == "RESULT_NOT_JSON"
+    assert str(exc_info.value) == (
+        "'EmitResult': result is not JSON-serializable at "
+        'result["rows"][0]["when"] (set)'
     )
 
 

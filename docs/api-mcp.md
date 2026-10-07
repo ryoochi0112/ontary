@@ -56,6 +56,10 @@ and required status.
 | `execute_action` | `api_name`, `params` | — |
 | `call_function` | `api_name`, `params` | — |
 
+The results of `execute_action` and `call_function` carry `date` and `datetime` values as ISO 8601 strings.
+A result that is not JSON refuses with `RESULT_NOT_JSON`, not `INTERNAL_ERROR`; see
+[Result values](api-actions-functions.md#result-values).
+
 `list_object_types` includes a `transitions` key on every property. Its value is
 `null` when the property has no graph, or an object with the complete `initial`
 state list and `moves` mapping when it does. Each object type also has a `rules`

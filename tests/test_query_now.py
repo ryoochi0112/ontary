@@ -71,7 +71,10 @@ class Ticking:
 
 def test_query_now_returns_the_bound_clock_instant() -> None:
     runtime = ontology.bind(InMemoryStore(ontology.registry), clock=FixedClock(T))
-    assert runtime.for_consumer(CLERK).call_function("nowTwice") == [T, T]
+    assert runtime.for_consumer(CLERK).call_function("nowTwice") == [
+        T.isoformat(),
+        T.isoformat(),
+    ]
 
 
 def test_query_now_is_one_instant_per_call_read_on_first_use() -> None:
@@ -88,7 +91,10 @@ def test_query_now_is_one_instant_per_call_read_on_first_use() -> None:
     second = client.call_function("nowTwice")
     assert first == [first[0]] * 2
     assert second == [second[0]] * 2
-    assert second[0] == first[0] + timedelta(seconds=1)
+    # Function results are encoded to ISO strings at the JSON boundary (#167).
+    assert datetime.fromisoformat(second[0]) == datetime.fromisoformat(first[0]) + timedelta(
+        seconds=1
+    )
     assert clock.calls == before + 2
 
 

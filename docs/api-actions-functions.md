@@ -72,7 +72,7 @@ ctx.save(order)                   # writes only `status`
 | `.capability(handle) -> P` | Fetch a declared capability |
 | `.consumer` | The calling `Consumer` |
 | `.emit(event, *, about=None)` | Record a declared event on this invocation. See Events under Authoring an ontology |
-| `.now() -> datetime` | The invocation's single instant (see `Ontology.bind`). Use it instead of `datetime.now()` or a clock capability |
+| `.now() -> datetime` | The invocation's single instant (see `Ontology.bind`). Use it instead of `datetime.now()` or a clock capability. You can return it directly as a [result value](#result-values) |
 
 `get` and `all` are trusted handler reads. They return raw, unredacted, and
 unscoped objects. They are intentionally not guarded consumer queries. Filtering
@@ -88,6 +88,16 @@ matching live link.
 
 Raise `ActionError` for a failed precondition. `code` is required (0.6.0):
 pass `PRECONDITION_FAILED`, or your own stable code.
+
+### Result values
+
+An action handler returns a `dict` with `str` keys; both Actions and Functions hand their result across a JSON boundary,
+in process and over MCP alike. A `date` or `datetime` anywhere in the result becomes an ISO 8601 string in the spelling the
+store keeps (see [Date and datetime values](api-stores.md#date-and-datetime-values)): the offset is preserved, and a naive
+datetime stays naive. For example, `datetime(2026, 10, 7, 3, 0, tzinfo=UTC)` becomes `"2026-10-07T03:00:00+00:00"`.
+Anything else JSON cannot carry, or a non-`dict` Action result, is refused with `PreconditionFailed` and the code
+`RESULT_NOT_JSON` (see [error codes](api-errors.md)). The message names the `api_name` and the key path of the first
+offending value, such as `result["rows"][0]["when"]`.
 
 ### Authority
 
@@ -206,6 +216,12 @@ matching the action parameter shape without `scope_semantics`. The value is
 `client.call_function` refuses an argument that is neither a function name nor a
 `FunctionParams` instance with `ValidationFailed` and `code="INVALID_PARAMS"`.
 
+### Result values
+
+A Function may return any JSON value: a scalar, a list, a `dict` with `str` keys, or `None`. Its result crosses the same
+JSON boundary as an Action result, with the same encoding and the same `RESULT_NOT_JSON` refusal. See
+[Result values](#result-values) under Actions for how `date` and `datetime` values are encoded.
+
 ### `BoundQuery`
 
 A `GuardedQuery` with the consumer fixed: `.get`, `.list`, `.count`, `.exists`, `.traverse`,
@@ -216,7 +232,8 @@ work the same as on `OntologyClient` (`query.get(Ticket, id) -> Ticket | None`).
 `query.now()` returns the call's single instant from the runtime's bound clock,
 the same clock as `ctx.now()`. The clock is read on first use, and later calls
 in the same Function call return that instant. Use it in a time-dependent
-Function instead of `datetime.now()` or a clock capability. A declared
+Function instead of `datetime.now()` or a clock capability. You can return it
+directly (see [Result values](#result-values)). A declared
 capability makes every call audited.
 
 ```python

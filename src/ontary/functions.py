@@ -54,6 +54,7 @@ from typing import Any, Literal, TypeVar, cast, overload
 
 from pydantic import ValidationError
 
+from ontary._result_json import encode_result
 from ontary._runtime import default_clock
 from ontary._typed_api import _TypedReadMixin, list_objects, resolve_capability
 from ontary.audit import CapabilityAccessRecord
@@ -532,6 +533,11 @@ class FunctionRegistry:
         # carries this function's authority -- which install-and-restore
         # could not promise across a thread or a re-entrant callback.
         bound = query._for_author_dispatch(frozenset(function_def.capabilities))
+        # The result crosses the JSON boundary (#167): `date`/`datetime` become
+        # the store's ISO strings and anything else non-JSON refuses with
+        # `RESULT_NOT_JSON`, so every caller sees the same encoded value.
         if mode == "none":
-            return handler(bound)
-        return handler(bound, coerced)
+            return encode_result(api_name, handler(bound), require_dict=False)
+        return encode_result(
+            api_name, handler(bound, coerced), require_dict=False
+        )

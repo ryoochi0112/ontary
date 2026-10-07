@@ -72,7 +72,7 @@ ctx.save(order)                   # `status` だけを書く
 | `.capability(handle) -> P` | 宣言済み Capability の取得 |
 | `.consumer` | 呼び出し元の `Consumer` |
 | `.emit(event, *, about=None)` | この呼び出しに、宣言済みのイベントを記録する。「オントロジーを宣言する」のイベントの節を参照 |
-| `.now() -> datetime` | 呼び出しの唯一の時刻（`Ontology.bind` を参照）。`datetime.now()` や時刻用 Capability の代わりに使います |
+| `.now() -> datetime` | 呼び出しの唯一の時刻（`Ontology.bind` を参照）。`datetime.now()` や時刻用 Capability の代わりに使います。そのまま[結果の値](#結果の値)として返せます |
 
 `get` と `all` は信頼されたハンドラ向けの読み取りです。生データを返し、redaction と scope の制限を適用しません。
 consumer 向けの guarded query ではありません。scope や sensitivity で列挙を絞ると、id allocator から既存行が隠れます。
@@ -87,6 +87,16 @@ live link を同じ transaction で cascade-close します。オブジェクト
 
 事前条件の失敗には `ActionError` を送出します。0.6.0 から `code` は必須です —
 `PRECONDITION_FAILED` か、独自の安定コードを指定してください。
+
+### 結果の値
+
+Action のハンドラは、キーが `str` の `dict` を返します。Action と Function の結果は、プロセス内でも MCP 経由でも、
+同じ JSON 境界を通ります。結果のどこにある `date` や `datetime` も、ストアが保持する表記の ISO 8601 文字列になります
+（[date と datetime の値](api-stores.ja.md#date-と-datetime-の値) を参照）。オフセットは保持され、naive な
+datetime は naive のままです。たとえば `datetime(2026, 10, 7, 3, 0, tzinfo=UTC)` は
+`"2026-10-07T03:00:00+00:00"` になります。それ以外の JSON で運べない値や、`dict` ではない Action の結果は、
+`PreconditionFailed` とコード `RESULT_NOT_JSON` で拒否されます（[エラーコード](api-errors.ja.md) を参照）。
+メッセージには `api_name` と、最初に見つかった不正な値のキーパス（例: `result["rows"][0]["when"]`）が入ります。
 
 ### 権限（Authority）
 
@@ -201,6 +211,12 @@ params クラスを指定しない場合、ハンドラは既定値なしの `qu
 `client.call_function` は、関数名でも `FunctionParams` のインスタンスでもない引数を
 `ValidationFailed` と `code="INVALID_PARAMS"` で拒否します。
 
+### 結果の値
+
+Function は、スカラー、リスト、`str` キーの `dict`、`None` など、任意の JSON の値を返せます。
+結果は Action の結果と同じ JSON 境界を通り、エンコードも `RESULT_NOT_JSON` による拒否も同じです。
+`date` と `datetime` のエンコードについては、Action の[結果の値](#結果の値)を参照してください。
+
 ### `BoundQuery`
 
 コンシューマーを固定した `GuardedQuery`: `.get`、`.list`、`.count`、`.exists`、`.traverse`、
@@ -210,7 +226,7 @@ params クラスを指定しない場合、ハンドラは既定値なしの `qu
 `query.now()` は、ランタイムにバインドされた clock（`ctx.now()` と同じ clock）から、その call の
 単一の時刻を返します。clock は最初の呼び出しで読まれ、同じ Function call 内の以降の呼び出しは
 その時刻を返します。時刻に依存する Function では、`datetime.now()` や clock の Capability ではなく
-これを使います。Capability を宣言すると、すべての call が監査対象になります。
+これを使います。そのまま返すこともできます（[結果の値](#結果の値)を参照）。Capability を宣言すると、すべての call が監査対象になります。
 
 ```python
 @ontology.function(api_name="overdueIds")

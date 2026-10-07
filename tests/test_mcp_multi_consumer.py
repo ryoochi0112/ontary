@@ -616,10 +616,16 @@ def test_missing_required_tool_arguments_return_structured_envelopes(
         pytest.param(float("inf"), id="non-finite-float"),
     ],
 )
-def test_unserializable_tool_result_returns_internal_error_envelope(
+def test_unserializable_tool_result_returns_internal_error_envelope_when_engine_check_is_bypassed(
     monkeypatch: pytest.MonkeyPatch,
     unserializable: Any,
 ) -> None:
+    """The engine's `RESULT_NOT_JSON` check (#167) lives in
+    `FunctionRegistry.call` / `ActionExecutor`. This test monkeypatches
+    `OntologyClient.call_function`, so that check never runs, on purpose: what
+    is under test is the MCP normalizer's generic `INTERNAL_ERROR` fallback
+    for values that bypass the engine.
+    """
     def _return_unserializable(
         _self: OntologyClient, _api_name: str, _params: dict[str, Any]
     ) -> Any:

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import UTC, date, datetime, time, timedelta
+from typing import Any
 
 from ontary import (
     ActionContext,
@@ -205,14 +206,14 @@ class RoomAvailability(FunctionParams):
 @ontology.function(
     RoomAvailability, description="Live room bookings overlapping a half-open window."
 )
-def room_availability(query: BoundQuery, p: RoomAvailability) -> list[dict[str, str]]:
+def room_availability(query: BoundQuery, p: RoomAvailability) -> list[dict[str, Any]]:
     query.get(Room, p.room_id)  # Explicit room requests must pass the scope gate.
     bookings = query.list(
         Booking,
         where={"starts_at": {"lt": p.ends_at}, "ends_at": {"gt": p.starts_at}},
         limit=None,
     )
-    rows: list[dict[str, str]] = []
+    rows: list[dict[str, Any]] = []
     for booking in bookings:
         if query.traverse(booking_room, booking.id)[0].id == p.room_id:
             session = query.traverse(booking_session, booking.id)[0]
@@ -221,8 +222,8 @@ def room_availability(query: BoundQuery, p: RoomAvailability) -> list[dict[str, 
                     "booking_id": booking.id,
                     "session_id": session.id,
                     "title": session.title,
-                    "starts_at": booking.starts_at.isoformat(),
-                    "ends_at": booking.ends_at.isoformat(),
+                    "starts_at": booking.starts_at,
+                    "ends_at": booking.ends_at,
                 }
             )
     return rows
@@ -236,7 +237,7 @@ class RoomSchedule(FunctionParams):
 @ontology.function(
     RoomSchedule, description="Live room bookings overlapping a UTC day, in start order."
 )
-def room_schedule(query: BoundQuery, p: RoomSchedule) -> list[dict[str, str]]:
+def room_schedule(query: BoundQuery, p: RoomSchedule) -> list[dict[str, Any]]:
     query.get(Room, p.room_id)
     start = datetime.combine(p.day, time.min, tzinfo=UTC)
     end = start + timedelta(days=1)
@@ -245,7 +246,7 @@ def room_schedule(query: BoundQuery, p: RoomSchedule) -> list[dict[str, str]]:
         where={"starts_at": {"lt": end}, "ends_at": {"gt": start}},
         limit=None,
     )
-    rows: list[dict[str, str]] = []
+    rows: list[dict[str, Any]] = []
     for booking in sorted(bookings, key=lambda b: b.starts_at):
         if query.traverse(booking_room, booking.id)[0].id == p.room_id:
             session = query.traverse(booking_session, booking.id)[0]
@@ -254,8 +255,8 @@ def room_schedule(query: BoundQuery, p: RoomSchedule) -> list[dict[str, str]]:
                     "booking_id": booking.id,
                     "session_id": session.id,
                     "title": session.title,
-                    "starts_at": booking.starts_at.isoformat(),
-                    "ends_at": booking.ends_at.isoformat(),
+                    "starts_at": booking.starts_at,
+                    "ends_at": booking.ends_at,
                 }
             )
     return rows

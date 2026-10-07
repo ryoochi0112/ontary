@@ -21,6 +21,7 @@ from typing import Any, Literal, NoReturn, TypeVar, cast, overload
 
 from pydantic import BaseModel, ValidationError
 
+from ontary._result_json import encode_result
 from ontary._runtime import default_clock, default_id_factory
 from ontary._typed_api import api_name_for, declared_snapshot, resolve_capability
 from ontary.audit import CapabilityAccessRecord, EmittedEvent, _audit_error_code
@@ -1211,34 +1212,19 @@ class ActionExecutor:
     def _validate_result_json_safe(
         action_name: str, result: Any
     ) -> dict[str, Any]:
-        """Validate the handler result at the caller/MCP JSON boundary.
+        """Encode the handler result for the caller/MCP JSON boundary.
 
         Action results cross the same JSON boundary as parameters on their way
-        to dynamic callers and MCP. The serialize/deserialize equality check
-        rejects values whose JSON encoding changes their shape (for example
-        tuples or non-string mapping keys), in addition to values that cannot
-        be encoded at all.
+        to dynamic callers and MCP. The shared encoder (#167) turns
+        `date`/`datetime` values into the store's ISO 8601 strings and refuses
+        everything else JSON cannot carry unchanged (non-dict results, tuples,
+        non-string keys, non-finite floats, ...) with `RESULT_NOT_JSON`, naming
+        the action and the key path of the first offending value.
         """
-        if not isinstance(result, dict):
-            raise InternalError(
-                f"{action_name!r}: handler returned {type(result).__name__}; "
-                "action results must be JSON-safe dictionaries",
-                code="INTERNAL_ERROR",
-            )
-        try:
-            round_tripped = json.loads(json.dumps(result, allow_nan=False))
-        except (TypeError, ValueError) as exc:
-            raise InternalError(
-                f"{action_name!r}: handler result is not JSON-serializable",
-                code="INTERNAL_ERROR",
-            ) from exc
-        if round_tripped != result:
-            raise InternalError(
-                f"{action_name!r}: handler result does not round-trip through "
-                "JSON unchanged",
-                code="INTERNAL_ERROR",
-            )
-        return result
+        encoded: dict[str, Any] = encode_result(
+            action_name, result, require_dict=True
+        )
+        return encoded
 
     @staticmethod
     def _resolve_target_id(

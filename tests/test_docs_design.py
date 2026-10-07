@@ -492,9 +492,9 @@ def test_design_guide_relationship_object_example_runs(path: Path) -> None:
     placement = client.call_function(SessionPlacement(session_id="session-1"))
     assert placement is not None
     assert placement["room_id"] == "room-1"
-    # The Function returns datetime objects, so compare the aware UTC values directly.
-    assert placement["starts_at"] == starts_at
-    assert placement["ends_at"] == ends_at
+    # Function results are encoded to ISO strings at the JSON boundary (#167).
+    assert placement["starts_at"] == starts_at.isoformat()
+    assert placement["ends_at"] == ends_at.isoformat()
 
     assert ontology.registry.get_link_type("assignment_session").owned is True
     assert ontology.registry.get_link_type("assignment_room").owned is True

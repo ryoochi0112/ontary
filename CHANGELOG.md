@@ -20,9 +20,21 @@ you**.
   warn about an action or Function whose description is blank or only the default
   "Executes X." / "Computes X.". Docstrings never count. `accept="MISSING_DESCRIPTION"`
   silences it.
+- **`RESULT_NOT_JSON` error code (#167).** A Function or Action result that cannot cross
+  the JSON boundary is refused with this `precondition` code. The message names the
+  `api_name` and the key path of the first offending value.
 
 ### Changed
 
+- **Function and Action results encode `date` and `datetime` as ISO 8601 strings (breaking, #167).**
+  In-process `call_function` now returns the strings the store keeps, where it used to
+  return `datetime` and `date` objects. MCP `call_function` and an Action result no
+  longer fail with `INTERNAL_ERROR` on these types.
+- **A result that is not JSON refuses with `RESULT_NOT_JSON` (breaking, #167).**
+  Both surfaces refuse with this `precondition` code instead of `INTERNAL_ERROR`,
+  including an Action that returns a non-`dict`. In-process `call_function` also
+  refuses non-JSON values it used to return unchanged: tuples, sets, `Decimal`, model
+  objects, cyclic structures, and dicts with non-`str` keys.
 - **Every MCP parameter object has a `description` key (breaking for exact-key parsers, #65).**
   The change is additive, but a client that matches parameter keys exactly must now
   accept `description`.
