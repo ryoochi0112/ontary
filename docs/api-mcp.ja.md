@@ -48,7 +48,7 @@ server = build_mcp_server(ontology, store, consumer, *, name=None,
 
 | ツール | 必須の引数 | 任意の引数 |
 | --- | --- | --- |
-| `list_object_types`, `list_link_types`, `list_action_types`, `list_functions`, `get_declarations` | — | — |
+| `list_object_types`, `list_link_types`, `list_action_types`, `list_functions`, `list_event_types`, `get_declarations` | — | — |
 | `get_object` | `obj_type`, `obj_id` | — |
 | `query_objects` | `obj_type` | `where`, `order_by`, `limit`, `after`, `include_total` （既定値 `false`） |
 | `count_objects` | `obj_type` | `where` |

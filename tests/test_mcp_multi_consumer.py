@@ -261,6 +261,7 @@ ALL_TOOLS: tuple[tuple[str, dict[str, Any]], ...] = (
     ("list_link_types", {}),
     ("list_action_types", {}),
     ("list_functions", {}),
+    ("list_event_types", {}),
     ("get_declarations", {}),
     ("get_object", {"obj_type": "Book", "obj_id": "book-1"}),
     ("query_objects", {"obj_type": "Book", "where": None}),

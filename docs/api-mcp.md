@@ -47,7 +47,7 @@ and required status.
 
 | Tool | Required arguments | Optional arguments |
 | --- | --- | --- |
-| `list_object_types`, `list_link_types`, `list_action_types`, `list_functions`, `get_declarations` | — | — |
+| `list_object_types`, `list_link_types`, `list_action_types`, `list_functions`, `list_event_types`, `get_declarations` | — | — |
 | `get_object` | `obj_type`, `obj_id` | — |
 | `query_objects` | `obj_type` | `where`, `order_by`, `limit`, `after`, `include_total` (default `false`) |
 | `count_objects` | `obj_type` | `where` |

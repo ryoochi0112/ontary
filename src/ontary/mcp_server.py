@@ -17,7 +17,7 @@ schema, not consumer data, and are identical for every consumer). This
 mirrors `OntologyClient`'s own guarantee (see `ontary.client`'s docstring)
 one layer further out.
 
-All twelve tool bodies are registered exactly once, by `_register_tools`,
+All thirteen tool bodies are registered exactly once, by `_register_tools`,
 against a `resolve_client: Callable[[], OntologyClient]` seam instead of
 each tool closing directly over an
 already-built client. `build_mcp_server` below passes a constant
@@ -63,6 +63,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Mapping
+from functools import partial
 from typing import TYPE_CHECKING, Annotated, Any, NamedTuple, cast
 
 from pydantic import Field, SkipValidation
@@ -70,7 +71,15 @@ from pydantic import Field, SkipValidation
 from ontary.authoring import CapabilityHandle, Ontology
 from ontary.client import OntologyClient, OntologyRuntime
 from ontary.errors import OntaryError, PermissionDenied, ValidationFailed
-from ontary.meta import ActionParameterDef, ActionTypeDef, FunctionDef, LinkTypeDef, ObjectTypeDef
+from ontary.meta import (
+    ActionParameterDef,
+    ActionTypeDef,
+    EventTypeDef,
+    FunctionDef,
+    LinkTypeDef,
+    ObjectTypeDef,
+    PropertyDef,
+)
 from ontary.ontology import OntologyDef, resolve_definition
 from ontary.query import AggregateFunc, AggregateValue, Page
 from ontary.security import Consumer
@@ -92,7 +101,7 @@ if TYPE_CHECKING:
 ConsumerResolver = Callable[["AccessToken"], "Consumer | None"]
 """Maps one request's verified `AccessToken` to the `Consumer` it should act
 as, or `None` if nothing maps it. Must be
-SYNCHRONOUS -- the twelve tool handlers are `async def`, so the resolver is
+SYNCHRONOUS -- the thirteen tool handlers are `async def`, so the resolver is
 called on the event loop inside the request's task. It must therefore be a
 plain synchronous callable that does not block (no network round-trips that
 stall the loop -- a slow resolver stalls every in-flight request), and an
@@ -408,7 +417,7 @@ def _run(fn: Callable[[], Any]) -> dict[str, Any]:
 
 def _run_unwrapped(fn: Callable[[], dict[str, Any]]) -> dict[str, Any]:
     """Like `_run`, but returns `fn`'s dict result AT THE TOP LEVEL instead
-    of nesting it under `"result"` -- used only by the four introspection
+    of nesting it under `"result"` -- used only by the five introspection
     tools. `_run`'s "always nest under result" rule exists to prevent an
     *ontology-controlled* key from colliding with `"error"`; introspection's
     top-level keys (`object_types`, `link_types`, ...) are fixed by this
@@ -749,6 +758,34 @@ def _register_aggregate_tool(
         )
 
 
+def _property_payload(p: PropertyDef) -> dict[str, Any]:
+    return {
+        "name": p.name,
+        "type": p.type,
+        "choices": None if p.choices is None else list(p.choices),
+        "transitions": None if p.transitions is None else {
+            "initial": list(p.transitions.initial),
+            "moves": {
+                state: list(targets)
+                for state, targets in p.transitions.moves.items()
+            },
+        },
+        "fields": None if p.fields is None else [
+            {
+                "name": field.name,
+                "type": field.type,
+                "required": field.required,
+                "choices": None if field.choices is None else list(field.choices),
+            }
+            for field in p.fields
+        ],
+        "required": p.required,
+        "ai_usable": p.sensitivity.ai_usable,
+        "human_visible": p.sensitivity.human_visible,
+        "scope_level": p.scope_level,
+    }
+
+
 def _object_type_payload(defn: ObjectTypeDef) -> dict[str, Any]:
     return {
         "api_name": defn.api_name,
@@ -756,38 +793,81 @@ def _object_type_payload(defn: ObjectTypeDef) -> dict[str, Any]:
         "description": defn.description,
         "layer": defn.layer,
         "primary_key": defn.primary_key,
-        "properties": [
-            {
-                "name": p.name,
-                "type": p.type,
-                "choices": None if p.choices is None else list(p.choices),
-                "transitions": None if p.transitions is None else {
-                    "initial": list(p.transitions.initial),
-                    "moves": {
-                        state: list(targets)
-                        for state, targets in p.transitions.moves.items()
-                    },
-                },
-                "fields": None if p.fields is None else [
-                    {
-                        "name": field.name,
-                        "type": field.type,
-                        "required": field.required,
-                        "choices": None if field.choices is None else list(field.choices),
-                    }
-                    for field in p.fields
-                ],
-                "required": p.required,
-                "ai_usable": p.sensitivity.ai_usable,
-                "human_visible": p.sensitivity.human_visible,
-                "scope_level": p.scope_level,
-            }
-            for p in defn.properties
-        ],
+        "properties": [_property_payload(p) for p in defn.properties],
         "rules": [
             {"name": rule.name, "message": rule.message}
             for rule in defn.rules
         ],
+    }
+
+
+def _event_type_payload(
+    defn: EventTypeDef, action_types: Mapping[str, ActionTypeDef]
+) -> dict[str, Any]:
+    emitters = [a for a in action_types.values() if defn.api_name in a.emits]
+    return {
+        "api_name": defn.api_name,
+        "description": defn.description,
+        "properties": [_property_payload(p) for p in defn.properties],
+        "about_types": sorted({a.target_type for a in emitters}),
+        "emitted_by": sorted(a.api_name for a in emitters),
+    }
+
+
+def _list_object_types(
+    resolve_client: Callable[[], OntologyClient], ontology: OntologyDef
+) -> dict[str, Any]:
+    resolve_client()
+    return {
+        "object_types": [
+            _object_type_payload(d) for d in ontology.registry.object_types.values()
+        ]
+    }
+
+
+def _list_link_types(
+    resolve_client: Callable[[], OntologyClient], ontology: OntologyDef
+) -> dict[str, Any]:
+    resolve_client()
+    return {
+        "link_types": [
+            _link_type_payload(d) for d in ontology.registry.link_types.values()
+        ]
+    }
+
+
+def _list_action_types(
+    resolve_client: Callable[[], OntologyClient], ontology: OntologyDef
+) -> dict[str, Any]:
+    resolve_client()
+    return {
+        "action_types": [
+            _action_type_payload(d) for d in ontology.registry.action_types.values()
+        ]
+    }
+
+
+def _list_functions(
+    resolve_client: Callable[[], OntologyClient], ontology: OntologyDef
+) -> dict[str, Any]:
+    resolve_client()
+    return {
+        "functions": [
+            _function_payload(d) for d in ontology.registry.functions.values()
+        ]
+    }
+
+
+def _list_event_types(
+    resolve_client: Callable[[], OntologyClient], ontology: OntologyDef
+) -> dict[str, Any]:
+    resolve_client()
+    action_types = ontology.registry.action_types
+    return {
+        "event_types": [
+            _event_type_payload(d, action_types)
+            for d in ontology.registry.event_types.values()
+        ]
     }
 
 
@@ -856,7 +936,7 @@ def _register_tools(
     ontology: OntologyDef,
     resolve_client: Callable[[], OntologyClient],
 ) -> None:
-    """Register all twelve tools onto `server`, ONE tool body each, shared by
+    """Register all thirteen tools onto `server`, ONE tool body each, shared by
     both `build_mcp_server` and `build_multi_consumer_mcp_server`.
 
     Every tool obtains its `OntologyClient` by CALLING `resolve_client()`
@@ -871,8 +951,8 @@ def _register_tools(
     raise is classified below, the same way, without this function knowing
     or caring which builder it came from.
 
-    The four introspection tools (`list_object_types`/`list_link_types`/
-    `list_action_types`/`list_functions`) still read only `ontology.
+    The five introspection tools (`list_object_types`/`list_link_types`/
+    `list_action_types`/`list_functions`/`list_event_types`) still read only `ontology.
     registry` for their payload -- that part is schema, not consumer data,
     and untouched by who's asking. They call `resolve_client()` too, so
     that identity is proven -- and a raising resolver refused -- before
@@ -891,59 +971,31 @@ def _register_tools(
     async def list_object_types() -> dict[str, Any]:
         """List every declared object type (introspection, not consumer data)."""
 
-        def _list() -> dict[str, Any]:
-            resolve_client()
-            return {
-                "object_types": [
-                    _object_type_payload(d)
-                    for d in ontology.registry.object_types.values()
-                ]
-            }
-
-        return _run_unwrapped(_list)
+        return _run_unwrapped(partial(_list_object_types, resolve_client, ontology))
 
     @server.tool(annotations=read_only)
     async def list_link_types() -> dict[str, Any]:
         """List every declared link type (introspection, not consumer data)."""
 
-        def _list() -> dict[str, Any]:
-            resolve_client()
-            return {
-                "link_types": [
-                    _link_type_payload(d) for d in ontology.registry.link_types.values()
-                ]
-            }
-
-        return _run_unwrapped(_list)
+        return _run_unwrapped(partial(_list_link_types, resolve_client, ontology))
 
     @server.tool(annotations=read_only)
     async def list_action_types() -> dict[str, Any]:
         """List every declared action type (introspection, not consumer data)."""
 
-        def _list() -> dict[str, Any]:
-            resolve_client()
-            return {
-                "action_types": [
-                    _action_type_payload(d)
-                    for d in ontology.registry.action_types.values()
-                ]
-            }
-
-        return _run_unwrapped(_list)
+        return _run_unwrapped(partial(_list_action_types, resolve_client, ontology))
 
     @server.tool(annotations=read_only)
     async def list_functions() -> dict[str, Any]:
         """List every declared function (introspection, not consumer data)."""
 
-        def _list() -> dict[str, Any]:
-            resolve_client()
-            return {
-                "functions": [
-                    _function_payload(d) for d in ontology.registry.functions.values()
-                ]
-            }
+        return _run_unwrapped(partial(_list_functions, resolve_client, ontology))
 
-        return _run_unwrapped(_list)
+    @server.tool(annotations=read_only)
+    async def list_event_types() -> dict[str, Any]:
+        """List every declared event type (introspection, not consumer data)."""
+
+        return _run_unwrapped(partial(_list_event_types, resolve_client, ontology))
 
     @server.tool(annotations=read_only)
     async def get_declarations() -> dict[str, Any]:
@@ -1313,7 +1365,7 @@ def build_multi_consumer_mcp_server(
     different identities on this one server object never share any mutable
     per-call state.
 
-    **Fail-closed sequence, per invocation, ALL twelve tools:**
+    **Fail-closed sequence, per invocation, ALL thirteen tools:**
 
     1. No verified `AccessToken` on the request (`get_access_token()`
        returns `None` -- true for stdio, or HTTP with no `token_verifier`
