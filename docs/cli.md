@@ -48,6 +48,7 @@ When called with the `--json` flag, the command prints a JSON array of findings.
 | `FORBIDDEN_TYPE_NAME` | An object type name ends in `V` plus digits, `History`, or a year from 1900 to 2099, or ends in `Snapshot` without `snapshot=True`. |
 | `FREE_TEXT_STATUS` | A `status` or `*_status` property has type `str` and declares no choices. |
 | `MICRO_ACTION` | An action has one non-target parameter whose name matches a property on its target type. |
+| `MISSING_DESCRIPTION` | An action or function has no `description=` (or a blank one), so an agent sees only the default text. |
 | `MIN_N_UNSET` | A sensitive property is declared while `min_n` remains at its default value of 3. |
 | `STORED_DERIVABLE` | A property name has an aggregate prefix or suffix such as `avg_`, `total_`, or `_score`. |
 | `UNSCOPED_SENSITIVE` | A sensitive property belongs to an object type with no scope rule and no explicit unscoped declaration. |

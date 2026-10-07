@@ -427,6 +427,32 @@ and temporary project labels.
 
 *Source: Palantir, "Ontology design: Structural guidance".*
 
+### Descriptions for agents
+
+The MCP catalog shows an agent each action's and function's description. This is
+what an agent reads when it chooses an operation. Set it with `description=` on
+`@ontology.action` or `@ontology.function`, and set a parameter's text with
+`Field(description=...)` on its field.
+
+```python
+class EscalateTicketParams(ActionParams):
+    ticket_id: str = target(Ticket, description="The ticket to escalate.")
+    reason: str | None = Field(default=None, description="Why the ticket needs escalation.")
+
+@ontology.action(
+    EscalateTicketParams,
+    target=Ticket,
+    description="Opens an Escalation for a Ticket and assigns an Agent.",
+)
+def escalate(ctx: ActionContext, params: EscalateTicketParams) -> None: ...
+```
+
+The catalog does not read docstrings. Without `description=`, the default text is
+"Executes X." or "Computes X.", which tells an agent nothing. Say what the business
+verb does and when to use it. A self-evident name may opt out with
+`accept="MISSING_DESCRIPTION"`. Parameter descriptions are optional, and no lint
+checks them.
+
 ### Retirement and removal
 
 Removal is a business verb. Model it as an `ActionTypeDef` named for the business

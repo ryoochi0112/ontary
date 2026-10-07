@@ -48,6 +48,7 @@
 | `FORBIDDEN_TYPE_NAME` | オブジェクト型名が `V` と数字、`History`、または 1900〜2099 の年で終わる場合に発生します。`snapshot=True` がない `Snapshot` 末尾も対象です。 |
 | `FREE_TEXT_STATUS` | `status` または `*_status` という名前の `str` 型プロパティに選択肢が宣言されていない場合に発生します。 |
 | `MICRO_ACTION` | Action の対象以外のパラメーターが1つだけあり、その名前が対象型のプロパティ名と一致する場合に発生します。 |
+| `MISSING_DESCRIPTION` | Action または Function の `description=` がないか空で、エージェントには既定の文しか見えない場合に発生します。 |
 | `MIN_N_UNSET` | 機微なプロパティが宣言され、`min_n` が既定値の 3 のままの場合に発生します。 |
 | `STORED_DERIVABLE` | プロパティ名に `avg_`、`total_`、`_score` などの集計を表す接頭辞または接尾辞がある場合に発生します。 |
 | `UNSCOPED_SENSITIVE` | スコープ規則も明示的な非スコープ宣言もないオブジェクト型に機微なプロパティがある場合に発生します。 |
