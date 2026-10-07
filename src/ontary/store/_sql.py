@@ -510,6 +510,57 @@ WHERE link_type = {{p}} AND to_id = {{p}}
 ORDER BY valid_from{{collate}} ASC, from_id{{collate}} ASC
 """
 
+# Write-side statements behind the shared write path's storage steps.  Every
+# one carries the tenant predicate (or binds the tenant column), so a storage
+# step can never touch another tenant's rows.
+OBJECT_INSERT_TEMPLATE = """
+INSERT INTO objects
+    (object_type, id, payload, valid_from, valid_to,
+     source_system, source_id, extracted_at, page_token,
+     tenant)
+VALUES ({p}, {p}, {p}, {p}, NULL, {p}, {p}, {p}, {p}, {p})
+"""
+
+# Every live row of one object, oldest first: the write path treats the last
+# row as the newest.
+OBJECT_LIVE_ROWS_SELECT_TEMPLATE = f"""
+SELECT {_OBJECT_COLUMN_LIST} FROM objects
+WHERE object_type = {{p}} AND id = {{p}} AND valid_to IS NULL
+  AND tenant = {{p}}
+ORDER BY row_id ASC
+"""
+
+OBJECT_HISTORY_PROBE_TEMPLATE = """
+SELECT 1 FROM objects
+WHERE object_type = {p} AND id = {p} AND tenant = {p}
+LIMIT 1
+"""
+
+OBJECT_CLOSE_LIVE_TEMPLATE = """
+UPDATE objects SET valid_to = {p}
+WHERE object_type = {p} AND id = {p} AND valid_to IS NULL
+  AND tenant = {p}
+"""
+
+LINK_INSERT_TEMPLATE = """
+INSERT INTO links
+    (link_type, from_id, to_id, valid_from, valid_to, tenant)
+VALUES ({p}, {p}, {p}, {p}, NULL, {p})
+"""
+
+LINK_LIVE_VALID_FROM_SELECT_TEMPLATE = """
+SELECT valid_from FROM links
+WHERE link_type = {p} AND from_id = {p} AND to_id = {p}
+  AND valid_to IS NULL AND tenant = {p}
+ORDER BY valid_from{collate} ASC
+"""
+
+LINK_CLOSE_LIVE_TEMPLATE = """
+UPDATE links SET valid_to = {p}
+WHERE link_type = {p} AND from_id = {p} AND to_id = {p}
+  AND valid_to IS NULL AND tenant = {p}
+"""
+
 AUDIT_LOG_INSERT_TEMPLATE = f"""
 INSERT INTO audit_log
     ({_AUDIT_LOG_COLUMN_LIST})
