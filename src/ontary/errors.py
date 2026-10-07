@@ -373,6 +373,17 @@ ERROR_CODES: dict[str, ErrorCodeInfo] = {
             "duplicate registration, or no handler bound."
         ),
     ),
+    "RESULT_NOT_JSON": ErrorCodeInfo(
+        kind="precondition",
+        description=(
+            "A Function or Action handler result could not be encoded for the "
+            "JSON boundary both surfaces share. A handler may return JSON "
+            "scalars, lists, dicts with `str` keys, and `date`/`datetime` "
+            "objects, which become ISO 8601 strings in the spelling the store "
+            "keeps. The message names the handler and the key path of the "
+            "first offending value. Action results must also be dicts."
+        ),
+    ),
     "ONTOLOGY_INVALID": ErrorCodeInfo(
         kind="validation",
         description=(

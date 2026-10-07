@@ -60,6 +60,7 @@
 | `CLOCK_REGRESSION` | The store clock reads earlier than the valid_from of the version a write would close; the clock went backwards. Fix the clock (it must never run behind the data it wrote) and retry. |
 | `FUNCTION_ERROR` | Registering/calling a Function failed: undeclared api_name, duplicate registration, or no handler bound. |
 | `PRECONDITION_FAILED` | An action's precondition failed; the message names it. The conventional code for `ActionError` (kind precondition); an author may attach their own stable code instead, e.g. `raise ActionError("...", code="GAP_NOT_ACKNOWLEDGED")`. It is also used with overridden codes for unregistered/unhandled actions (`UNKNOWN_ACTION`) and parameter-validation failures (`INVALID_PARAMS`) -- see the `code=` overrides at those raise sites. |
+| `RESULT_NOT_JSON` | A Function or Action handler result could not be encoded for the JSON boundary both surfaces share. A handler may return JSON scalars, lists, dicts with `str` keys, and `date`/`datetime` objects, which become ISO 8601 strings in the spelling the store keeps. The message names the handler and the key path of the first offending value. Action results must also be dicts. |
 | `TRANSITION_NOT_ALLOWED` | A governed property changed to a state not allowed by its declared transition graph; action starts must be initial states. |
 
 ### `validation`
@@ -107,7 +108,7 @@
 | `MIN_N_VIOLATION` | An aggregate would be computed over fewer than min_n distinct contributors. |
 | `VISIBILITY_DENIED` | A single-object read/write targeted an object outside the consumer's scope. |
 
-*全 57 コード / 7 種別。*
+*全 58 コード / 7 種別。*
 
 ---
 
