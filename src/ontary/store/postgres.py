@@ -6,14 +6,11 @@ roadmap called a Postgres backend "a fill-in rather than a rewrite" because
 being cashed. Every behavioral assertion in `tests/test_store_conformance.py`
 runs against this class unchanged.
 
-Written from scratch against the protocol, NOT by subclassing `ObjectStore` --
-the same decision `InMemoryStore` documents. A shared base class would let the
-conformance suite pass by exercising inherited SQLite helpers through a different
-name, which proves nothing about the seam. Refinement of that rule: pure
-CONTRACT logic that must be byte-identical across backends
-(refusal checks, validation, codecs) is shared via `ontary.store._shared`
--- see that module's doctrine docstring -- while all storage mechanics
-remain from-scratch here, so the conformance suite still proves the seam.
+The write path (order of steps, refusals, cardinality, the clock, and write
+capture) is `ontary.store._core.StoreCore`'s; this module supplies the
+advisory-lock transaction and the storage steps it calls, plus its own reads.
+Pure contract logic shared with the other backends lives in
+`ontary.store._shared`.
 
 What genuinely differs from SQLite, and why each choice was made:
 
@@ -40,37 +37,21 @@ from __future__ import annotations
 
 import json
 import uuid
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import datetime
 from typing import Any
 
-from ontary.audit import (
-    AuditEntry,
-    WriteRecord,
-)
+from ontary.audit import AuditEntry
 from ontary.errors import ConflictError
-from ontary.meta import Cardinality, OntologyRegistry
+from ontary.meta import OntologyRegistry
 from ontary.store import _sql
+from ontary.store._core import StoreCore
 from ontary.store._shared import (
-    StoreClock,
-    WriteCapture,
+    AuditRowFields,
     canonical_id,
-    check_link_endpoints,
-    check_link_removal_authority,
-    check_link_write_authority,
-    check_object_removal_authority,
     check_read_page_batch,
-    check_update_authority,
     decode_audit_entry,
-    encode_audit_entry,
-    ensure_not_before,
-    live_link_not_found,
-    merge_update,
-    object_already_exists,
-    prepare_insert,
     resolve_link_type,
-    retire_object_refusal,
     unknown_page_token,
 )
 from ontary.store.schema import SCHEMA_VERSION
@@ -162,7 +143,7 @@ per-tenant (one process serves one declaration).
 """
 
 
-class PostgresStore:
+class PostgresStore(StoreCore):
     """Postgres-backed store satisfying the `Store` protocol.
 
     ```python
@@ -200,16 +181,11 @@ class PostgresStore:
         design. An application connecting as a superuser gets engine-level
         filtering only, whatever `rls` says.
         """
-        if not tenant:
-            raise ValueError("tenant must be a non-empty string")
+        super().__init__(registry, tenant=tenant)
         psycopg = _psycopg()
-        self._registry = registry
-        self._tenant = tenant
         self._rls = rls
         self._conn = psycopg.connect(dsn, autocommit=False)
         self._txn_depth = 0
-        self._write_capture = WriteCapture()
-        self._clock_state = StoreClock()
         self._init_schema()
         # Session-scoped, not per-transaction: not every read this backend makes
         # opens one, and an unset variable means the policies match nothing --
@@ -327,168 +303,58 @@ class PostgresStore:
     def in_transaction(self) -> bool:
         return self._txn_depth > 0
 
-    def bind_clock(
-        self, clock: Callable[[], datetime] | None
-    ) -> Callable[[], datetime]:
-        return self._clock_state.bind(clock)
+    # -- objects: storage steps -----------------------------------------
 
-    @contextmanager
-    def capture_action_writes(
-        self, *, at: str | None = None
-    ) -> Iterator[list[WriteRecord]]:
-        with self._write_capture.capture(at=at) as records:
-            yield records
-
-    def _record_write(self, record: WriteRecord) -> None:
-        self._write_capture.record(record)
-
-    # -- objects ---------------------------------------------------------
-
-    def insert(self, obj_type: str, payload: dict[str, Any], source: Source) -> str:
-        prepared = prepare_insert(
-            self._registry, obj_type, payload, capturing=self._write_capture.active
-        )
-        payload, obj_id = prepared.payload, prepared.obj_id
-
-        # `json.dumps` here, not `_safe_json_dumps`: an unencodable payload must
-        # fail the write on every backend (SQLite raises from its own
-        # `json.dumps`), or a value that is storable in tests becomes unstorable
-        # in production.
-        encoded = json.dumps(payload)
-        now = self._clock_state.now_iso(self._write_capture)
-        with self.transaction() as conn:
-            if self.read_current(obj_type, obj_id) is not None:
-                raise object_already_exists(obj_type, obj_id)
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    INSERT INTO objects
-                        (object_type, id, payload, valid_from, valid_to,
-                         source_system, source_id, extracted_at, page_token,
-                         tenant)
-                    VALUES (%s, %s, %s, %s, NULL, %s, %s, %s, %s, %s)
-                    """,
-                    (
-                        obj_type,
-                        str(obj_id),
-                        encoded,
-                        now,
-                        source.source_system,
-                        source.source_id,
-                        source.extracted_at,
-                        uuid.uuid4().hex,
-                        self._tenant,
-                    ),
-                )
-        self._record_write(WriteRecord(op="create", object_type=obj_type, object_id=str(obj_id)))
-        return str(obj_id)
-
-    def update(
+    def _insert_object_row(
         self,
         obj_type: str,
         obj_id: str,
-        payload_changes: dict[str, Any],
+        encoded_payload: str,
+        valid_from: str,
         source: Source,
     ) -> None:
-        obj_id = canonical_id(obj_id)
-        capturing = self._write_capture.active
-        obj_def = check_update_authority(
-            self._registry, obj_type, payload_changes, capturing=capturing
+        _sql.execute(
+            self._conn,
+            _sql.render(_sql.OBJECT_INSERT_TEMPLATE, "postgres"),
+            (
+                obj_type,
+                obj_id,
+                encoded_payload,
+                valid_from,
+                source.source_system,
+                source.source_id,
+                source.extracted_at,
+                uuid.uuid4().hex,
+                self._tenant,
+            ),
+            dialect="postgres",
         )
-        with self.transaction() as conn:
-            current = self.read_current(obj_type, obj_id)
-            merged = merge_update(
-                obj_def, obj_type, obj_id, current, payload_changes, capturing=capturing
-            )
-            encoded = json.dumps(merged)
-            now = self._clock_state.now_iso(self._write_capture)
-            assert current is not None
-            ensure_not_before(
-                current.lineage.valid_from, now, what=f"{obj_type} {obj_id}"
-            )
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    UPDATE objects SET valid_to = %s
-                    WHERE object_type = %s AND id = %s AND valid_to IS NULL
-                      AND tenant = %s
-                    """,
-                    (now, obj_type, obj_id, self._tenant),
-                )
-                cur.execute(
-                    """
-                    INSERT INTO objects
-                        (object_type, id, payload, valid_from, valid_to,
-                         source_system, source_id, extracted_at, page_token,
-                         tenant)
-                    VALUES (%s, %s, %s, %s, NULL, %s, %s, %s, %s, %s)
-                    """,
-                    (
-                        obj_type,
-                        obj_id,
-                        encoded,
-                        now,
-                        source.source_system,
-                        source.source_id,
-                        source.extracted_at,
-                        uuid.uuid4().hex,
-                        self._tenant,
-                    ),
-                )
-        self._record_write(WriteRecord(op="update", object_type=obj_type, object_id=obj_id))
 
-    def retire_object(self, object_type: str, obj_id: str) -> StoredObject:
-        obj_id = canonical_id(obj_id)
-        check_object_removal_authority(
-            self._registry,
-            object_type,
-            capturing=self._write_capture.active,
+    def _live_object_rows(self, obj_type: str, obj_id: str) -> list[StoredObject]:
+        rows = _sql.execute(
+            self._conn,
+            _sql.render(_sql.OBJECT_LIVE_ROWS_SELECT_TEMPLATE, "postgres"),
+            (obj_type, obj_id, self._tenant),
+            dialect="postgres",
+        ).rows
+        return [self._row_to_stored(row) for row in rows]
+
+    def _has_object_history(self, obj_type: str, obj_id: str) -> bool:
+        rows = _sql.execute(
+            self._conn,
+            _sql.render(_sql.OBJECT_HISTORY_PROBE_TEMPLATE, "postgres"),
+            (obj_type, obj_id, self._tenant),
+            dialect="postgres",
+        ).rows
+        return bool(rows)
+
+    def _close_object_rows(self, obj_type: str, obj_id: str, valid_to: str) -> None:
+        _sql.execute(
+            self._conn,
+            _sql.render(_sql.OBJECT_CLOSE_LIVE_TEMPLATE, "postgres"),
+            (valid_to, obj_type, obj_id, self._tenant),
+            dialect="postgres",
         )
-        now = self._clock_state.now_iso(self._write_capture)
-        with self.transaction() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    f"""
-                    SELECT {self._OBJECT_COLUMNS} FROM objects
-                    WHERE object_type = %s AND id = %s AND valid_to IS NULL
-                      AND tenant = %s
-                    ORDER BY row_id DESC
-                    LIMIT 1
-                    """,
-                    (object_type, obj_id, self._tenant),
-                )
-                current = cur.fetchone()
-                if current is None:
-                    cur.execute(
-                        """
-                        SELECT 1 FROM objects
-                        WHERE object_type = %s AND id = %s AND tenant = %s
-                        LIMIT 1
-                        """,
-                        (object_type, obj_id, self._tenant),
-                    )
-                    raise retire_object_refusal(
-                        object_type,
-                        obj_id,
-                        has_history=cur.fetchone() is not None,
-                    )
-                ensure_not_before(
-                    current[4], now, what=f"{object_type} {obj_id}"
-                )
-                cur.execute(
-                    """
-                    UPDATE objects SET valid_to = %s
-                    WHERE object_type = %s AND id = %s AND valid_to IS NULL
-                      AND tenant = %s
-                    """,
-                    (now, object_type, obj_id, self._tenant),
-                )
-                closed = (*current[:5], now, *current[6:])
-                retired = self._row_to_stored(closed)
-        self._record_write(
-            WriteRecord(op="retire", object_type=object_type, object_id=obj_id)
-        )
-        return retired
 
     _OBJECT_COLUMNS = ", ".join(_sql.OBJECT_COLUMNS)
 
@@ -600,111 +466,36 @@ class PostgresStore:
 
     # -- links -----------------------------------------------------------
 
-    def create_link(self, link_type: str, from_id: str, to_id: str) -> None:
-        from_id, to_id = canonical_id(from_id), canonical_id(to_id)
-        link_def = check_link_write_authority(
-            self._registry, link_type, capturing=self._write_capture.active
-        )
-        check_link_endpoints(
-            link_def,
-            link_type,
-            from_id,
-            to_id,
-            read_current=self.read_current,
-            read_last=self.read_last,
-        )
-        if to_id in self.links_from(link_type, from_id):
-            # #37: an identical live link already exists -- a no-op, checked
-            # before cardinality so a re-run never trips over itself. Nothing
-            # is written, so no write record is captured either.
-            return
-
-        now = self._clock_state.now_iso(self._write_capture)
-        with self.transaction() as conn:
-            with conn.cursor() as cur:
-                if link_def.cardinality in (
-                    Cardinality.ONE_TO_ONE,
-                    Cardinality.MANY_TO_ONE,
-                ):
-                    cur.execute(
-                        "SELECT COUNT(*) FROM links WHERE link_type = %s "
-                        "AND from_id = %s AND valid_to IS NULL AND tenant = %s",
-                        (link_type, from_id, self._tenant),
-                    )
-                    existing = cur.fetchone()
-                    if existing is not None and int(existing[0]) > 0:
-                        raise ConflictError(
-                            f"{link_type!r} is {link_def.cardinality.value}: "
-                            f"{from_id!r} already has a link",
-                            code="CARDINALITY_VIOLATION",
-                        )
-                if link_def.cardinality in (
-                    Cardinality.ONE_TO_ONE,
-                    Cardinality.ONE_TO_MANY,
-                ):
-                    cur.execute(
-                        "SELECT COUNT(*) FROM links WHERE link_type = %s "
-                        "AND to_id = %s AND valid_to IS NULL AND tenant = %s",
-                        (link_type, to_id, self._tenant),
-                    )
-                    existing = cur.fetchone()
-                    if existing is not None and int(existing[0]) > 0:
-                        raise ConflictError(
-                            f"{link_type!r} is {link_def.cardinality.value}: "
-                            f"{to_id!r} already has a link",
-                            code="CARDINALITY_VIOLATION",
-                        )
-                cur.execute(
-                    """
-                    INSERT INTO links
-                        (link_type, from_id, to_id, valid_from, valid_to, tenant)
-                    VALUES (%s, %s, %s, %s, NULL, %s)
-                    """,
-                    (link_type, from_id, to_id, now, self._tenant),
-                )
-        self._record_write(
-            WriteRecord(op="link", link_type=link_type, from_id=from_id, to_id=to_id)
+    def _insert_link_row(
+        self, link_type: str, from_id: str, to_id: str, valid_from: str
+    ) -> None:
+        _sql.execute(
+            self._conn,
+            _sql.render(_sql.LINK_INSERT_TEMPLATE, "postgres"),
+            (link_type, from_id, to_id, valid_from, self._tenant),
+            dialect="postgres",
         )
 
-    def close_link(self, link_type: str, from_id: str, to_id: str) -> bool:
-        from_id, to_id = canonical_id(from_id), canonical_id(to_id)
-        check_link_removal_authority(
-            self._registry,
-            link_type,
-            capturing=self._write_capture.active,
+    def _live_link_valid_froms(
+        self, link_type: str, from_id: str, to_id: str
+    ) -> list[str]:
+        rows = _sql.execute(
+            self._conn,
+            _sql.render(_sql.LINK_LIVE_VALID_FROM_SELECT_TEMPLATE, "postgres"),
+            (link_type, from_id, to_id, self._tenant),
+            dialect="postgres",
+        ).rows
+        return [str(row[0]) for row in rows]
+
+    def _close_link_rows(
+        self, link_type: str, from_id: str, to_id: str, valid_to: str
+    ) -> None:
+        _sql.execute(
+            self._conn,
+            _sql.render(_sql.LINK_CLOSE_LIVE_TEMPLATE, "postgres"),
+            (valid_to, link_type, from_id, to_id, self._tenant),
+            dialect="postgres",
         )
-        now = self._clock_state.now_iso(self._write_capture)
-        with self.transaction() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT valid_from FROM links
-                    WHERE link_type = %s AND from_id = %s AND to_id = %s
-                      AND valid_to IS NULL AND tenant = %s
-                    """,
-                    (link_type, from_id, to_id, self._tenant),
-                )
-                live = cur.fetchall()
-                if not live:
-                    raise live_link_not_found(link_type, from_id, to_id)
-                for (live_from,) in live:
-                    ensure_not_before(
-                        live_from, now, what=f"{link_type} {from_id}->{to_id}"
-                    )
-                cur.execute(
-                    """
-                    UPDATE links SET valid_to = %s
-                    WHERE link_type = %s AND from_id = %s AND to_id = %s
-                      AND valid_to IS NULL AND tenant = %s
-                    """,
-                    (now, link_type, from_id, to_id, self._tenant),
-                )
-        self._record_write(
-            WriteRecord(
-                op="unlink", link_type=link_type, from_id=from_id, to_id=to_id
-            )
-        )
-        return True
 
     def links_from(self, link_type: str, from_id: str) -> list[str]:
         from_id = canonical_id(from_id)
@@ -754,40 +545,35 @@ class PostgresStore:
 
     # -- audit -----------------------------------------------------------
 
-    def append_audit(self, entry: AuditEntry) -> None:
-        """Persist one audit entry. Never raises for an unencodable value
-        -- `_safe_json_dumps` degrades it to a placeholder, exactly as the
-        other backends do."""
-        fields = encode_audit_entry(entry)
-        with self.transaction() as conn:
-            _sql.execute(
-                conn,
-                _sql.render(
-                    _sql.AUDIT_LOG_INSERT_TEMPLATE,
-                    "postgres",
-                    placeholder_count=len(_sql.AUDIT_LOG_COLUMNS),
-                ),
-                (
-                    fields.ts,
-                    fields.actor,
-                    fields.role,
-                    fields.action,
-                    fields.target_type,
-                    fields.target_id,
-                    fields.params,
-                    fields.outcome,
-                    fields.writes,
-                    fields.capability_accesses,
-                    fields.invocation_id,
-                    fields.kind,
-                    self._tenant,
-                    fields.principal,
-                    fields.unscoped_params,
-                    fields.error_code,
-                    fields.events,
-                ),
-                dialect="postgres",
-            )
+    def _append_audit_row(self, fields: AuditRowFields) -> None:
+        _sql.execute(
+            self._conn,
+            _sql.render(
+                _sql.AUDIT_LOG_INSERT_TEMPLATE,
+                "postgres",
+                placeholder_count=len(_sql.AUDIT_LOG_COLUMNS),
+            ),
+            (
+                fields.ts,
+                fields.actor,
+                fields.role,
+                fields.action,
+                fields.target_type,
+                fields.target_id,
+                fields.params,
+                fields.outcome,
+                fields.writes,
+                fields.capability_accesses,
+                fields.invocation_id,
+                fields.kind,
+                self._tenant,
+                fields.principal,
+                fields.unscoped_params,
+                fields.error_code,
+                fields.events,
+            ),
+            dialect="postgres",
+        )
 
     def audit_entries(self) -> list[AuditEntry]:
         rows = _sql.execute(
