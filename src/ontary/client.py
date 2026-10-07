@@ -480,8 +480,26 @@ class OntologyClient(_TypedReadMixin):
 
     @overload
     def traverse(
-        self, obj_type: str, link: str, from_id: str, *, reverse: bool = False
+        self,
+        obj_type: str,
+        link: str,
+        from_id: str,
+        *,
+        reverse: bool = False,
+        limit: None = None,
+        after: str | None = None,
     ) -> builtins.list[StoredObject]: ...
+    @overload
+    def traverse(
+        self,
+        obj_type: str,
+        link: str,
+        from_id: str,
+        *,
+        reverse: bool = False,
+        limit: int,
+        after: str | None = None,
+    ) -> Page: ...
     @overload
     def traverse(
         self, link_cls: LinkHandle[F, T], from_obj_or_id: F | str, /, *, reverse: Literal[False] = False
@@ -499,7 +517,9 @@ class OntologyClient(_TypedReadMixin):
         from_id: str | None = None,
         *,
         reverse: bool = False,
-    ) -> builtins.list[StoredObject] | builtins.list[T] | builtins.list[F]:
+        limit: int | None = None,
+        after: str | None = None,
+    ) -> builtins.list[StoredObject] | builtins.list[T] | builtins.list[F] | Page:
         """Traverse a declared link.
 
         The string form is ``traverse(obj_type, link, from_id)``. The typed
@@ -510,6 +530,11 @@ class OntologyClient(_TypedReadMixin):
         `GuardedQuery`, which performs the guarded traversal. Typed form
         validates the handle's ontology and hydrates the linked class;
         `reverse=True` uses the target as anchor and the source as result.
+
+        The string form also takes keyword-only `limit` and `after`: with
+        `limit` it returns a `Page` (`items`, `has_more`, `next_cursor`);
+        without it, the full list. `after` without `limit` is
+        `AFTER_WITHOUT_LIMIT`. The typed form takes neither.
         """
         if isinstance(obj_type, LinkHandle):
             anchor_id = self._traverse_anchor_id(obj_type, link, reverse=reverse)
@@ -535,7 +560,17 @@ class OntologyClient(_TypedReadMixin):
                 f"not {obj_type!r}",
                 code="UNKNOWN_NAME",
             )
-        return self._query.traverse(self._consumer, link, from_id, reverse=reverse)
+        if limit is None:
+            if after is not None:
+                raise ValidationFailed(
+                    "traverse: after= was given without limit= -- the "
+                    "unpaginated path has no page to resume",
+                    code="AFTER_WITHOUT_LIMIT",
+                )
+            return self._query.traverse(self._consumer, link, from_id, reverse=reverse)
+        return self._query.traverse_page(
+            self._consumer, link, from_id, reverse=reverse, limit=limit, after=after
+        )
 
     def _traverse_anchor_id(self, link_cls: LinkHandle[F, T], anchor_obj_or_id: F | T | str, *, reverse: bool = False) -> str:
         if isinstance(anchor_obj_or_id, str):

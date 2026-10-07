@@ -11,6 +11,23 @@ you**.
 
 ## [Unreleased]
 
+### Changed
+
+- **MCP `traverse_links` returns a default page of 100 rows (breaking).** It used to
+  return every row; pass `limit` (at most 1000) and `after` to page. (#63)
+- **MCP `query_objects` and `traverse_links` add `has_more` (breaking for strict
+  response parsers), and `next_cursor` is `null` exactly when `has_more` is `false`.**
+  A page that ends exactly at the last visible row no longer returns a cursor. (#64)
+- **Python `Page.next_cursor` is `None` on an exactly-full last page (breaking).**
+  `Page` and `TypedPage` gain `has_more`. (#64)
+
+### Added
+
+- MCP `include_total` on `query_objects` and `traverse_links` adds a top-level `total`,
+  the visible count (not min-N gated, same as `count_objects`). `limit=0` with
+  `include_total=true` is a count-only mode. (#63)
+- `client.traverse(..., limit=, after=)` returns a `Page`. (#63)
+
 ## [0.22.0] — 2026-10-07
 
 ```bash

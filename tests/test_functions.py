@@ -549,7 +549,7 @@ def test_typed_page_refuses_to_be_walked_on_its_own_name() -> None:
     left the `Page` pin above green, because that pin exercises the string
     form and never touches this class. Two classes, two refusals, two names.
     """
-    typed: TypedPage[Any] = TypedPage(items=[], next_cursor=None)
+    typed: TypedPage[Any] = TypedPage(items=[], next_cursor=None, has_more=False)
 
     with raises_code(ValidationFailed, "PAGE_NOT_ITERABLE"):
         list(typed)
@@ -573,7 +573,7 @@ def test_page_refuses_to_be_measured_or_indexed(
         make_registry, make_consumer, make_policy, 5
     )
     page = bound.list("Reading", limit=2)
-    typed: TypedPage[Any] = TypedPage(items=[], next_cursor=None)
+    typed: TypedPage[Any] = TypedPage(items=[], next_cursor=None, has_more=False)
 
     for measured in (page, typed):
         with raises_code(ValidationFailed, "PAGE_NOT_ITERABLE"):

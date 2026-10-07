@@ -133,8 +133,8 @@ def _assert_ticket_read(
     if tool != "get_object":
         keys.add("scope_limited")
         assert result["scope_limited"] is limited
-    if tool == "query_objects":
-        keys.add("next_cursor")
+    if tool in ("query_objects", "traverse_links"):
+        keys |= {"next_cursor", "has_more"}
         assert result["next_cursor"] is None
     assert set(result) == keys
     if tool == "count_objects":
@@ -190,7 +190,7 @@ def test_golden_sample_scoped_human_ticket_page() -> None:
 
     result = _call(server, "query_objects", {"obj_type": "Ticket", "limit": 2})
 
-    assert set(result) == {"result", "next_cursor", "scope_limited"}
+    assert set(result) == {"result", "next_cursor", "has_more", "scope_limited"}
     assert result["scope_limited"] is True
     assert isinstance(result["next_cursor"], str) and result["next_cursor"]
     assert len(result["result"]) == 2
@@ -259,7 +259,7 @@ def test_traversal_marks_follow_forward_and_reverse_result_type(mode: str) -> No
     forward = _call(server, "traverse_links", {
         "obj_type": "Ticket", "obj_id": "t-1", "link_api_name": "inTeam",
     })
-    assert set(forward) == {"result", "scope_limited"}
+    assert set(forward) == {"result", "next_cursor", "has_more", "scope_limited"}
     assert forward["scope_limited"] is False
     assert len(forward["result"]) == 1
     _assert_row(forward["result"][0], "Team", {"id": "a"}, [])

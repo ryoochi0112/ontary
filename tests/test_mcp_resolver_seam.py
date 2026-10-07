@@ -136,6 +136,7 @@ class _Page:
     def __init__(self, items: list[Any]) -> None:
         self.items = items
         self.next_cursor: str | None = None
+        self.has_more = False
 
 
 class _StubClient:
@@ -253,7 +254,18 @@ class _FreshClient:
     ) -> int:
         return self.client_id
 
-    def traverse(self, obj_type: str, obj_id: str, link_api_name: str) -> list[_Tagged]:
+    def traverse(
+        self,
+        obj_type: str,
+        link: str,
+        from_id: str,
+        *,
+        reverse: bool = False,
+        limit: int | None = None,
+        after: str | None = None,
+    ) -> Any:
+        if limit is not None:
+            return _Page([_Tagged(self.client_id)])
         return [_Tagged(self.client_id)]
 
     def execute(self, api_name: str, params: dict[str, Any]) -> dict[str, Any]:

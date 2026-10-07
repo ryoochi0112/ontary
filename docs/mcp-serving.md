@@ -83,6 +83,7 @@ The response also includes `scope_limited` and a `redacted_fields` list on each 
 {
   "result": [{"payload": {"id": "book-1"}, "lineage": {}, "redacted_fields": []}],
   "next_cursor": "opaque-page-token",
+  "has_more": true,
   "scope_limited": true
 }
 ```
@@ -92,11 +93,10 @@ Pass that cursor back with the same explicit `limit` to fetch the next page. A
 explicit `limit` returns `AFTER_WITHOUT_LIMIT`, and `limit < 1` continues to use
 the underlying `INVALID_LIMIT` validation.
 
-`traverse_links` is intentionally not paged here: its underlying
-`OntologyClient.traverse`/`GuardedQuery.traverse` API returns an unpaged list and
-does not expose `limit`, `after`, or a cursor to delegate. Adding a cap to that
-tool would require a new core traversal surface rather than a trivial MCP
-adaptation.
+`traverse_links` is paged the same way: it accepts an optional `limit` (default
+100, maximum 1000) and an `after` cursor, and its envelope carries `has_more` and
+`next_cursor`. A cursor that no longer names a current, visible linked row returns
+`STALE_CURSOR`; restart from the first page.
 
 ## Serve many proven identities
 
@@ -232,6 +232,7 @@ allows. `content` carries the same result as text for clients that do not read
         }
       ],
       "next_cursor": null,
+      "has_more": false,
       "scope_limited": true
     }
   }

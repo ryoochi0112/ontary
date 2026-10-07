@@ -49,10 +49,10 @@ server = build_mcp_server(ontology, store, consumer, *, name=None,
 | --- | --- | --- |
 | `list_object_types`, `list_link_types`, `list_action_types`, `list_functions`, `get_declarations` | — | — |
 | `get_object` | `obj_type`, `obj_id` | — |
-| `query_objects` | `obj_type` | `where`, `order_by`, `limit`, `after` |
+| `query_objects` | `obj_type` | `where`, `order_by`, `limit`, `after`, `include_total` （既定値 `false`） |
 | `count_objects` | `obj_type` | `where` |
 | `aggregate_objects` | `obj_type` | `value_field`, `group_by`, `where`, `func` （既定値 `"mean"`） |
-| `traverse_links` | `obj_type`, `obj_id`, `link_api_name` | `reverse` （既定値 `false`） |
+| `traverse_links` | `obj_type`, `obj_id`, `link_api_name` | `reverse` （既定値 `false`）, `limit`, `after`, `include_total` （既定値 `false`） |
 | `execute_action` | `api_name`, `params` | — |
 | `call_function` | `api_name`, `params` | — |
 
@@ -60,11 +60,12 @@ server = build_mcp_server(ontology, store, consumer, *, name=None,
 `null`、ある場合は完全な `initial` 状態リストと `moves` の対応を返します。各オブジェクト型には
 `rules` リストもあり、各ルールの `name` と `message` を含みます。ルールのコードは含まれません。
 
-`query_objects(obj_type, where=None, order_by=None, limit=None, after=None)` は MCP surface では常に
+`query_objects(obj_type, where=None, order_by=None, limit=None, after=None, include_total=False)` は MCP surface では常に
 上限付きです。`limit` を省略するとサーバーのデフォルト上限 100 行を使い、明示する
 場合の最大値は 1000 です。内部のページ付き読み取りが不透明な `next_cursor` を返し、
 成功時のレスポンスは従来どおり行を `result` に置いたまま、同じ階層に `next_cursor`
-を追加します（消化済みなら `null`）。同じ明示的な `limit` とともにカーソルを返して
+と `has_more` を追加します。`next_cursor` が `null` になるのは `has_more` が `false` のときだけです。
+可視な最後の行でちょうど終わるページにもカーソルはありません。同じ明示的な `limit` とともにカーソルを返して
 次ページを取得してください。明示的な `limit` なしの `after` は
 `AFTER_WITHOUT_LIMIT`、1 未満または 1000 超の値は `INVALID_LIMIT` になります。
 
@@ -86,8 +87,18 @@ lineage フィールドは対象外で、未知のキーは `UNKNOWN_FIELD` に�
 グループ付きの空集合 `{}` も拒否されます。`value_field` は `func="count"` では
 省略可能で、省略すると可視な行すべてをカウントします。それ以外の func では必須
 であり、指定がなければ `INVALID_PARAMS` になります。
-`traverse_links` は、委譲先の `OntologyClient.traverse`／`GuardedQuery.traverse` に
-`limit`／`after` とカーソルの API がないため、今回もページなしのリストです。
+`traverse_links` も同じようにページ付けします。`limit` を省略すると既定の 100 行を 1 ページ返し
+（明示する場合の最大値は 1000 です）、`next_cursor` と `has_more` の規則も同じです。`limit` なしの
+`after` は `AFTER_WITHOUT_LIMIT` になります。
+
+ページ付きの 2 つのツールは `include_total`（デフォルトは `false`）を受け付けます。`true` にすると、
+レスポンスのトップレベルに `total` を追加します。値は呼び出し元に可視な行数で、`count_objects` と
+同じ数です。min-N による公開判定は行いません。ページとはトランザクションが別なので、2 つの読み取りの間に
+書き込みがあると `total` とページが食い違うことがあります。`include_total` がなければ `total` キーはありません。
+`limit=0` と `include_total=true` の組み合わせは件数のみのモードです。`result` は `[]`、
+`next_cursor` は `null`、`has_more` は `total > 0` で、`order_by` は無視し、`after` は
+`INVALID_LIMIT` で拒否します。`include_total` なしの `limit=0` は `INVALID_LIMIT` です。
+
 `reverse=true` を渡すとリンクの target 側から辿って source 側のオブジェクトを返します。
 本人特定リンクの拒否は両方向で対称です。
 
@@ -165,9 +176,9 @@ stateful セッションでも、各 request はその request 自身のトー�
 | ツール | トップレベルのキー | 行のキー | `result` の値 | スコープの方針 |
 | --- | --- | --- | --- | --- |
 | `get_object` | `result` | `payload`, `lineage`, `redacted_fields` | オブジェクト行、または存在しない・退役したオブジェクトに対する `null` です。 | `scope_limited` はありません。スコープ外の ID は `VISIBILITY_DENIED` で拒否します。 |
-| `query_objects` | `result`, `next_cursor`, `scope_limited` | `payload`, `lineage`, `redacted_fields` | オブジェクト行のリストです。 | `scope_limited` は検索対象の型の宣言に従います。 |
+| `query_objects` | `result`, `next_cursor`, `has_more`, `total`, `scope_limited` | `payload`, `lineage`, `redacted_fields` | オブジェクト行のリストです。 | `scope_limited` は検索対象の型の宣言に従います。 |
 | `count_objects` | `result`, `scope_limited` | — | 可視行の件数を表す整数です。 | `scope_limited` は件数を数える型の宣言に従います。 |
-| `traverse_links` | `result`, `scope_limited` | `payload`, `lineage`, `redacted_fields` | オブジェクト行のリストです。 | `scope_limited` は結果の型の宣言に従います。 |
+| `traverse_links` | `result`, `next_cursor`, `has_more`, `total`, `scope_limited` | `payload`, `lineage`, `redacted_fields` | オブジェクト行のリストです。 | `scope_limited` は結果の型の宣言に従います。 |
 
 `scope_limited` は、成功した検索・件数取得・リンク走査で常に返す真偽値です。
 空のリストや件数がゼロの場合も返します。
@@ -187,6 +198,21 @@ stateful セッションでも、各 request はその request 自身のトー�
 人間のコンシューマーには、`human_visible=False` のフィールドを列挙します。
 AI のコンシューマーには、`ai_usable=False` のフィールドを列挙します。
 `DirectProperty` で宣言したスコープ振り分け用のキーが隠される場合も列挙します。
+
+`total` は、呼び出しが `include_total=true` を指定した場合にだけ返します。
+
+エージェントが「チーム `a` に紐づくチケットは何件ですか。最初の 2 件も見せてください」と尋ねます。
+`traverse_links` を `obj_type="Team"`、`obj_id="a"`、`link_api_name="inTeam"`、`reverse=true`、
+`limit=2`、`include_total=true` で呼ぶと、次の結果を得ます。
+
+```json
+{"result": [{"payload": {...}, "lineage": {...}, "redacted_fields": []},
+            {"payload": {...}, "lineage": {...}, "redacted_fields": []}],
+ "next_cursor": "<opaque>", "has_more": true, "total": 218, "scope_limited": true}
+```
+
+エージェントは次のように答えます。「チーム a に紐づくチケットは 218 件です（見えている範囲の件数で、
+スコープによって見えない行がある可能性があります）。最初の 2 件を示します。残りもページ送りで確認できます。」
 
 短いページや `next_cursor: null` は、呼び出し元に可視な選択範囲で「これ以上行がない」ことを意味します。
 「隠された行があった」ことを意味するものではありません。

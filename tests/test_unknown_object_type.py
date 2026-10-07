@@ -59,7 +59,7 @@ UNKNOWN_TYPE_INVOKERS: dict[str, Invoker] = {
     "count_contributors": lambda q, c: q.count_contributors(c, NOPE),
     "visible_events": lambda q, c: q.visible_events(c, about=(NOPE, "x")),
 }
-COVERED_ELSEWHERE = {"traverse"}
+COVERED_ELSEWHERE = {"traverse", "traverse_page"}
 
 
 def _registry(

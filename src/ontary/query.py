@@ -467,17 +467,22 @@ def _refuse_page_walk(what: str) -> NoReturn:
 
 class Page(BaseModel):
     """A page of `get_objects(..., limit=...)` results: `items` holds
-    exactly `limit` `StoredObject`s whenever that many visible rows remain,
-    and `next_cursor` is the opaque key of the last row actually KEPT --
+    exactly `limit` `StoredObject`s whenever that many visible rows remain.
+
+    `has_more` is true exactly when at least one more VISIBLE row follows
+    this page (the read peeks one visible row past `limit`; rows hidden by
+    scope, `row_visibility`, or `where` never count). `next_cursor` is the
+    opaque key of the last row actually KEPT when `has_more` is true --
     never a payload primary key, never read off a row
-    (`StoredObject`/`Lineage` carry no row identity) -- or `None` iff the
-    store was exhausted before the page filled. Frozen, like every other
-    read-model value this layer returns."""
+    (`StoredObject`/`Lineage` carry no row identity) -- and `None` exactly
+    when `has_more` is false, so an exactly-full last page carries no
+    cursor. Frozen, like every other read-model value this layer returns."""
 
     model_config = ConfigDict(frozen=True)
 
     items: list[StoredObject]
     next_cursor: str | None
+    has_more: bool
 
     def __iter__(self) -> NoReturn:
         """Refuse to be walked as a sequence -- read `.items`.
@@ -521,13 +526,16 @@ class Page(BaseModel):
 
 class TypedPage(BaseModel, Generic[_T]):
     """The typed-client counterpart to `Page`: `items` holds hydrated `T`
-    instances instead of raw `StoredObject`s; `next_cursor` has the exact
-    same opaque-cursor contract as `Page.next_cursor`."""
+    instances instead of raw `StoredObject`s. `has_more` and `next_cursor`
+    have the exact same contract as on `Page`: `next_cursor` is the opaque
+    key of the last kept row when `has_more` is true, and `None` exactly
+    when `has_more` is false."""
 
     model_config = ConfigDict(frozen=True)
 
     items: list[_T]
     next_cursor: str | None
+    has_more: bool
 
     def __iter__(self) -> NoReturn:
         """Refuse to be walked as a sequence -- read `.items`. Same contract
@@ -1274,11 +1282,13 @@ class GuardedQuery:
         after: str | None,
         scope_cache: _ScopeReadCache,
     ) -> Page:
-        batch_size = max(limit, DEFAULT_BATCH)
+        # Peek one visible row past `limit`: `has_more` is true exactly when
+        # that row exists. The peek runs after `where` and `_visible`, so
+        # hidden rows never count, and the peeked row is never redacted or
+        # returned.
+        batch_size = max(limit + 1, DEFAULT_BATCH)
         cursor = after
-        kept: list[StoredObject] = []
-        last_kept_key: str | None = None
-        next_cursor: str | None = None
+        kept: list[tuple[str, StoredObject]] = []
         while True:
             batch = self._store.read_page(obj_type, after_key=cursor, batch=batch_size)
             for paged_row in batch:
@@ -1290,17 +1300,31 @@ class GuardedQuery:
                     continue
                 if not self._visible(consumer, paged_row.obj, scope_cache=scope_cache):
                     continue
-                kept.append(self._redact(consumer, obj_type, paged_row.obj))
-                last_kept_key = paged_row.key
-                if len(kept) >= limit:
+                kept.append((paged_row.key, paged_row.obj))
+                if len(kept) > limit:
                     break
-            if len(kept) >= limit:
-                next_cursor = last_kept_key
+            if len(kept) > limit or len(batch) < batch_size:
                 break
-            if len(batch) < batch_size:
-                next_cursor = None
-                break
-        return Page(items=kept, next_cursor=next_cursor)
+        return self._page_of(consumer, obj_type, kept, limit)
+
+    def _page_of(
+        self,
+        consumer: Consumer,
+        obj_type: str,
+        kept: Sequence[tuple[str | None, StoredObject]],
+        limit: int,
+    ) -> Page:
+        """Build a `Page` from up to `limit + 1` visible `(key, row)` pairs:
+        keep and redact the first `limit`, and let the peeked extra row only
+        set `has_more`. `next_cursor` is the `limit`-th row's key exactly
+        when `has_more` is true."""
+        has_more = len(kept) > limit
+        page_rows = kept[:limit]
+        return Page(
+            items=[self._redact(consumer, obj_type, row) for _key, row in page_rows],
+            next_cursor=page_rows[-1][0] if has_more else None,
+            has_more=has_more,
+        )
 
     def _ordered_page(
         self,
@@ -1336,21 +1360,16 @@ class GuardedQuery:
                     code="STALE_CURSOR",
                 )
 
-        items: list[StoredObject] = []
-        last_key: str | None = None
+        kept: list[tuple[str | None, StoredObject]] = []
         for key, row in entries:
             if where_matcher is not None and not where_matcher(row.payload):
                 continue
             if not self._visible(consumer, row, scope_cache=scope_cache):
                 continue
-            items.append(self._redact(consumer, obj_type, row))
-            last_key = key
-            if len(items) >= limit:
+            kept.append((key, row))
+            if len(kept) > limit:
                 break
-        return Page(
-            items=items,
-            next_cursor=last_key if len(items) >= limit else None,
-        )
+        return self._page_of(consumer, obj_type, kept, limit)
 
     # -- public reads -----------------------------------------------------
 
@@ -1525,14 +1544,19 @@ class GuardedQuery:
             )
         )
 
-    def traverse(
+    def _traverse_targets(
         self,
         consumer: Consumer,
         link_type: str,
         from_id: str,
         *,
-        reverse: bool = False,
-    ) -> list[StoredObject]:
+        reverse: bool,
+    ) -> tuple[str, list[str]]:
+        """The one gate every link traversal passes before it reads a row:
+        the identity-revealing denial, the target type, the scope-coherence
+        check, and the link's id list in the store's link order. Returns
+        `(target_type, target_ids)`; ids are raw (unchecked for visibility).
+        """
         link_def = self._registry.get_link_type(link_type)
         if link_def.identity_revealing and consumer.kind == "human":
             # e.g. an anonymized-survey-response -> authoring-person link:
@@ -1554,6 +1578,19 @@ class GuardedQuery:
             if reverse
             else self._store.links_from(link_type, from_id)
         )
+        return target_type, target_ids
+
+    def traverse(
+        self,
+        consumer: Consumer,
+        link_type: str,
+        from_id: str,
+        *,
+        reverse: bool = False,
+    ) -> list[StoredObject]:
+        target_type, target_ids = self._traverse_targets(
+            consumer, link_type, from_id, reverse=reverse
+        )
         scope_cache = _ScopeReadCache()
         results = []
         for tid in target_ids:
@@ -1564,6 +1601,68 @@ class GuardedQuery:
                 continue
             results.append(self._redact(consumer, target_type, row))
         return results
+
+    def traverse_page(
+        self,
+        consumer: Consumer,
+        link_type: str,
+        from_id: str,
+        *,
+        reverse: bool = False,
+        limit: int,
+        after: str | None = None,
+    ) -> Page:
+        """One page of `traverse`, in the same (store link) order.
+
+        Keeps `limit` visible linked rows and peeks one more visible row to
+        set `has_more`; rows that are missing or hidden from this consumer
+        never count. `next_cursor` is the object id of the last kept row
+        when `has_more` is true, else `None`.
+
+        `after` resumes after that object id. An id this consumer cannot
+        resume from -- not in the current link list, no current row, or a
+        row hidden from this consumer -- refuses with `STALE_CURSOR` and one
+        identical message for all three, so a guessed `after` never reveals
+        that a hidden row is linked here.
+        """
+        target_type, target_ids = self._traverse_targets(
+            consumer, link_type, from_id, reverse=reverse
+        )
+        if limit < 1:
+            raise ValidationFailed(
+                f"traverse_page limit must be >= 1, got {limit!r}",
+                code="INVALID_LIMIT",
+            )
+        scope_cache = _ScopeReadCache()
+        start = 0
+        if after is not None:
+            resume_row = None
+            if after in target_ids:
+                resume_row = self._store.read_current(target_type, after)
+            if resume_row is None or not self._visible(
+                consumer, resume_row, scope_cache=scope_cache
+            ):
+                raise ValidationFailed(
+                    "traverse: the cursor no longer names a linked row you can "
+                    "resume from; restart the traversal from the first page",
+                    code="STALE_CURSOR",
+                )
+            start = target_ids.index(after) + 1
+
+        # Peek one visible row past `limit`, as `_row_id_page` does: only
+        # rows that pass `_visible` count, and the peeked row is never
+        # redacted or returned (`_page_of` keeps the first `limit`).
+        kept: list[tuple[str | None, StoredObject]] = []
+        for tid in target_ids[start:]:
+            row = self._store.read_current(target_type, tid)
+            if row is None or not self._visible(
+                consumer, row, scope_cache=scope_cache
+            ):
+                continue
+            kept.append((tid, row))
+            if len(kept) > limit:
+                break
+        return self._page_of(consumer, target_type, kept, limit)
 
     # -- aggregation -----------------------------------------------------
 

@@ -90,7 +90,7 @@ list; pass a positive `limit` for a `Page`. Pagination composes with `order_by` 
 
 ### Pagination — `Page` / `TypedPage[T]`
 
-Both carry `items` and an opaque `next_cursor: str | None`. On the consumer surfaces,
+Both carry `items`, an opaque `next_cursor: str | None`, and `has_more: bool`. On the consumer surfaces,
 omitting `limit` returns a page using the default bound above, while `limit=None` is
 the explicit unbounded-list opt-in. Inside a declared Function, `BoundQuery.list`
 returns a bare list when `limit` is omitted or `None`; passing a positive `limit`
@@ -103,10 +103,12 @@ The contract:
   short page always means "no more rows", never "some were hidden from you".
 - **The cursor is opaque.** A random per-row token. Not a row id, not a count, not an
   order. Never parse it; store it and pass it back to `after=`.
-- **`next_cursor is None` means exhausted-before-full.** A page that fills exactly at
-  the last row still carries a cursor; the follow-up call returns one final empty
-  page. So `while next_cursor is not None` always terminates correctly rather than
-  stopping a page early.
+- **`next_cursor` is `None` exactly when `has_more` is `False`.** When `has_more` is
+  `True`, `next_cursor` is the opaque key of the last returned row. A last page that
+  fills exactly no longer yields a cursor that leads to an empty page. The loop
+  idiom `while page.next_cursor is not None:` always terminates correctly.
+- **`has_more` counts only visible rows.** Rows hidden from this consumer by scope
+  never make it `True`.
 - **During an unordered walk, a mid-walk update may repeat a row but never skip
   one.** The store is close-old-insert-new. During an ordered walk, a row whose
   sort value moves ahead of the cursor is silently dropped, while a row whose
@@ -128,7 +130,16 @@ walk.
 `client.traverse(link_cls, from_obj_or_id)` is the typed form;
 `client.traverse("Comment", "commentOnTicket", comment_id)` names the source type,
 link API name, and source id in that order. `BoundQuery` accepts the same
-handle-first typed form inside Functions.
+handle-first typed form inside Functions. The typed-handle form has no paging.
+
+The string form can page.
+`client.traverse("Team", "inTeam", "a", reverse=True, limit=100, after=cursor)`
+returns a `Page`. Without `limit` it returns the full list as before. `after`
+without `limit` raises `AFTER_WITHOUT_LIMIT`, and `limit < 1` raises
+`INVALID_LIMIT`. A traversal cursor that no longer names a current, visible linked
+row (the link was closed, or the row was retired or hidden) raises `STALE_CURSOR`;
+restart from the first page. Loop with `while page.next_cursor is not None:`, as for
+any other page.
 
 Returned targets are subject to the same visibility checks as any other read.
 Traversal through an identity-revealing link raises `VisibilityError` with

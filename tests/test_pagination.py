@@ -421,7 +421,7 @@ def test_narrow_and_broad_consumer_pages_structurally_indistinguishable(
     assert len(narrow_page.items) == len(broad_page.items) == 5
     assert narrow_page.next_cursor is not None
     assert broad_page.next_cursor is not None
-    assert set(Page.model_fields) == {"items", "next_cursor"}
+    assert set(Page.model_fields) == {"items", "next_cursor", "has_more"}
 
 
 def test_ac8_cursor_is_not_parseable_as_a_row_count(
@@ -474,10 +474,14 @@ def test_ac8_cursor_is_not_parseable_as_a_row_count(
 
     cursors: list[str] = []
     cursor: str | None = None
-    for _ in range(len(visible_ids)):
+    for index in range(len(visible_ids)):
         page = gq.get_objects(consumer, "Widget", limit=1, after=cursor)
-        assert [w.payload["id"] for w in page.items] == [visible_ids[len(cursors)]]
+        assert [w.payload["id"] for w in page.items] == [visible_ids[index]]
         cursor = page.next_cursor
+        if index == len(visible_ids) - 1:
+            # The last visible row: no more visible rows follow, so no cursor.
+            assert cursor is None
+            break
         assert cursor is not None
         cursors.append(cursor)
 
@@ -953,19 +957,17 @@ def test_after_without_limit_raises_on_client_list_string_and_typed() -> None:
 # -- AC4: exact-multiple boundary (limit divides visible rows evenly) -------
 
 
-def test_exact_multiple_limit_yields_cursor_then_one_empty_final_page(
+def test_exact_multiple_limit_has_no_more_and_no_cursor(
     make_registry: RegistryFactory,
     make_policy: PolicyFactory,
     make_store: StoreFactory,
 ) -> None:
     """4 visible rows with `limit=4`: the page fills EXACTLY at the last
-    row, so it still carries a non-`None` cursor (spec AC4 -- a full page
-    is never distinguishable from a page that merely happens to end at a
-    batch boundary), and the follow-up call with that cursor returns one
-    EMPTY final page with `next_cursor is None`, not an error and not a
-    non-empty page. The follow-up call is a short (zero-row) page --
-    exactly the fill-loop's exhaustion exit -- so the store is bound via
-    `_CallCountingStore` (spec §11)."""
+    row, and the one-row peek finds nothing after it, so the page says
+    `has_more is False` and carries no cursor (list-completeness #63/#64:
+    an exactly-full last page no longer hands out a cursor that leads to an
+    empty page). The peek is the fill loop's exhaustion exit, so the store
+    is bound via `_CallCountingStore` (spec §11)."""
     registry = _pagination_registry(make_registry)
     raw_store = make_store(registry)
     _seed_library(raw_store, hidden_shelves=0)
@@ -975,11 +977,8 @@ def test_exact_multiple_limit_yields_cursor_then_one_empty_final_page(
 
     page = gq.get_objects(_narrow(), "Widget", limit=4)
     assert [w.payload["id"] for w in page.items] == visible_ids
-    assert page.next_cursor is not None
-
-    final_page = gq.get_objects(_narrow(), "Widget", limit=4, after=page.next_cursor)
-    assert final_page.items == []
-    assert final_page.next_cursor is None
+    assert page.has_more is False
+    assert page.next_cursor is None
 
 
 # -- OntologyClient.list: string + typed surfaces ----------------------------

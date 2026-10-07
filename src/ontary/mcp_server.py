@@ -63,7 +63,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Mapping
-from typing import TYPE_CHECKING, Annotated, Any, cast
+from typing import TYPE_CHECKING, Annotated, Any, NamedTuple, cast
 
 from pydantic import Field, SkipValidation
 
@@ -72,7 +72,7 @@ from ontary.client import OntologyClient, OntologyRuntime
 from ontary.errors import OntaryError, PermissionDenied, ValidationFailed
 from ontary.meta import ActionParameterDef, ActionTypeDef, FunctionDef, LinkTypeDef, ObjectTypeDef
 from ontary.ontology import OntologyDef, resolve_definition
-from ontary.query import AggregateFunc, AggregateValue
+from ontary.query import AggregateFunc, AggregateValue, Page
 from ontary.security import Consumer
 from ontary.store import Store, StoredObject
 
@@ -426,19 +426,52 @@ def _run_marked(fn: Callable[[], tuple[Any, bool]]) -> dict[str, Any]:
     return {"result": value, "scope_limited": scope_limited}
 
 
-def _run_paged(
-    fn: Callable[[], tuple[list[dict[str, Any] | None], str | None, bool]]
-) -> dict[str, Any]:
-    """Wrap a paged read as `{"result", "next_cursor", "scope_limited"}`.
+class _PagedRead(NamedTuple):
+    """One successful list read before it is shaped into the wire envelope."""
 
+    rows: list[dict[str, Any] | None]
+    next_cursor: str | None
+    has_more: bool
+    total: int | None
+    scope_limited: bool
+
+
+def _run_paged(fn: Callable[[], _PagedRead]) -> dict[str, Any]:
+    """Wrap a paged read as `{"result", "next_cursor", "has_more", ["total"],
+    "scope_limited"}`.
+
+    `total` is present only when the caller asked for it (`include_total`).
     Rows retain their payload/lineage split and add `redacted_fields`.
     Errors keep the shared envelope and carry no read marks.
     """
     result, error = _try(fn)
     if error is not None:
         return error
-    rows, next_cursor, scope_limited = result
-    return {"result": rows, "next_cursor": next_cursor, "scope_limited": scope_limited}
+    read = _PagedRead(*result)
+    envelope: dict[str, Any] = {
+        "result": read.rows,
+        "next_cursor": read.next_cursor,
+        "has_more": read.has_more,
+    }
+    if read.total is not None:
+        envelope["total"] = read.total
+    envelope["scope_limited"] = read.scope_limited
+    return envelope
+
+
+def _over_cap_limit(tool: str, limit: int) -> ValidationFailed:
+    return ValidationFailed(
+        f"{tool} limit must be <= {MAX_LIMIT}, got {limit!r}",
+        code="INVALID_LIMIT",
+    )
+
+
+def _count_only_after() -> ValidationFailed:
+    return ValidationFailed(
+        "limit=0 with include_total=true is count-only mode, which takes no "
+        "after; drop after, or pass a limit of 1 or more to page",
+        code="INVALID_LIMIT",
+    )
 
 
 def _query_objects_page(
@@ -448,13 +481,15 @@ def _query_objects_page(
     order_by: Any,
     limit: Any,
     after: Any,
-) -> tuple[list[dict[str, Any] | None], str | None, bool]:
+    include_total: Any,
+) -> _PagedRead:
     """Apply the MCP cap and delegate one query page to the client surface."""
     client = resolve_client()
     obj_type = _tool_string("obj_type", obj_type)
     where = _tool_optional_object("where", where)
     limit = _tool_optional_int("limit", limit)
     after = _tool_optional_string("after", after)
+    include_total = _tool_bool("include_total", include_total)
     # Once the arguments have their shape, an undeclared type is refused
     # before any other check (#194), so an over-cap limit or a stray cursor
     # never masks UNKNOWN_OBJECT_TYPE.
@@ -467,10 +502,14 @@ def _query_objects_page(
         client.list(obj_type, where, limit=None, after=after)
         raise RuntimeError("the underlying paged read accepted after without limit")
     if limit is not None and limit > MAX_LIMIT:
-        raise ValidationFailed(
-            f"get_objects limit must be <= {MAX_LIMIT}, got {limit!r}",
-            code="INVALID_LIMIT",
-        )
+        raise _over_cap_limit("get_objects", limit)
+    if limit == 0 and include_total:
+        # Count-only mode: no page is read, so `order_by` cannot matter.
+        if after is not None:
+            raise _count_only_after()
+        count = client.count(obj_type, where)
+        scope_limited, _ = client._read_marks(obj_type)
+        return _PagedRead([], None, count > 0, count, scope_limited)
     page_limit = DEFAULT_LIMIT if limit is None else limit
     if order_by is None:
         page = client.list(obj_type, where, limit=page_limit, after=after)
@@ -482,8 +521,15 @@ def _query_objects_page(
             after=after,
             order_by=order_by,
         )
+    total = client.count(obj_type, where) if include_total else None
     scope_limited, redacted = client._read_marks(obj_type)
-    return ([_serialize(obj, redacted) for obj in page.items], page.next_cursor, scope_limited)
+    return _PagedRead(
+        [_serialize(obj, redacted) for obj in page.items],
+        page.next_cursor,
+        page.has_more,
+        total,
+        scope_limited,
+    )
 
 
 def _get_object(
@@ -520,27 +566,72 @@ def _traverse_links(
     link_api_name: Any,
     obj_id: Any,
     reverse: Any,
-) -> tuple[list[dict[str, Any] | None], bool]:
-    """Validate, traverse, then mark the result type without widening forward calls."""
+    limit: Any,
+    after: Any,
+    include_total: Any,
+) -> _PagedRead:
+    """Validate, traverse one page, then mark the result type.
+
+    Every read goes through `client.traverse`, so the anchor/link checks
+    and the identity-revealing denial run before any paging rule, and a
+    count-only total is never computed without them.
+    """
     checked_obj_type = _tool_string("obj_type", obj_type)
     checked_link = _tool_string("link_api_name", link_api_name)
     checked_obj_id = _tool_string("obj_id", obj_id)
     checked_reverse = _tool_bool("reverse", reverse)
+    checked_limit = _tool_optional_int("limit", limit)
+    checked_after = _tool_optional_string("after", after)
+    checked_include_total = _tool_bool("include_total", include_total)
     # The anchor type resolves before the link lookup (#194): an undeclared
     # anchor is UNKNOWN_OBJECT_TYPE even when the link is unknown too.
     client._require_object_type(checked_obj_type)
-    if checked_reverse:
-        rows = client.traverse(
-            checked_obj_type,
-            checked_link,
-            checked_obj_id,
-            reverse=True,
-        )
+
+    def traverse(**paging: Any) -> Any:
+        if checked_reverse:
+            return client.traverse(
+                checked_obj_type, checked_link, checked_obj_id, reverse=True, **paging
+            )
+        return client.traverse(checked_obj_type, checked_link, checked_obj_id, **paging)
+
+    if checked_limit is None and checked_after is not None:
+        # The client refuses with its own AFTER_WITHOUT_LIMIT, after its
+        # anchor/link checks; this fallback is defensive only.
+        traverse(after=checked_after)
+        raise RuntimeError("the underlying traversal accepted after without limit")
+    count_only = checked_limit == 0 and checked_include_total
+    if checked_limit is not None and (
+        checked_limit > MAX_LIMIT or (count_only and checked_after is not None)
+    ):
+        # An MCP-only refusal still waits for the engine's gates (anchor,
+        # link, identity-revealing denial): a zero-limit probe runs them and
+        # then stops at the engine's own INVALID_LIMIT before reading rows.
+        try:
+            traverse(limit=0)
+        except ValidationFailed as exc:
+            if exc.code != "INVALID_LIMIT":
+                raise
+        else:
+            raise RuntimeError("the underlying traversal accepted limit=0")
+        if checked_limit > MAX_LIMIT:
+            raise _over_cap_limit("traverse_links", checked_limit)
+        raise _count_only_after()
+    if count_only:
+        total: int | None = len(traverse())
+        page = Page(items=[], next_cursor=None, has_more=bool(total))
     else:
-        rows = client.traverse(checked_obj_type, checked_link, checked_obj_id)
+        page_limit = DEFAULT_LIMIT if checked_limit is None else checked_limit
+        page = traverse(limit=page_limit, after=checked_after)
+        total = len(traverse()) if checked_include_total else None
     target_type = client._link_target_type(checked_link, reverse=checked_reverse)
     scope_limited, redacted = client._read_marks(target_type)
-    return ([_serialize(obj, redacted) for obj in rows], scope_limited)
+    return _PagedRead(
+        [_serialize(obj, redacted) for obj in page.items],
+        page.next_cursor,
+        page.has_more,
+        total,
+        scope_limited,
+    )
 
 
 def _aggregate_objects(
@@ -925,6 +1016,17 @@ def _register_tools(
                 )
             ),
         ] = None,
+        include_total: Annotated[
+            bool,
+            SkipValidation(),
+            Field(
+                description=(
+                    "When true, add an integer total: the visible-row count "
+                    "across all pages (not min-N gated). With limit=0 it is "
+                    "count-only mode: no rows, just the total."
+                )
+            ),
+        ] = False,
     ) -> dict[str, Any]:
         """Query/filter objects of a type, through the guarded read layer.
 
@@ -936,10 +1038,20 @@ def _register_tools(
         `limit` defaults to 100 and has a hard maximum of 1000. `after` is the
         opaque cursor from the previous page and requires an explicit
         `limit`; it is passed to the underlying paged read. The successful
-        response keeps rows under `result` and includes `next_cursor`, which is
-        the cursor for the next page or `None` when exhausted. A limit below
-        one and `after` without `limit` use the underlying
+        response keeps rows under `result` and includes `next_cursor` and the
+        boolean `has_more`. `has_more` is true exactly when at least one more
+        visible row follows this page; `next_cursor` is the cursor for that
+        next page when `has_more` is true and `None` exactly when it is false.
+        A limit below one and `after` without `limit` use the underlying
         `INVALID_LIMIT`/`AFTER_WITHOUT_LIMIT` validations.
+
+        `include_total=true` adds an integer `total`: the visible-row count
+        across all pages for this `where`, equal to `count_objects` and not
+        min-N gated. Without it the `total` key is absent. `limit=0` with
+        `include_total=true` is count-only mode: `result` is `[]`,
+        `next_cursor` is `None`, `has_more` is true when `total` is above
+        zero, and `order_by` is ignored; count-only mode takes no `after`.
+        `limit=0` without `include_total` refuses with `INVALID_LIMIT`.
 
         `scope_limited` is a boolean based on declarations only for this consumer
         and type, never on stored rows. Each row has `payload`, `lineage`, and
@@ -953,6 +1065,7 @@ def _register_tools(
                 order_by,
                 limit,
                 after,
+                include_total,
             )
         )
 
@@ -996,23 +1109,74 @@ def _register_tools(
         obj_id: _ToolString = None,
         link_api_name: _ToolString = None,
         reverse: _ToolBool = False,
+        limit: Annotated[
+            int | None,
+            SkipValidation(),
+            Field(
+                description=(
+                    "Page size; defaults to 100 and has a hard maximum of 1000."
+                )
+            ),
+        ] = None,
+        after: Annotated[
+            str | None,
+            SkipValidation(),
+            Field(
+                description=(
+                    "Opaque next_cursor from the previous page; requires an "
+                    "explicit limit."
+                )
+            ),
+        ] = None,
+        include_total: Annotated[
+            bool,
+            SkipValidation(),
+            Field(
+                description=(
+                    "When true, add an integer total: the visible-row count "
+                    "across all pages (not min-N gated). With limit=0 it is "
+                    "count-only mode: no rows, just the total."
+                )
+            ),
+        ] = False,
     ) -> dict[str, Any]:
         """Traverse a declared link from an object, through the guarded read
-        layer. The underlying `OntologyClient.traverse`/`GuardedQuery.traverse`
-        surface is an unpaged list and exposes no `limit`/`after` cursor, so
-        this tool intentionally has no pagination parameters in this release.
+        layer, one page at a time.
         Omit ``reverse`` or pass ``False`` for forward traversal; pass
         ``reverse=True`` to traverse from the link's target side. The value
         must be a JSON boolean when supplied.
 
-        The response has `result` and boolean `scope_limited`, which depends on
+        `limit` defaults to 100 and has a hard maximum of 1000, as in
+        `query_objects`. `after` is the opaque `next_cursor` from the previous
+        page and requires an explicit `limit`. Rows come in the store's link
+        order. The response includes `next_cursor` and the boolean `has_more`:
+        `has_more` is true exactly when at least one more visible linked row
+        follows this page, and `next_cursor` is `None` exactly when
+        `has_more` is false. A limit above 1000, below one, or `after`
+        without `limit` refuse with `INVALID_LIMIT`/`AFTER_WITHOUT_LIMIT`.
+
+        `include_total=true` adds an integer `total`: the visible linked-row
+        count across all pages, not min-N gated. Without it the `total` key is
+        absent. `limit=0` with `include_total=true` is count-only mode:
+        `result` is `[]`, `next_cursor` is `None`, and `has_more` is true when
+        `total` is above zero; count-only mode takes no `after`. `limit=0`
+        without `include_total` refuses with `INVALID_LIMIT`.
+
+        The response also has `result` and boolean `scope_limited`, which depends on
         declarations only for this consumer and the result type (the link's source
         type when reversed), never on stored rows. Each row has `payload`, `lineage`,
         and `redacted_fields`, a sorted list of hidden property names. A redacted
         key is absent from `payload`, never null; see `get_object` for the row shape."""
-        return _run_marked(
+        return _run_paged(
             lambda: _traverse_links(
-                resolve_client(), obj_type, link_api_name, obj_id, reverse
+                resolve_client(),
+                obj_type,
+                link_api_name,
+                obj_id,
+                reverse,
+                limit,
+                after,
+                include_total,
             )
         )
 
