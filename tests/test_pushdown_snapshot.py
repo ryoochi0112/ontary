@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from functools import wraps
 
 import pytest
+from _fetch_counter import count_fallbacks
 
 from ontary.errors import VisibilityError
 from ontary.meta import ObjectTypeDef, OntologyRegistry, PropertyDef
@@ -81,7 +82,9 @@ def snapshot_store(request: pytest.FixtureRequest, tmp_path) -> Iterator[Snapsho
                     "id": str(i), "vis": i < 4, "n": i,
                     "owner": "owned" if i < 4 else "foreign",
                 }, SRC)
-        yield SnapshotStore(store, writer, registry)
+        with count_fallbacks(store) as fallbacks:
+            yield SnapshotStore(store, writer, registry)
+            assert fallbacks == {}
     finally:
         for opened in (store, writer):
             if opened is not None:
@@ -194,3 +197,28 @@ def test_full_stream_keeps_python_where_visibility_and_priming(
         assert getattr(query, path)(CONSUMER, "Rows", where) == 2
     assert len(calls) == 1
     assert calls[0][1] == ROW_COUNT
+
+
+@pytest.mark.parametrize("mutation", ["version", "visibility_swap"])
+@pytest.mark.parametrize("path", ["unbounded", "count", "aggregate", "count_contributors"])
+def test_unfiltered_retry_judges_one_snapshot(snapshot_store, monkeypatch, mutation, path) -> None:
+    """A failed prefilter retries one full statement, even across an update."""
+    from ontary.store import postgres, sqlite
+
+    query = snapshot_store.query(min_n=1)
+    where = {"n": {"gte": 0}}
+    expected = query.get_objects(CONSUMER, "Rows", where, limit=None)
+    calls = _update_after_first_fetch(snapshot_store, monkeypatch, mutation)
+    backend = sqlite if isinstance(snapshot_store.store, ObjectStore) else postgres
+    monkeypatch.setattr(backend, "compile_filter", lambda *_: ("invalid SQL !", []))
+    with count_fallbacks(snapshot_store.store) as fallbacks:
+        if path == "unbounded":
+            assert query.get_objects(CONSUMER, "Rows", where, limit=None) == expected
+        elif path == "aggregate":
+            assert query.aggregate(CONSUMER, "Rows", where=where, func="count") == 4
+        else:
+            assert getattr(query, path)(CONSUMER, "Rows", where) == 4
+        assert fallbacks == {"Rows": 1}
+    assert calls == [("_all_rows", ROW_COUNT), ("_filtered_all_rows", ROW_COUNT)]
+    current = snapshot_store.writer.read_current("Rows", "0")
+    assert current.payload["n"] == 10000

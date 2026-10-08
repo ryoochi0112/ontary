@@ -298,15 +298,25 @@ class ObjectStore(SqliteSchemaGate, StoreCore):
     def _filtered_all_rows(
         self, obj_type: str, row_filter: RowFilter
     ) -> list[StoredObject]:
-        fragment, params = compile_filter(row_filter, "sqlite", self.bind_domain)
-        template = OBJECT_FILTERED_ALL_SELECT_TEMPLATE.replace("{filter}", fragment)
-        rows = _sql.execute(
+        def read() -> list[StoredObject]:
+            fragment, params = compile_filter(row_filter, "sqlite", self.bind_domain)
+            template = OBJECT_FILTERED_ALL_SELECT_TEMPLATE.replace("{filter}", fragment)
+            rows = _sql.execute(
+                self._conn,
+                _sql.render(template, "sqlite"),
+                [obj_type, self._tenant, *params],
+                dialect="sqlite",
+            ).rows
+            return [self._row_to_stored(row) for row in rows]
+
+        return _sql.prefilter(
             self._conn,
-            _sql.render(template, "sqlite"),
-            [obj_type, self._tenant, *params],
+            read,
+            lambda: self._all_rows(obj_type),
             dialect="sqlite",
-        ).rows
-        return [self._row_to_stored(row) for row in rows]
+            errors=(sqlite3.Error, ValueError, OverflowError),
+            on_fallback=lambda: self._prefilter_fallback(obj_type),
+        )
 
     def _page_token_row_id(self, obj_type: str, token: str) -> int | None:
         """Resolve an untrusted `after_key` PAGE TOKEN to the `row_id` it
@@ -365,19 +375,29 @@ class ObjectStore(SqliteSchemaGate, StoreCore):
     def _filtered_page_rows(
         self, obj_type: str, row_filter: RowFilter, after_row_id: int | None, batch: int
     ) -> list[PagedRow]:
-        fragment, params = compile_filter(row_filter, "sqlite", self.bind_domain)
-        template = OBJECT_FILTERED_PAGE_SELECT_TEMPLATE.replace("{filter}", fragment)
-        rows = _sql.execute(
+        def read() -> list[PagedRow]:
+            fragment, params = compile_filter(row_filter, "sqlite", self.bind_domain)
+            template = OBJECT_FILTERED_PAGE_SELECT_TEMPLATE.replace("{filter}", fragment)
+            rows = _sql.execute(
+                self._conn,
+                _sql.render(template, "sqlite"),
+                [
+                    obj_type, self._tenant,
+                    after_row_id if after_row_id is not None else 0,
+                    *params, batch,
+                ],
+                dialect="sqlite",
+            ).rows
+            return [PagedRow(key=row["page_token"], obj=self._row_to_stored(row)) for row in rows]
+
+        return _sql.prefilter(
             self._conn,
-            _sql.render(template, "sqlite"),
-            [
-                obj_type, self._tenant,
-                after_row_id if after_row_id is not None else 0,
-                *params, batch,
-            ],
+            read,
+            lambda: self._page_rows(obj_type, after_row_id, batch),
             dialect="sqlite",
-        ).rows
-        return [PagedRow(key=row["page_token"], obj=self._row_to_stored(row)) for row in rows]
+            errors=(sqlite3.Error, ValueError, OverflowError),
+            on_fallback=lambda: self._prefilter_fallback(obj_type),
+        )
 
     # -- storage steps: links ----------------------------------------------
 

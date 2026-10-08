@@ -8,12 +8,18 @@ placeholder syntax without touching either backend's on-disk schema, and
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Literal, NamedTuple
+from typing import Any, Literal, NamedTuple, TypeVar
 
 Dialect = Literal["sqlite", "postgres"]
 DialectText = str | Mapping[Dialect, str]
+
+PREFILTER_SAVEPOINT = "SAVEPOINT ontary_prefilter"
+PREFILTER_RELEASE = "RELEASE SAVEPOINT ontary_prefilter"
+PREFILTER_ROLLBACK = "ROLLBACK TO SAVEPOINT ontary_prefilter"
+
+_T = TypeVar("_T")
 
 
 # These are the explicit statement columns.  Auto-generated identity columns
@@ -654,3 +660,28 @@ def execute(
         cursor.execute(sql, params)
         rows = list(cursor.fetchall()) if cursor.description is not None else []
         return ExecutionResult(rows=rows, rowcount=int(cursor.rowcount))
+
+
+def prefilter(
+    conn: Any,
+    read: Callable[[], _T],
+    retry: Callable[[], _T],
+    *,
+    dialect: Dialect,
+    errors: tuple[type[Exception], ...],
+    on_fallback: Callable[[], None],
+) -> _T:
+    """Contain a failed prefilter without rolling back the caller's writes."""
+    if dialect == "postgres":
+        execute(conn, PREFILTER_SAVEPOINT, dialect=dialect)
+    try:
+        return read()
+    except errors:
+        if dialect == "postgres":
+            execute(conn, PREFILTER_ROLLBACK, dialect=dialect)
+    finally:
+        if dialect == "postgres":
+            execute(conn, PREFILTER_RELEASE, dialect=dialect)
+    # Retry outside the handler and savepoint cleanup so its error propagates.
+    on_fallback()
+    return retry()

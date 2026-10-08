@@ -13,6 +13,19 @@ from ontary.store._core import StoreCore
 
 
 @contextmanager
+def count_fallbacks(store: StoreCore) -> Iterator[Counter[str]]:
+    """Count unfiltered retries by object type; restore the hook on exit."""
+    counter: Counter[str] = Counter()
+
+    def fallback(obj_type: str) -> None:
+        counter[obj_type] += 1
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(store, "_prefilter_fallback", fallback)
+        yield counter
+
+
+@contextmanager
 def count_fetched(store: StoreCore) -> Iterator[Counter[str]]:
     """Count returned rows by object type; restore instance attributes on exit."""
     counter: Counter[str] = Counter()

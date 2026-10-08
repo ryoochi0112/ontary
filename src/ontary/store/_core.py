@@ -177,6 +177,10 @@ class StoreCore(abc.ABC):
         """Permissive default for backends without SQL filtering."""
         return self._all_rows(obj_type)
 
+    def _prefilter_fallback(self, obj_type: str) -> None:
+        """Observation hook for an unfiltered retry; a no-op in production."""
+        return None
+
     @abc.abstractmethod
     def _page_token_row_id(self, obj_type: str, token: str) -> int | None:
         """The row identity `token` was issued for, scoped to this tenant
