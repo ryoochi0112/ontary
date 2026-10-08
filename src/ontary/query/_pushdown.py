@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from ontary.meta import OntologyRegistry
 from ontary.query._host import _QueryHost
@@ -10,7 +10,13 @@ from ontary.query._where import CompiledWhere, _WhereClause
 from ontary.scope import CustomResolver, DirectProperty, ScopePolicy, SelfScope, ViaLink
 from ontary.security import Consumer
 from ontary.store._core import StoreCore
-from ontary.store._filter import RowFilter, ScopeTerm, WhereTerm, filter_is_selective
+from ontary.store._filter import (
+    SQLITE_DOMAIN,
+    RowFilter,
+    ScopeTerm,
+    WhereTerm,
+    filter_is_selective,
+)
 from ontary.store.protocol import Store
 from ontary.store.values import PagedRow, StoredObject
 
@@ -45,14 +51,29 @@ def store_filter_is_exact(
         and isinstance(store, StoreCore)
         and type(store)._filtered_page_rows is not StoreCore._filtered_page_rows
         and filter_is_exact(policy, obj_type)
-        and filter_is_selective(row_filter)
+        and filter_is_selective(row_filter, SQLITE_DOMAIN)
     )
+
+
+def _normalize_scalar_operand(value: Any) -> Any:
+    """Bind the underlying scalar, including str-mixin Enum members."""
+    if isinstance(value, str) and type(value) is not str:
+        return str.__str__(value)
+    if isinstance(value, int) and type(value) not in {int, bool}:
+        return int.__index__(value)
+    if isinstance(value, float) and type(value) is not float:
+        return float(value)
+    return value
 
 
 def _where_term(clause: _WhereClause) -> WhereTerm:
     field, prop_type, op, operand = clause
     if op == "and":
         operand = tuple(_where_term(sub) for sub in operand)
+    elif op == "in":
+        operand = [_normalize_scalar_operand(item) for item in operand]
+    else:
+        operand = _normalize_scalar_operand(operand)
     return WhereTerm(field, prop_type, op, operand)
 
 

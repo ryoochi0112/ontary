@@ -96,73 +96,60 @@ _ISO_INSTANT = (
 )
 
 
-def _unbindable(value: object, encoding: str) -> bool:
-    """Strings outside the connection's text bind domain are judged in Python."""
-    if not isinstance(value, str):
-        return False
-    if "\x00" in value:
-        return True
-    try:
-        value.encode(encoding)
-    except UnicodeEncodeError:
-        return True
-    return False
-
-
-def _compiles_to_true(term: WhereTerm | ScopeTerm, encoding: str = "utf-8") -> bool:
+def _compiles_to_true(term: WhereTerm | ScopeTerm, domain: BindDomain) -> bool:
     """Identify unconditional pass-through components in either SQL dialect."""
     if isinstance(term, ScopeTerm):
         if not term.rules:
             return term.climb_possible
-        return _unbindable(term.scope_id, encoding) or any(
-            _unbindable(field, encoding) for _, field in term.rules
+        return not pushable(term.scope_id, domain) or any(
+            not pushable(field, domain) for kind, field in term.rules if kind == "prop"
         )
     if term.op == "and":
-        return all(_compiles_to_true(child, encoding) for child in term.operand)
-    if _unbindable(term.field, encoding) or _unbindable(term.operand, encoding):
+        return all(_compiles_to_true(child, domain) for child in term.operand)
+    if not pushable(term.field, domain):
         return True
     if term.op == "in":
-        return any(_compiles_to_true(
-            WhereTerm(term.field, term.prop_type, "eq", item), encoding,
-        ) for item in term.operand)
+        return any(not pushable(item, domain) for item in term.operand) or (
+            bool(term.operand) and term.prop_type == "struct"
+        )
     return term.op in {*_OPERATORS, "contains"} and (
-        isinstance(term.operand, dict | list) or term.prop_type == "struct"
+        not pushable(term.operand, domain) or term.prop_type == "struct"
     )
 
 
-def filter_is_selective(row_filter: RowFilter, encoding: str = "utf-8") -> bool:
+def filter_is_selective(row_filter: RowFilter, domain: BindDomain) -> bool:
     """Whether every component filters rather than unconditionally passing rows.
 
     This only controls batch sizing; Python still judges every fetched row.
     """
-    return all(not _compiles_to_true(term, encoding) for term in row_filter.where) and (
-        row_filter.scope is None or not _compiles_to_true(row_filter.scope, encoding)
+    return all(not _compiles_to_true(term, domain) for term in row_filter.where) and (
+        row_filter.scope is None or not _compiles_to_true(row_filter.scope, domain)
     )
 
 
 def compile_filter(
-    f: RowFilter, dialect: _sql.Dialect, encoding: str = "utf-8",
+    f: RowFilter, dialect: _sql.Dialect, domain: BindDomain,
 ) -> tuple[str, list[Any]]:
     """Return fixed SQL with bind markers, and parameters in marker order."""
     parts: list[str] = []
     params: list[Any] = []
     for term in f.where:
-        fragment, values = _compile_term(term, dialect, encoding)
+        fragment, values = _compile_term(term, dialect, domain)
         parts.append(fragment)
         params.extend(values)
     if f.scope is not None:
-        fragment, values = _compile_scope(f.scope, dialect, encoding)
+        fragment, values = _compile_scope(f.scope, dialect, domain)
         parts.append(fragment)
         params.extend(values)
     return " AND ".join(parts) or "TRUE", params
 
 
 def _compile_scope(
-    scope: ScopeTerm, dialect: _sql.Dialect, encoding: str,
+    scope: ScopeTerm, dialect: _sql.Dialect, domain: BindDomain,
 ) -> tuple[str, list[Any]]:
     """Preserve the first resolving rule; leave hierarchy climbing to Python."""
     fallback = "TRUE" if scope.climb_possible else "FALSE"
-    if _compiles_to_true(scope, encoding):
+    if _compiles_to_true(scope, domain):
         return "TRUE", []
     if not scope.rules:
         return "FALSE", []
@@ -213,12 +200,12 @@ def _compile_scope_property(
 
 
 def _combine(
-    terms: Iterable[WhereTerm], dialect: _sql.Dialect, join: str, encoding: str,
+    terms: Iterable[WhereTerm], dialect: _sql.Dialect, join: str, domain: BindDomain,
 ) -> tuple[str, list[Any]]:
     parts: list[str] = []
     params: list[Any] = []
     for term in terms:
-        fragment, values = _compile_term(term, dialect, encoding)
+        fragment, values = _compile_term(term, dialect, domain)
         parts.append(fragment)
         params.extend(values)
     if not parts:
@@ -275,8 +262,6 @@ def _datetime_comparison(operator: str, dialect: _sql.Dialect) -> str:
 
 def _comparison(term: WhereTerm, kind: str, dialect: _sql.Dialect) -> tuple[str, list[Any]]:
     operator = _OPERATORS[term.op]
-    if isinstance(term.operand, float) and math.isnan(term.operand):
-        return ("TRUE" if term.op == "ne" else "FALSE"), []
     if kind == "datetime" and term.op not in {"eq", "ne"}:
         return _datetime_comparison(operator, dialect), ([_ISO_INSTANT] * 2 if dialect == "postgres" else [])
     if kind == "date" and term.op not in {"eq", "ne"}:
@@ -292,13 +277,8 @@ def _comparison(term: WhereTerm, kind: str, dialect: _sql.Dialect) -> tuple[str,
         )
     if kind in {"int", "float", "bool"}:
         if dialect == "sqlite":
-            integer_guard = "t = 'integer'"
-            if isinstance(term.operand, int) and not -(2**63) <= term.operand < 2**63:
-                # Binding this operand requires REAL conversion too. Large
-                # REAL values can then lose an ordering distinction as well.
-                integer_guard = "TRUE"
             return (
-                f"CASE WHEN {integer_guard} AND (v > 9007199254740992 "
+                "CASE WHEN t = 'integer' AND (v > 9007199254740992 "
                 "OR v < -9007199254740992) THEN TRUE "
                 f"ELSE v {operator} o END", []
             )
@@ -316,20 +296,86 @@ def _comparison(term: WhereTerm, kind: str, dialect: _sql.Dialect) -> tuple[str,
     return f"v {collate} {operator} o {collate}", []
 
 
+def _in_comparison(
+    kind: str, items: list[Any], dialect: _sql.Dialect,
+) -> tuple[str, Any]:
+    """One array retains every per-item equality and precision fallback."""
+    items = [int(item) if type(item) is bool else item for item in items]
+    if dialect == "sqlite":
+        membership = "v IN (SELECT value FROM json_each({p}))"
+        if kind in {"int", "float", "bool"}:
+            comparison = (
+                "CASE WHEN t = 'integer' AND (v > 9007199254740992 "
+                "OR v < -9007199254740992) THEN TRUE "
+                f"ELSE {membership} END"
+            )
+        else:
+            comparison = "v COLLATE BINARY IN (SELECT value FROM json_each({p}))"
+        return comparison, json.dumps(items, ensure_ascii=False)
+    if kind == "bool":
+        return "(CASE WHEN v = 'true' THEN 1 ELSE 0 END) = ANY({p}::numeric[])", items
+    if kind in {"int", "float"}:
+        # A large operand makes its old eq branch pass every non-null number.
+        large_operand = " OR TRUE" if any(abs(item) > 2**53 for item in items) else ""
+        return (
+            f"CASE WHEN abs(v::numeric) > 9007199254740992{large_operand} THEN TRUE "
+            "ELSE v::numeric = ANY({p}::numeric[]) END",
+            [str(item) for item in items],
+        )
+    return 'v COLLATE "C" = ANY({p}::text[])', [str(item) for item in items]
+
+
+def _compile_in(term: WhereTerm, dialect: _sql.Dialect) -> tuple[str, list[Any]]:
+    """OR the old eq predicates, sharing extraction and one array per kind."""
+    if not term.operand:
+        return "FALSE", []
+    groups: dict[str, list[Any]] = {}
+    has_null = False
+    for item in term.operand:
+        if item is None:
+            has_null = True
+            continue
+        kind = _scalar_type(WhereTerm(term.field, term.prop_type, "eq", item))
+        groups.setdefault(kind, []).append(item)
+    null = "t IS NULL OR t = 'null'"
+    predicates: list[str] = []
+    arrays: list[Any] = []
+    if has_null:
+        guard = _type_guard(_scalar_type(term), dialect)
+        wrong = "FALSE" if term.prop_type == "json" else f"NOT ({guard})"
+        predicates.append(f"({null}) OR ({wrong})")
+    for kind, items in groups.items():
+        comparison, array = _in_comparison(kind, items, dialect)
+        guard = _type_guard(kind, dialect)
+        predicates.append(
+            f"CASE WHEN {null} THEN FALSE "
+            f"WHEN NOT ({guard}) THEN TRUE ELSE {comparison} END"
+        )
+        arrays.append(array)
+    predicate = " OR ".join(f"({part})" for part in predicates)
+    if dialect == "sqlite":
+        field = '$.' + json.dumps(term.field, ensure_ascii=False)
+        source = "SELECT json_type(payload, {p}) AS t, json_extract(payload, {p}) AS v"
+        valid = "json_valid(payload)"
+    else:
+        field = term.field
+        source = "SELECT jsonb_typeof(payload::jsonb -> {p}) AS t, payload::jsonb ->> {p} AS v"
+        valid = "pg_input_is_valid(payload, 'jsonb')"
+    fragment = f"(SELECT {predicate} FROM ({source}) AS filter_value)"
+    return f"CASE WHEN {valid} THEN {fragment} ELSE TRUE END", [*arrays, field, field]
+
+
 def _compile_term(
-    term: WhereTerm, dialect: _sql.Dialect, encoding: str,
+    term: WhereTerm, dialect: _sql.Dialect, domain: BindDomain,
 ) -> tuple[str, list[Any]]:
     if term.op == "and":
-        return _combine(term.operand, dialect, " AND ", encoding)
-    # Let Python judge strings outside the drivers' bind domain, without
+        return _combine(term.operand, dialect, " AND ", domain)
+    # Let Python judge values outside the drivers' bind domain, without
     # binding any field or operand from the affected clause.
-    if _compiles_to_true(term, encoding):
+    if _compiles_to_true(term, domain):
         return "TRUE", []
     if term.op == "in":
-        return _combine(
-            (WhereTerm(term.field, term.prop_type, "eq", item) for item in term.operand),
-            dialect, " OR ", encoding,
-        )
+        return _compile_in(term, dialect)
     if term.op not in {*_OPERATORS, "contains"}:
         raise ValueError(f"unknown filter operator: {term.op}")
     kind = _scalar_type(term)
@@ -354,12 +400,6 @@ def _compile_term(
         field = '$.' + json.dumps(term.field, ensure_ascii=False)
         source = "SELECT json_type(payload, {p}) AS t, json_extract(payload, {p}) AS v, {p} AS o"
         operand = int(term.operand) if isinstance(term.operand, bool) else term.operand
-        # sqlite3 cannot bind arbitrary-size Python ints. Passing their decimal
-        # spelling with numeric affinity preserves comparison for smaller rows;
-        # stored integers outside the exact domain pass through above.
-        if isinstance(operand, int) and not -(2**63) <= operand < 2**63:
-            operand = str(operand)
-            source = source.replace("{p} AS o", "CAST({p} AS NUMERIC) AS o")
     else:
         field = term.field
         operand = term.operand

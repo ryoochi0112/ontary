@@ -35,6 +35,7 @@ from ontary.store._core import StoreCore
 from ontary.store._filter import (
     OBJECT_FILTERED_ALL_SELECT_TEMPLATE,
     OBJECT_FILTERED_PAGE_SELECT_TEMPLATE,
+    SQLITE_DOMAIN,
     RowFilter,
     compile_filter,
 )
@@ -296,7 +297,7 @@ class ObjectStore(SqliteSchemaGate, StoreCore):
     def _filtered_all_rows(
         self, obj_type: str, row_filter: RowFilter
     ) -> list[StoredObject]:
-        fragment, params = compile_filter(row_filter, "sqlite")
+        fragment, params = compile_filter(row_filter, "sqlite", SQLITE_DOMAIN)
         template = OBJECT_FILTERED_ALL_SELECT_TEMPLATE.replace("{filter}", fragment)
         rows = _sql.execute(
             self._conn,
@@ -363,7 +364,7 @@ class ObjectStore(SqliteSchemaGate, StoreCore):
     def _filtered_page_rows(
         self, obj_type: str, row_filter: RowFilter, after_row_id: int | None, batch: int
     ) -> list[PagedRow]:
-        fragment, params = compile_filter(row_filter, "sqlite")
+        fragment, params = compile_filter(row_filter, "sqlite", SQLITE_DOMAIN)
         template = OBJECT_FILTERED_PAGE_SELECT_TEMPLATE.replace("{filter}", fragment)
         rows = _sql.execute(
             self._conn,

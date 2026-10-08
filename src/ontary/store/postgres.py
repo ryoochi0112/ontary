@@ -52,6 +52,7 @@ from ontary.store._core import StoreCore
 from ontary.store._filter import (
     OBJECT_FILTERED_ALL_SELECT_TEMPLATE,
     OBJECT_FILTERED_PAGE_SELECT_TEMPLATE,
+    BindDomain,
     RowFilter,
     compile_filter,
 )
@@ -419,7 +420,7 @@ class PostgresStore(StoreCore):
         self, obj_type: str, row_filter: RowFilter
     ) -> list[StoredObject]:
         fragment, params = compile_filter(
-            row_filter, "postgres", encoding=self._conn.info.encoding
+            row_filter, "postgres", BindDomain((self._conn.info.encoding,))
         )
         template = OBJECT_FILTERED_ALL_SELECT_TEMPLATE.replace("{filter}", fragment)
         rows = _sql.execute(
@@ -476,7 +477,7 @@ class PostgresStore(StoreCore):
         self, obj_type: str, row_filter: RowFilter, after_row_id: int | None, batch: int
     ) -> list[PagedRow]:
         fragment, params = compile_filter(
-            row_filter, "postgres", encoding=self._conn.info.encoding
+            row_filter, "postgres", BindDomain((self._conn.info.encoding,))
         )
         template = OBJECT_FILTERED_PAGE_SELECT_TEMPLATE.replace("{filter}", fragment)
         rows = _sql.execute(

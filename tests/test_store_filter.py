@@ -17,17 +17,20 @@ from ontary.query._where import _evaluate_where_clause
 from ontary.store import ObjectStore, Source, _sql
 from ontary.store._core import StoreCore
 from ontary.store._filter import (
+    SQLITE_DOMAIN,
+    BindDomain,
     RowFilter,
     ScopeTerm,
     WhereTerm,
     compile_filter,
     filter_is_selective,
+    pushable,
 )
 from ontary.store.sqlite import _ontary_instant
 
 
 def _selected(term: WhereTerm, payloads: list[dict[str, Any]]) -> list[int]:
-    fragment, params = compile_filter(RowFilter(where=(term,)), "sqlite")
+    fragment, params = compile_filter(RowFilter(where=(term,)), "sqlite", SQLITE_DOMAIN)
     with sqlite3.connect(":memory:") as conn:
         conn.create_function("ontary_instant", 1, _ontary_instant, deterministic=True)
         return [
@@ -45,15 +48,17 @@ def test_compiler_binds_field_names_and_operands(dialect: _sql.Dialect) -> None:
     for op, operand in [("eq", attack), ("ne", attack), ("contains", attack),
                         ("in", [attack, None])]:
         fragment, params = compile_filter(
-            RowFilter(where=(WhereTerm("private_field", "str", op, operand),)), dialect
+            RowFilter(where=(WhereTerm("private_field", "str", op, operand),)), dialect, SQLITE_DOMAIN
         )
         assert attack not in fragment
         assert "private_field" not in fragment
-        assert attack in params
+        bound_operands = (json.loads(params[0]) if dialect == "sqlite" else params[0]) \
+            if op == "in" else params
+        assert attack in bound_operands
         assert any("private_field" in str(p) for p in params)
         assert fragment.count("{p}") == len(params)
-    assert compile_filter(RowFilter(), dialect) == ("TRUE", [])
-    assert compile_filter(RowFilter(scope=ScopeTerm((), "s", False)), dialect) == ("FALSE", [])
+    assert compile_filter(RowFilter(), dialect, SQLITE_DOMAIN) == ("TRUE", [])
+    assert compile_filter(RowFilter(scope=ScopeTerm((), "s", False)), dialect, SQLITE_DOMAIN) == ("FALSE", [])
 
 
 @pytest.mark.parametrize(
@@ -67,11 +72,11 @@ def test_compiler_binds_field_names_and_operands(dialect: _sql.Dialect) -> None:
      (ScopeTerm((("prop", "\ud800"),), "owned", False), False)],
 )
 def test_filter_selectivity_scope(scope: ScopeTerm | None, selective: bool) -> None:
-    assert filter_is_selective(RowFilter(scope=scope)) is selective
+    assert filter_is_selective(RowFilter(scope=scope), SQLITE_DOMAIN) is selective
     # A selective where cannot make an unconditional scope component exact.
     assert filter_is_selective(RowFilter(
         where=(WhereTerm("status", "str", "eq", "open"),), scope=scope,
-    )) is selective
+    ), SQLITE_DOMAIN) is selective
 
 
 @pytest.mark.parametrize(
@@ -99,13 +104,13 @@ def test_filter_selectivity_scope(scope: ScopeTerm | None, selective: bool) -> N
      )), True)],
 )
 def test_filter_selectivity_where(term: WhereTerm, selective: bool) -> None:
-    assert filter_is_selective(RowFilter(where=(term,))) is selective
+    assert filter_is_selective(RowFilter(where=(term,)), SQLITE_DOMAIN) is selective
     # Any unconditional top-level term prevents small batches, even alongside
     # a selective where term and scope term.
     assert filter_is_selective(RowFilter(
         where=(WhereTerm("status", "str", "eq", "open"), term),
         scope=ScopeTerm((("self", None),), "owned", False),
-    )) is selective
+    ), SQLITE_DOMAIN) is selective
 
 
 @pytest.fixture(params=["sqlite", "postgres"], scope="module")
@@ -134,7 +139,7 @@ def _scope_selected(
     rows: list[tuple[str, dict[str, Any] | str]],
 ) -> list[int]:
     dialect, conn = connection
-    fragment, params = compile_filter(row_filter, dialect)
+    fragment, params = compile_filter(row_filter, dialect, SQLITE_DOMAIN)
     assert fragment.count("{p}") == len(params)
     if dialect == "postgres":
         conn.execute("TRUNCATE pg_temp.ontary_test_scope")
@@ -169,7 +174,7 @@ def test_scope_compiler_binds_property_names_and_scope_id(dialect: _sql.Dialect)
                   (("prop", field), ("self", None)),
                   (("self", None), ("prop", field))]:
         fragment, params = compile_filter(RowFilter(scope=ScopeTerm(rules, scope_id, False)),
-                                          dialect)
+                                          dialect, SQLITE_DOMAIN)
         assert scope_id not in fragment
         assert field not in fragment
         assert scope_id in params
@@ -263,13 +268,13 @@ def test_scope_postgres_rejected_json_is_permissive(scope_connection) -> None:
      ScopeTerm((("prop", "team\x00id"), ("self", None)), "team", False)],
 )
 def test_scope_nul_parameters_are_not_bound(dialect: _sql.Dialect, scope: ScopeTerm) -> None:
-    assert compile_filter(RowFilter(scope=scope), dialect) == ("TRUE", [])
+    assert compile_filter(RowFilter(scope=scope), dialect, SQLITE_DOMAIN) == ("TRUE", [])
 
 
 @pytest.mark.parametrize("climb_possible", [False, True])
 def test_scope_empty_rules(scope_connection, climb_possible: bool) -> None:
     scope = ScopeTerm((), "team", climb_possible)
-    assert compile_filter(RowFilter(scope=scope), scope_connection[0]) == (
+    assert compile_filter(RowFilter(scope=scope), scope_connection[0], SQLITE_DOMAIN) == (
         "TRUE" if climb_possible else "FALSE", []
     )
     rows = [("team", {}), ("other", {"team_id": "team"})]
@@ -407,7 +412,7 @@ def test_scalar_types_and_datetime_awareness(
 @pytest.mark.parametrize("op", ["eq", "ne", "gt", "gte", "lt", "lte"])
 def test_compiler_parameter_count_for_typed_operators(dialect, prop_type, operand, op) -> None:
     fragment, params = compile_filter(
-        RowFilter(where=(WhereTerm("hidden_field", prop_type, op, operand),)), dialect
+        RowFilter(where=(WhereTerm("hidden_field", prop_type, op, operand),)), dialect, SQLITE_DOMAIN
     )
     assert fragment.count("{p}") == len(params)
     assert "hidden_field" not in fragment
@@ -426,8 +431,12 @@ def test_instant_parser_is_permissive_and_normalizes_offsets() -> None:
                           ("lt", float("inf"), [0]), ("eq", float("nan"), []),
                           ("ne", float("nan"), [0, 1, 2])])
 def test_nonfinite_numeric_operands(op: str, operand: float, expected: list[int]) -> None:
-    assert _selected(WhereTerm("v", "float", op, operand),
-                     [{"v": 1.0}, {}, {"v": None}]) == expected
+    selected = _selected(WhereTerm("v", "float", op, operand),
+                         [{"v": 1.0}, {}, {"v": None}])
+    if pushable(operand, SQLITE_DOMAIN):
+        assert selected == expected
+    else:
+        assert set(expected) <= set(selected)
 
 
 @pytest.mark.parametrize(
@@ -452,7 +461,7 @@ def test_scalar_predicates_on_backend_connection(
     filter_store: StoreCore, term: WhereTerm, actual: Any, expected: bool
 ) -> None:
     dialect = "sqlite" if isinstance(filter_store, ObjectStore) else "postgres"
-    fragment, params = compile_filter(RowFilter(where=(term,)), dialect)
+    fragment, params = compile_filter(RowFilter(where=(term,)), dialect, SQLITE_DOMAIN)
     sql = _sql.render(f"SELECT ({fragment}) FROM (SELECT {{p}} AS payload) AS sample", dialect)
     rows = _sql.execute(filter_store._conn, sql, [*params, json.dumps({"v": actual})],
                         dialect=dialect).rows
@@ -460,8 +469,8 @@ def test_scalar_predicates_on_backend_connection(
 
 
 def test_sqlite_large_integer_operand_preserves_possible_float_matches() -> None:
-    assert _selected(WhereTerm("v", "float", "lt", 10**20 + 1),
-                     [{"v": 1e20}, {"v": 1.0}, {"v": None}]) == [0, 1]
+    assert {0, 1} <= set(_selected(WhereTerm("v", "float", "lt", 10**20 + 1),
+                                  [{"v": 1e20}, {"v": 1.0}, {"v": None}]))
 
 
 @pytest.mark.parametrize("actual,operand", [(1e30, 10**30), (1e23, 10**23),
@@ -483,15 +492,15 @@ def test_large_float_int_comparisons_are_permissive(
 def test_compiler_nul_operands_pass_through(dialect: _sql.Dialect, op: str) -> None:
     operand = ["open", "open\x00", None] if op == "in" else "open\x00"
     term = WhereTerm("status", "str", op, operand)
-    assert compile_filter(RowFilter(where=(term,)), dialect) == ("TRUE", [])
+    assert compile_filter(RowFilter(where=(term,)), dialect, SQLITE_DOMAIN) == ("TRUE", [])
     nested = WhereTerm("status", "str", "and", (term,))
-    assert compile_filter(RowFilter(where=(nested,)), dialect) == ("(TRUE)", [])
+    assert compile_filter(RowFilter(where=(nested,)), dialect, SQLITE_DOMAIN) == ("(TRUE)", [])
 
 
 @pytest.mark.parametrize("dialect", ["sqlite", "postgres"])
 def test_compiler_nul_field_passes_through(dialect: _sql.Dialect) -> None:
     term = WhereTerm("status\x00", "str", "eq", "open")
-    assert compile_filter(RowFilter(where=(term,)), dialect) == ("TRUE", [])
+    assert compile_filter(RowFilter(where=(term,)), dialect, SQLITE_DOMAIN) == ("TRUE", [])
 
 
 @pytest.mark.parametrize("op", ["eq", "ne", "contains", "in", "gt", "gte", "lt", "lte"])
@@ -563,7 +572,7 @@ def test_stored_nonfinite_payloads_are_permissive(
 def test_unbindable_where_strings_are_not_bound(dialect: _sql.Dialect, value: str, op: str) -> None:
     for term in (WhereTerm(value, "str", op, "open"),
                  WhereTerm("status", "str", op, value)):
-        assert compile_filter(RowFilter(where=(term,)), dialect) == ("TRUE", [])
+        assert compile_filter(RowFilter(where=(term,)), dialect, SQLITE_DOMAIN) == ("TRUE", [])
 
 
 @pytest.mark.parametrize("dialect", ["sqlite", "postgres"])
@@ -572,7 +581,7 @@ def test_unbindable_where_strings_are_not_bound(dialect: _sql.Dialect, value: st
 def test_unbindable_in_item_is_not_bound(dialect: _sql.Dialect, value: str, items) -> None:
     for operands in ([value, *items], [*items, value]):
         term = WhereTerm("status", "str", "in", operands)
-        assert compile_filter(RowFilter(where=(term,)), dialect) == ("TRUE", [])
+        assert compile_filter(RowFilter(where=(term,)), dialect, SQLITE_DOMAIN) == ("TRUE", [])
 
 
 @pytest.mark.parametrize("dialect", ["sqlite", "postgres"])
@@ -581,11 +590,11 @@ def test_unbindable_nested_and_strings_are_not_bound(dialect: _sql.Dialect, valu
     unsafe = WhereTerm("status", "str", "eq", value)
     nested = WhereTerm("status", "str", "and", (
         WhereTerm("status", "str", "and", (unsafe,)),))
-    assert compile_filter(RowFilter(where=(nested,)), dialect) == ("((TRUE))", [])
+    assert compile_filter(RowFilter(where=(nested,)), dialect, SQLITE_DOMAIN) == ("((TRUE))", [])
     safe = WhereTerm("status", "str", "eq", "open")
     fragment, params = compile_filter(RowFilter(where=(
-        WhereTerm("status", "str", "and", (nested, safe)),)), dialect)
-    safe_fragment, safe_params = compile_filter(RowFilter(where=(safe,)), dialect)
+        WhereTerm("status", "str", "and", (nested, safe)),)), dialect, SQLITE_DOMAIN)
+    safe_fragment, safe_params = compile_filter(RowFilter(where=(safe,)), dialect, SQLITE_DOMAIN)
     assert fragment == f"(((TRUE)) AND {safe_fragment})"
     assert params == safe_params
 
@@ -597,7 +606,7 @@ def test_unbindable_scope_strings_are_not_bound(dialect: _sql.Dialect, value: st
                   ScopeTerm((("prop", "team_id"),), value, False),
                   ScopeTerm((("prop", value), ("self", None)), "owned", False),
                   ScopeTerm((("self", None), ("prop", value)), "owned", False)):
-        assert compile_filter(RowFilter(scope=scope), dialect) == ("TRUE", [])
+        assert compile_filter(RowFilter(scope=scope), dialect, SQLITE_DOMAIN) == ("TRUE", [])
 
 
 def test_json_loaded_surrogate_operand_is_not_bound() -> None:
@@ -605,7 +614,7 @@ def test_json_loaded_surrogate_operand_is_not_bound() -> None:
     assert value == "\ud800"
     for dialect in ("sqlite", "postgres"):
         assert compile_filter(RowFilter(where=(WhereTerm("status", "str", "eq", value),)),
-                              dialect) == ("TRUE", [])
+                              dialect, SQLITE_DOMAIN) == ("TRUE", [])
 
 
 @pytest.mark.parametrize("op", ["eq", "ne", "contains", "in", "gt", "gte", "lt", "lte"])
@@ -613,12 +622,12 @@ def test_connection_encoding_where_bind_safety(op: str) -> None:
     operand = ["open", "開", None] if op == "in" else "開"
     term = WhereTerm("status", "str", op, operand)
     row_filter = RowFilter(where=(term,))
-    assert compile_filter(row_filter, "postgres", encoding="iso8859-1") == ("TRUE", [])
-    assert not filter_is_selective(row_filter, encoding="iso8859-1")
-    assert filter_is_selective(row_filter)
-    assert compile_filter(row_filter, "postgres") == compile_filter(
-        row_filter, "postgres", encoding="utf-8")
-    assert compile_filter(row_filter, "postgres")[1]
+    assert compile_filter(row_filter, "postgres", domain=BindDomain(("iso8859-1",))) == ("TRUE", [])
+    assert not filter_is_selective(row_filter, domain=BindDomain(("iso8859-1",)))
+    assert filter_is_selective(row_filter, SQLITE_DOMAIN)
+    assert compile_filter(row_filter, "postgres", SQLITE_DOMAIN) == compile_filter(
+        row_filter, "postgres", domain=BindDomain(("utf-8",)))
+    assert compile_filter(row_filter, "postgres", SQLITE_DOMAIN)[1]
 
 
 @pytest.mark.parametrize("value", ["日本", "nul\x00", "\ud800"])
@@ -628,8 +637,8 @@ def test_connection_encoding_fields_and_scope_bind_safety(value: str) -> None:
                RowFilter(scope=ScopeTerm((("prop", "team_id"),), value, False)),
                RowFilter(scope=ScopeTerm((("prop", value),), "owned", False))]
     for row_filter in filters:
-        assert compile_filter(row_filter, "postgres", encoding="iso8859-1") == ("TRUE", [])
-        assert not filter_is_selective(row_filter, encoding="iso8859-1")
+        assert compile_filter(row_filter, "postgres", domain=BindDomain(("iso8859-1",))) == ("TRUE", [])
+        assert not filter_is_selective(row_filter, domain=BindDomain(("iso8859-1",)))
 
 
 def test_connection_encoding_nested_and_bind_safety() -> None:
@@ -638,11 +647,11 @@ def test_connection_encoding_nested_and_bind_safety() -> None:
     nested = WhereTerm("status", "str", "and", (
         WhereTerm("status", "str", "and", (unsafe,)), safe))
     row_filter = RowFilter(where=(nested,))
-    fragment, params = compile_filter(row_filter, "postgres", encoding="iso8859-1")
-    safe_fragment, safe_params = compile_filter(RowFilter(where=(safe,)), "postgres")
+    fragment, params = compile_filter(row_filter, "postgres", domain=BindDomain(("iso8859-1",)))
+    safe_fragment, safe_params = compile_filter(RowFilter(where=(safe,)), "postgres", SQLITE_DOMAIN)
     assert fragment == f"((TRUE) AND {safe_fragment})"
     assert params == safe_params
-    assert filter_is_selective(row_filter, encoding="iso8859-1")
+    assert filter_is_selective(row_filter, domain=BindDomain(("iso8859-1",)))
 
 
 @pytest.mark.parametrize("row_filter", [
@@ -652,7 +661,15 @@ def test_connection_encoding_nested_and_bind_safety() -> None:
     RowFilter(scope=ScopeTerm((("prop", "équipe"),), "café", False)),
 ])
 def test_connection_encoding_bindable_sql_is_unchanged(row_filter: RowFilter) -> None:
-    expected = compile_filter(row_filter, "postgres")
+    expected = compile_filter(row_filter, "postgres", SQLITE_DOMAIN)
     assert expected[1]
-    assert compile_filter(row_filter, "postgres", encoding="iso8859-1") == expected
-    assert filter_is_selective(row_filter, encoding="iso8859-1")
+    assert compile_filter(row_filter, "postgres", domain=BindDomain(("iso8859-1",))) == expected
+    assert filter_is_selective(row_filter, domain=BindDomain(("iso8859-1",)))
+
+
+@pytest.mark.parametrize("dialect", ["sqlite", "postgres"])
+@pytest.mark.parametrize("op", ["eq", "ne", "gt", "gte", "lt", "lte"])
+def test_nan_operand_is_outside_the_bind_domain(dialect: _sql.Dialect, op: str) -> None:
+    row_filter = RowFilter(where=(WhereTerm("v", "float", op, float("nan")),))
+    assert compile_filter(row_filter, dialect, SQLITE_DOMAIN) == ("TRUE", [])
+    assert not filter_is_selective(row_filter, SQLITE_DOMAIN)

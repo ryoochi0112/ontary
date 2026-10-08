@@ -18,7 +18,7 @@ from ontary.scope import DirectProperty, ScopePolicy, SelfScope, resolve_owning_
 from ontary.security import Consumer, covers_scope
 from ontary.store import ObjectStore, Source
 from ontary.store._core import StoreCore
-from ontary.store._filter import RowFilter, ScopeTerm, WhereTerm
+from ontary.store._filter import SQLITE_DOMAIN, RowFilter, ScopeTerm, WhereTerm, pushable
 
 
 @dataclass
@@ -127,6 +127,14 @@ def _clause(term: WhereTerm) -> _WhereClause:
     return term.field, term.prop_type, term.op, operand
 
 
+def _operands_pushable(term: WhereTerm) -> bool:
+    if term.op == "and":
+        return all(_operands_pushable(sub) for sub in term.operand)
+    if term.op == "in":
+        return all(pushable(item, SQLITE_DOMAIN) for item in term.operand)
+    return pushable(term.operand, SQLITE_DOMAIN)
+
+
 @pytest.mark.parametrize("case", FILTER_CASES, ids=lambda case: case.name)
 def test_where_parity(populated_store: PopulatedStore, case: FilterCase) -> None:
     rows = populated_store.payloads[case.family]
@@ -137,9 +145,11 @@ def test_where_parity(populated_store: PopulatedStore, case: FilterCase) -> None
               f"op={case.term.op}, operand={case.term.operand!r}")
     missing = expected - selected
     assert not missing, f"SQL dropped Python matches: {detail}, rows={[(i, rows[i]) for i in missing]!r}"
-    well_formed = {value.label for value in case.values if value.well_formed}
-    different = (selected ^ expected) & well_formed
-    assert not different, f"Exact parity failed: {detail}, rows={[(i, rows[i]) for i in different]!r}"
+    # D4 permits extra SQL rows when any operand is outside the bind domain.
+    if _operands_pushable(case.term):
+        well_formed = {value.label for value in case.values if value.well_formed}
+        different = (selected ^ expected) & well_formed
+        assert not different, f"Exact parity failed: {detail}, rows={[(i, rows[i]) for i in different]!r}"
 
 
 @pytest.mark.parametrize("rules", [(("prop", "value"),), (("self", None),),
