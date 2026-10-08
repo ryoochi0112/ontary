@@ -7,9 +7,11 @@ import os
 import sqlite3
 import uuid
 from collections.abc import Iterator
+from importlib import import_module
 from typing import Any
 
 import pytest
+from _fetch_counter import count_fallbacks
 
 from ontary import Ontology, OntologyObject, prop
 from ontary.errors import ValidationFailed
@@ -23,6 +25,7 @@ from ontary.store._filter import (
     ScopeTerm,
     WhereTerm,
     compile_filter,
+    compile_row_filter,
     filter_is_selective,
     pushable,
 )
@@ -101,7 +104,7 @@ def test_filter_selectivity_scope(scope: ScopeTerm | None, selective: bool) -> N
      (WhereTerm("v", "str", "and", (
          WhereTerm("v", "str", "eq", "\ud800"),
          WhereTerm("v", "str", "eq", "open"),
-     )), True)],
+     )), False)],
 )
 def test_filter_selectivity_where(term: WhereTerm, selective: bool) -> None:
     assert filter_is_selective(RowFilter(where=(term,)), SQLITE_DOMAIN) is selective
@@ -651,7 +654,7 @@ def test_connection_encoding_nested_and_bind_safety() -> None:
     safe_fragment, safe_params = compile_filter(RowFilter(where=(safe,)), "postgres", SQLITE_DOMAIN)
     assert fragment == f"((TRUE) AND {safe_fragment})"
     assert params == safe_params
-    assert filter_is_selective(row_filter, domain=BindDomain(("iso8859-1",)))
+    assert not filter_is_selective(row_filter, domain=BindDomain(("iso8859-1",)))
 
 
 @pytest.mark.parametrize("row_filter", [
@@ -673,3 +676,69 @@ def test_nan_operand_is_outside_the_bind_domain(dialect: _sql.Dialect, op: str) 
     row_filter = RowFilter(where=(WhereTerm("v", "float", op, float("nan")),))
     assert compile_filter(row_filter, dialect, SQLITE_DOMAIN) == ("TRUE", [])
     assert not filter_is_selective(row_filter, SQLITE_DOMAIN)
+
+
+@pytest.mark.parametrize("dialect", ["sqlite", "postgres"])
+@pytest.mark.parametrize("kind", ["int", "float", "json"])
+@pytest.mark.parametrize("op", ["eq", "ne", "gt", "gte", "lt", "lte", "in"])
+@pytest.mark.parametrize("operand", [2**53, -(2**53), 2**53 + 1, -(2**53) - 1, 1e100])
+def test_compiled_numeric_operand_exactness(dialect, kind, op, operand) -> None:
+    term = WhereTerm("v", kind, op, [None, 1, operand] if op == "in" else operand)
+    row_filter = RowFilter(where=(term,))
+    compiled = compile_row_filter(row_filter, dialect, SQLITE_DOMAIN)
+    assert compiled.exact is (dialect == "sqlite" or abs(operand) <= 2**53)
+    assert (compiled.sql, compiled.params) == compile_filter(row_filter, dialect, SQLITE_DOMAIN)
+    assert filter_is_selective(row_filter, SQLITE_DOMAIN, dialect) is compiled.exact
+
+
+@pytest.mark.parametrize("dialect", ["sqlite", "postgres"])
+@pytest.mark.parametrize("op", ["gt", "gte", "lt", "lte"])
+@pytest.mark.parametrize("operand,sqlite_exact,pg_exact", [
+    ("2026-01-01T23:59:00Z", True, True),
+    ("2026-01-01T23:59:00.123456+09:00", True, True),
+    ("2026-01-01T23:59", True, False),
+    ("2026-01-01 23:59:00+00:00", True, False),
+    ("2026-01-01T23:59:00+00:00:01", True, False),
+    ("２０２６-01-01T23:59:00Z", False, False),
+    ("not-an-instant", False, False),
+])
+def test_compiled_datetime_operand_exactness(dialect, op, operand, sqlite_exact, pg_exact) -> None:
+    row_filter = RowFilter(where=(WhereTerm("v", "datetime", op, operand),))
+    compiled = compile_row_filter(row_filter, dialect, SQLITE_DOMAIN)
+    assert compiled.exact is (sqlite_exact if dialect == "sqlite" else pg_exact)
+    assert (compiled.sql, compiled.params) == compile_filter(row_filter, dialect, SQLITE_DOMAIN)
+
+
+@pytest.mark.parametrize("dialect", ["sqlite", "postgres"])
+@pytest.mark.parametrize("path", ["page", "all"])
+@pytest.mark.parametrize("compiler", ["compile_filter", "compile_row_filter"])
+def test_compiler_errors_propagate_before_prefilter_guard(dialect, path, compiler, monkeypatch) -> None:
+    from ontary.store.postgres import PostgresStore
+
+    # These read entry points need no connection before compilation, so the
+    # PostgreSQL guard placement is also pinned in the offline suite.
+    store = object.__new__(ObjectStore if dialect == "sqlite" else PostgresStore)
+    store.bind_domain = SQLITE_DOMAIN
+    error = ValueError("compiler failed")
+    compiled_filters = []
+
+    def fail_compile(row_filter, actual_dialect, domain):
+        compiled_filters.append((row_filter, actual_dialect, domain))
+        raise error
+
+    def unexpected_guard(*args, **kwargs):
+        pytest.fail("compiler errors must propagate before entering the prefilter guard")
+
+    module = type(store).__module__ if compiler == "compile_filter" else "ontary.store._filter"
+    monkeypatch.setattr(import_module(module), compiler, fail_compile)
+    monkeypatch.setattr(_sql, "prefilter", unexpected_guard)
+    row_filter = RowFilter(where=(WhereTerm("status", "str", "eq", "open"),))
+    with count_fallbacks(store) as fallbacks:
+        with pytest.raises(ValueError) as caught:
+            if path == "page":
+                store.read_page_filtered("Item", row_filter, batch=1)
+            else:
+                store.read_all_filtered("Item", row_filter)
+        assert fallbacks.total() == 0
+    assert caught.value is error
+    assert compiled_filters == [(row_filter, dialect, SQLITE_DOMAIN)]

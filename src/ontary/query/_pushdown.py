@@ -14,7 +14,6 @@ from ontary.store._filter import (
     RowFilter,
     ScopeTerm,
     WhereTerm,
-    filter_is_selective,
 )
 from ontary.store.protocol import Store
 from ontary.store.values import PagedRow, StoredObject
@@ -48,9 +47,8 @@ def store_filter_is_exact(
     return (
         row_filter is not None
         and isinstance(store, StoreCore)
-        and type(store)._filtered_page_rows is not StoreCore._filtered_page_rows
-        and filter_is_exact(policy, obj_type)
-        and filter_is_selective(row_filter, store.bind_domain)
+        and scope_pushdown(policy, obj_type) != "python"
+        and store.prefilter_exact(row_filter)
     )
 
 

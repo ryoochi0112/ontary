@@ -213,6 +213,24 @@ def test_compiler_key_error_propagates_without_fallback(seeded, monkeypatch, pat
 
 
 @pytest.mark.parametrize("path", ["all", "page"])
+def test_compiler_error_propagates_without_fallback(seeded, monkeypatch, path) -> None:
+    error = ValueError("compiler bug")
+
+    def broken(*_args):
+        raise error
+
+    monkeypatch.setattr(seeded.backend, "compile_filter", broken)
+    with count_fallbacks(seeded.store) as fallbacks:
+        with pytest.raises(ValueError) as raised:
+            if path == "all":
+                seeded.store.read_all_filtered("Item", FILTER)
+            else:
+                seeded.store.read_page_filtered("Item", FILTER, batch=2)
+        assert raised.value is error
+        assert fallbacks == {}
+
+
+@pytest.mark.parametrize("path", ["all", "page"])
 def test_failed_unfiltered_retry_propagates(seeded, monkeypatch, path) -> None:
     error_type = sqlite3.OperationalError if seeded.dsn is None else seeded.backend._psycopg().Error
     error = error_type("unfiltered read failed")
@@ -236,11 +254,21 @@ def test_failed_unfiltered_retry_propagates(seeded, monkeypatch, path) -> None:
 @pytest.mark.parametrize("path", ["all", "page"])
 def test_bind_error_families_are_backend_specific(seeded, monkeypatch, error_type, path) -> None:
     error = error_type("binding failed")
+    sql = seeded.backend._sql
+    dialect = "sqlite" if seeded.dsn is None else "postgres"
+    fragment, _params = seeded.backend.compile_filter(FILTER, dialect, seeded.store.bind_domain)
+    template = (seeded.backend.OBJECT_FILTERED_ALL_SELECT_TEMPLATE if path == "all"
+                else seeded.backend.OBJECT_FILTERED_PAGE_SELECT_TEMPLATE)
+    filtered_sql = sql.render(template.replace("{filter}", fragment), dialect)
+    execute = sql.execute
 
-    def broken(*_args):
-        raise error
+    def broken(conn, statement, params=(), *, dialect):
+        # Fail only the filtered statement, inside the prefilter's guarded read.
+        if conn is seeded.store._conn and statement == filtered_sql:
+            raise error
+        return execute(conn, statement, params, dialect=dialect)
 
-    monkeypatch.setattr(seeded.backend, "compile_filter", broken)
+    monkeypatch.setattr(sql, "execute", broken)
     with count_fallbacks(seeded.store) as fallbacks:
         def read():
             if path == "all":

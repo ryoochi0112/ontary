@@ -55,6 +55,7 @@ from ontary.store._filter import (
     BindDomain,
     RowFilter,
     compile_filter,
+    compile_row_filter,
 )
 from ontary.store._shared import (
     AuditRowFields,
@@ -433,11 +434,15 @@ class PostgresStore(StoreCore):
         ).rows
         return [self._row_to_stored(row) for row in rows]
 
+    def prefilter_exact(self, row_filter: RowFilter) -> bool:
+        return compile_row_filter(row_filter, "postgres", self.bind_domain).exact
+
     def _filtered_all_rows(
         self, obj_type: str, row_filter: RowFilter
     ) -> list[StoredObject]:
+        fragment, params = compile_filter(row_filter, "postgres", self.bind_domain)
+
         def read() -> list[StoredObject]:
-            fragment, params = compile_filter(row_filter, "postgres", self.bind_domain)
             template = OBJECT_FILTERED_ALL_SELECT_TEMPLATE.replace("{filter}", fragment)
             rows = _sql.execute(
                 self._conn,
@@ -501,8 +506,9 @@ class PostgresStore(StoreCore):
     def _filtered_page_rows(
         self, obj_type: str, row_filter: RowFilter, after_row_id: int | None, batch: int
     ) -> list[PagedRow]:
+        fragment, params = compile_filter(row_filter, "postgres", self.bind_domain)
+
         def read() -> list[PagedRow]:
-            fragment, params = compile_filter(row_filter, "postgres", self.bind_domain)
             template = OBJECT_FILTERED_PAGE_SELECT_TEMPLATE.replace("{filter}", fragment)
             rows = _sql.execute(
                 self._conn,

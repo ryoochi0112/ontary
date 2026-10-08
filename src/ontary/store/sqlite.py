@@ -24,7 +24,6 @@ import sqlite3
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import datetime, timezone
 from typing import Any
 
 from ontary.audit import AuditEntry
@@ -37,7 +36,9 @@ from ontary.store._filter import (
     OBJECT_FILTERED_PAGE_SELECT_TEMPLATE,
     SQLITE_DOMAIN,
     RowFilter,
+    _ontary_instant,
     compile_filter,
+    compile_row_filter,
 )
 from ontary.store._shared import (
     AuditRowFields,
@@ -51,21 +52,6 @@ from ontary.store.values import (
     Source,
     StoredObject,
 )
-
-
-def _ontary_instant(value: Any) -> str | None:
-    """Python's ISO parser, with an explicit awareness and UTC ordering key."""
-    if not isinstance(value, str):
-        return None
-    try:
-        instant = datetime.fromisoformat(value)
-        marker = "N|"
-        if instant.tzinfo is not None:
-            instant = instant.astimezone(timezone.utc)
-            marker = "A|"
-        return marker + instant.isoformat(timespec="microseconds")
-    except (ValueError, OverflowError):
-        return None
 
 
 def _is_busy_error(exc: sqlite3.OperationalError) -> bool:
@@ -295,11 +281,15 @@ class ObjectStore(SqliteSchemaGate, StoreCore):
         ).rows
         return [self._row_to_stored(row) for row in rows]
 
+    def prefilter_exact(self, row_filter: RowFilter) -> bool:
+        return compile_row_filter(row_filter, "sqlite", self.bind_domain).exact
+
     def _filtered_all_rows(
         self, obj_type: str, row_filter: RowFilter
     ) -> list[StoredObject]:
+        fragment, params = compile_filter(row_filter, "sqlite", self.bind_domain)
+
         def read() -> list[StoredObject]:
-            fragment, params = compile_filter(row_filter, "sqlite", self.bind_domain)
             template = OBJECT_FILTERED_ALL_SELECT_TEMPLATE.replace("{filter}", fragment)
             rows = _sql.execute(
                 self._conn,
@@ -375,8 +365,9 @@ class ObjectStore(SqliteSchemaGate, StoreCore):
     def _filtered_page_rows(
         self, obj_type: str, row_filter: RowFilter, after_row_id: int | None, batch: int
     ) -> list[PagedRow]:
+        fragment, params = compile_filter(row_filter, "sqlite", self.bind_domain)
+
         def read() -> list[PagedRow]:
-            fragment, params = compile_filter(row_filter, "sqlite", self.bind_domain)
             template = OBJECT_FILTERED_PAGE_SELECT_TEMPLATE.replace("{filter}", fragment)
             rows = _sql.execute(
                 self._conn,

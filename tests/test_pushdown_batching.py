@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import uuid
 from collections.abc import Iterator
 
 import pytest
@@ -13,7 +15,8 @@ from ontary.query import GuardedQuery
 from ontary.scope import DirectProperty, ScopePolicy, SelfScope
 from ontary.security import Consumer
 from ontary.store import DEFAULT_BATCH, InMemoryStore, ObjectStore, Source
-from ontary.store._filter import BindDomain
+from ontary.store._filter import SQLITE_DOMAIN, BindDomain, RowFilter, WhereTerm
+from ontary.store.postgres import PostgresStore
 
 SRC = Source(source_system="batching-test")
 READER = Consumer(actor_id="reader", role="Reader", scope_level="team",
@@ -205,3 +208,131 @@ def test_climbing_scope_uses_default_batches(monkeypatch, path, where):
         assert calls[1][2] == DEFAULT_BATCH
     finally:
         store._conn.close()
+
+
+STATIC_FILTER_CASES = [
+    pytest.param({"at": {"gt": "2026-01-01T23:59"}},
+                 WhereTerm("at", "datetime", "gt", "2026-01-01T23:59"), [], id="S1"),
+    pytest.param({"at": {"gt": "2026-01-01 23:59:00+00:00"}},
+                 WhereTerm("at", "datetime", "gt", "2026-01-01 23:59:00+00:00"), [], id="S2"),
+    pytest.param({"rank": {"gt": 2**60}},
+                 WhereTerm("rank", "int", "gt", 2**60), [], id="S3"),
+    pytest.param({"rank": {"in": [2**60, 1]}},
+                 WhereTerm("rank", "int", "in", [2**60, 1]), ["1"], id="S4"),
+    pytest.param({"rank": {"gt": 2**60, "lt": 10}},
+                 WhereTerm("rank", "int", "and", (
+                     WhereTerm("rank", "int", "gt", 2**60),
+                     WhereTerm("rank", "int", "lt", 10),
+                 )), [], id="S5"),
+]
+
+
+@pytest.fixture(scope="module", params=["sqlite", "postgres"])
+def sql_data(request: pytest.FixtureRequest) -> Iterator[tuple]:
+    registry = OntologyRegistry()
+    registry.register_object_type(ObjectTypeDef(
+        api_name="Item", display_name="Item", description="Compiler exactness", layer="L0",
+        primary_key="id", properties=[
+            PropertyDef(name="id", type="str"),
+            PropertyDef(name="rank", type="int"),
+            PropertyDef(name="at", type="datetime"),
+        ],
+    ))
+    registry.validate()
+    schema = None
+    store = None
+    if request.param == "postgres":
+        dsn = os.environ.get("ONTARY_TEST_POSTGRES_DSN")
+        if not dsn:
+            pytest.skip("ONTARY_TEST_POSTGRES_DSN is not set")
+        import psycopg
+        from psycopg.conninfo import conninfo_to_dict, make_conninfo
+
+        schema = "ontary_test_batching_" + uuid.uuid4().hex
+        with psycopg.connect(dsn, autocommit=True, options="-csearch_path=pg_catalog") as conn:
+            conn.execute(f'CREATE SCHEMA "{schema}"')
+    try:
+        if schema is None:
+            store = ObjectStore(registry)
+        else:
+            options = conninfo_to_dict(dsn).get("options", "") + f" -csearch_path={schema}"
+            store = PostgresStore(registry, make_conninfo(dsn, options=options))
+        with store.transaction():
+            for i in range(12):
+                store.insert("Item", {"id": str(i), "rank": i,
+                                      "at": "2026-01-01T12:00:00+00:00"}, SRC)
+        yield request.param, registry, store
+    finally:
+        if store is not None:
+            store._conn.close()
+        if schema is not None:
+            with psycopg.connect(dsn, autocommit=True, options="-csearch_path=pg_catalog") as conn:
+                conn.execute(f'DROP SCHEMA "{schema}" CASCADE')
+
+
+@pytest.mark.parametrize("dialect", ["sqlite", "postgres"])
+@pytest.mark.parametrize("where,term,expected_ids", STATIC_FILTER_CASES)
+def test_store_static_prefilter_exactness(dialect, where, term, expected_ids):
+    # Exactness belongs to the compiler, so these PG unit pins need no DSN.
+    store = object.__new__(ObjectStore if dialect == "sqlite" else PostgresStore)
+    store.bind_domain = SQLITE_DOMAIN
+    assert store.prefilter_exact(RowFilter(where=(term,))) is (dialect == "sqlite")
+
+
+@pytest.mark.parametrize("dialect", ["sqlite", "postgres"])
+@pytest.mark.parametrize("nested", [False, True])
+def test_store_prefilter_exactness_with_any_inexact_and_child(dialect, nested):
+    store = object.__new__(ObjectStore if dialect == "sqlite" else PostgresStore)
+    store.bind_domain = SQLITE_DOMAIN
+    # S5's large-but-bindable operand is exact on SQLite. A bind-domain TRUE
+    # child additionally pins the same any-child rule on both dialects.
+    unsafe = WhereTerm("rank", "int", "gt", 2**63)
+    if nested:
+        unsafe = WhereTerm("rank", "int", "and", (unsafe,))
+    safe = WhereTerm("rank", "int", "lt", 10)
+    for children in ((unsafe, safe), (safe, unsafe)):
+        term = WhereTerm("rank", "int", "and", children)
+        assert not store.prefilter_exact(RowFilter(where=(term,)))
+
+
+@pytest.mark.parametrize("path", ["exists", "page"])
+@pytest.mark.parametrize("where,term,expected_ids", [
+    *STATIC_FILTER_CASES,
+    pytest.param({"rank": {"gt": 10}}, WhereTerm("rank", "int", "gt", 10),
+                 ["11"], id="control"),
+])
+def test_static_operand_first_batch_at_store_boundary(
+    sql_data, monkeypatch, path, where, term, expected_ids,
+):
+    dialect, registry, store = sql_data
+    query = _query(registry, store, unscoped=True)
+    batches = []
+    original = store._filtered_page_rows
+
+    def record(obj_type, row_filter, after_row_id, batch):
+        batches.append(batch)
+        return original(obj_type, row_filter, after_row_id, batch)
+
+    monkeypatch.setattr(store, "_filtered_page_rows", record)
+    if path == "exists":
+        assert query.exists(READER, "Item", where) is bool(expected_ids)
+    else:
+        page = query.get_objects(READER, "Item", where, limit=2)
+        assert [row.payload["id"] for row in page.items] == expected_ids
+        assert not page.has_more
+    exact = dialect == "sqlite" or term.operand == 10
+    assert batches[0] == ((1 if path == "exists" else 3) if exact else DEFAULT_BATCH)
+
+
+@pytest.mark.parametrize("path", ["exists", "page"])
+def test_sql_wrapper_uses_default_batches(sql_data, monkeypatch, path):
+    _dialect, registry, raw = sql_data
+    store = _CallCountingStore(raw)
+    query = _query(registry, store, unscoped=True)
+    calls = _record_pages(monkeypatch, store)
+    if path == "exists":
+        assert query.exists(READER, "Item", {"rank": {"gt": 10}})
+    else:
+        page = query.get_objects(READER, "Item", {"rank": {"gt": 10}}, limit=2)
+        assert [row.payload["id"] for row in page.items] == ["11"]
+    assert calls == [("read_page", None, DEFAULT_BATCH)]

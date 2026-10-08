@@ -278,6 +278,10 @@ class StoreCore(abc.ABC):
         Trusted-caller-only."""
         return self._all_rows(obj_type)
 
+    def prefilter_exact(self, row_filter: RowFilter) -> bool:
+        """Whether this backend's prefilter is exact on well-formed stored rows."""
+        return False
+
     def read_all_filtered(
         self, obj_type: str, row_filter: RowFilter
     ) -> list[StoredObject]:
