@@ -10,10 +10,46 @@ import json
 import math
 from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from ontary.store import _sql
 from ontary.typesys import PropertyType
+
+
+@dataclass(frozen=True)
+class BindDomain:
+    encodings: tuple[str, ...]
+    max_bytes: int = 65_536
+
+
+SQLITE_DOMAIN = BindDomain(("utf-8",))
+
+
+def pushable(value: object, domain: BindDomain) -> bool:
+    """Whether an exact scalar type can be safely bound in every encoding."""
+    value_type = type(value)
+    if value is None or value_type is bool:
+        return True
+    if value_type is int:
+        integer = cast(int, value)
+        return -(2**63) <= integer < 2**63
+    if value_type is float:
+        return math.isfinite(cast(float, value))
+    if value_type is not str:
+        return False
+
+    text = cast(str, value)
+    try:
+        if "\x00" in text:
+            return False
+        # Reject surrogate code points even when the domain has no encodings.
+        text.encode("utf-8", errors="strict")
+        return all(
+            len(text.encode(encoding, errors="strict")) <= domain.max_bytes
+            for encoding in domain.encodings
+        )
+    except Exception:
+        return False
 
 
 @dataclass(frozen=True)
