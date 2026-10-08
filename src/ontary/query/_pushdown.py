@@ -10,7 +10,7 @@ from ontary.query._where import CompiledWhere, _WhereClause
 from ontary.scope import CustomResolver, DirectProperty, ScopePolicy, SelfScope, ViaLink
 from ontary.security import Consumer
 from ontary.store._core import StoreCore
-from ontary.store._filter import RowFilter, ScopeTerm, WhereTerm
+from ontary.store._filter import RowFilter, ScopeTerm, WhereTerm, filter_is_selective
 from ontary.store.protocol import Store
 from ontary.store.values import PagedRow, StoredObject
 
@@ -45,6 +45,7 @@ def store_filter_is_exact(
         and isinstance(store, StoreCore)
         and type(store)._filtered_page_rows is not StoreCore._filtered_page_rows
         and filter_is_exact(policy, obj_type)
+        and filter_is_selective(row_filter)
     )
 
 

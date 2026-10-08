@@ -10,7 +10,7 @@ from test_pagination import _CallCountingStore
 from ontary.errors import ValidationFailed
 from ontary.meta import ObjectTypeDef, OntologyRegistry, PropertyDef
 from ontary.query import GuardedQuery
-from ontary.scope import DirectProperty, ScopePolicy
+from ontary.scope import DirectProperty, ScopePolicy, SelfScope
 from ontary.security import Consumer
 from ontary.store import DEFAULT_BATCH, InMemoryStore, ObjectStore, Source
 
@@ -140,3 +140,53 @@ def test_ordered_filtered_foreign_cursor_fallback_uses_large_batches(data, monke
         expected += [("read_page", first.next_cursor, 1),
                      ("read_page", None, DEFAULT_BATCH)]
     assert calls == expected
+
+
+@pytest.mark.parametrize("path", ["page", "exists"])
+@pytest.mark.parametrize("where", [None, {"status": "open"}])
+def test_climbing_scope_uses_default_batches(monkeypatch, path, where):
+    registry = OntologyRegistry()
+    for name, properties in [
+        ("Team", [PropertyDef(name="company_id", type="str")]),
+        ("Ticket", [PropertyDef(name="team_id", type="str"),
+                    PropertyDef(name="status", type="str")]),
+    ]:
+        registry.register_object_type(ObjectTypeDef(
+            api_name=name, display_name=name, description="Climbing scope", layer="L0",
+            primary_key="id", properties=[PropertyDef(name="id", type="str"), *properties],
+        ))
+    registry.validate()
+    policy = ScopePolicy(levels=["team", "company"], min_n=1, rules={
+        "Team": [SelfScope(level="team"),
+                 DirectProperty(level="company", property_name="company_id")],
+        "Ticket": [DirectProperty(level="team", property_name="team_id")],
+    })
+    policy.validate(registry)
+    consumer = Consumer(actor_id="reader", role="Reader", scope_level="company",
+                        scope_id="owned", kind="human")
+    store = ObjectStore(registry)
+    try:
+        with store.transaction():
+            for team in ("owned", "foreign"):
+                store.insert("Team", {"id": team, "company_id": team}, SRC)
+            for i in range(DEFAULT_BATCH + 3):
+                store.insert("Ticket", {
+                    "id": str(i), "status": "open",
+                    "team_id": "foreign" if i < DEFAULT_BATCH else "owned",
+                }, SRC)
+        calls = _record_pages(monkeypatch, store)
+        query = GuardedQuery(store, registry, policy)
+        if path == "exists":
+            assert query.exists(consumer, "Ticket", where)
+        else:
+            page = query.get_objects(consumer, "Ticket", where, limit=5)
+            assert [row.payload["id"] for row in page.items] == [
+                str(i) for i in range(DEFAULT_BATCH, DEFAULT_BATCH + 3)
+            ]
+            assert not page.has_more and page.next_cursor is None
+        assert len(calls) == 2
+        assert calls[0] == ("read_page_filtered", None, DEFAULT_BATCH)
+        assert calls[1][0] == "read_page_filtered" and calls[1][1] is not None
+        assert calls[1][2] == DEFAULT_BATCH
+    finally:
+        store._conn.close()

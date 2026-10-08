@@ -73,6 +73,37 @@ def _unbindable(value: object) -> bool:
     return False
 
 
+def _compiles_to_true(term: WhereTerm | ScopeTerm) -> bool:
+    """Identify unconditional pass-through components in either SQL dialect."""
+    if isinstance(term, ScopeTerm):
+        if not term.rules:
+            return term.climb_possible
+        return _unbindable(term.scope_id) or any(
+            _unbindable(field) for _, field in term.rules
+        )
+    if term.op == "and":
+        return all(_compiles_to_true(child) for child in term.operand)
+    if _unbindable(term.field) or _unbindable(term.operand):
+        return True
+    if term.op == "in":
+        return any(_compiles_to_true(
+            WhereTerm(term.field, term.prop_type, "eq", item),
+        ) for item in term.operand)
+    return term.op in {*_OPERATORS, "contains"} and (
+        isinstance(term.operand, dict | list) or term.prop_type == "struct"
+    )
+
+
+def filter_is_selective(row_filter: RowFilter) -> bool:
+    """Whether every component filters rather than unconditionally passing rows.
+
+    This only controls batch sizing; Python still judges every fetched row.
+    """
+    return all(not _compiles_to_true(term) for term in row_filter.where) and (
+        row_filter.scope is None or not _compiles_to_true(row_filter.scope)
+    )
+
+
 def compile_filter(f: RowFilter, dialect: _sql.Dialect) -> tuple[str, list[Any]]:
     """Return fixed SQL with bind markers, and parameters in marker order."""
     parts: list[str] = []
@@ -91,10 +122,10 @@ def compile_filter(f: RowFilter, dialect: _sql.Dialect) -> tuple[str, list[Any]]
 def _compile_scope(scope: ScopeTerm, dialect: _sql.Dialect) -> tuple[str, list[Any]]:
     """Preserve the first resolving rule; leave hierarchy climbing to Python."""
     fallback = "TRUE" if scope.climb_possible else "FALSE"
-    if not scope.rules:
-        return fallback, []
-    if _unbindable(scope.scope_id) or any(_unbindable(field) for _, field in scope.rules):
+    if _compiles_to_true(scope):
         return "TRUE", []
+    if not scope.rules:
+        return "FALSE", []
     parts: list[str] = []
     params: list[Any] = []
     collate = "COLLATE BINARY" if dialect == "sqlite" else 'COLLATE "C"'
@@ -248,19 +279,15 @@ def _compile_term(term: WhereTerm, dialect: _sql.Dialect) -> tuple[str, list[Any
         return _combine(term.operand, dialect, " AND ")
     # Let Python judge strings outside the drivers' bind domain, without
     # binding any field or operand from the affected clause.
-    if _unbindable(term.field) or _unbindable(term.operand):
+    if _compiles_to_true(term):
         return "TRUE", []
     if term.op == "in":
-        if any(_unbindable(item) for item in term.operand):
-            return "TRUE", []
         return _combine(
             (WhereTerm(term.field, term.prop_type, "eq", item) for item in term.operand),
             dialect, " OR ",
         )
     if term.op not in {*_OPERATORS, "contains"}:
         raise ValueError(f"unknown filter operator: {term.op}")
-    if isinstance(term.operand, dict | list) or term.prop_type == "struct":
-        return "TRUE", []
     kind = _scalar_type(term)
     guard = _type_guard(kind, dialect)
     null = "t IS NULL OR t = 'null'"

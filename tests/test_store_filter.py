@@ -16,7 +16,13 @@ from ontary.errors import ValidationFailed
 from ontary.query._where import _evaluate_where_clause
 from ontary.store import ObjectStore, Source, _sql
 from ontary.store._core import StoreCore
-from ontary.store._filter import RowFilter, ScopeTerm, WhereTerm, compile_filter
+from ontary.store._filter import (
+    RowFilter,
+    ScopeTerm,
+    WhereTerm,
+    compile_filter,
+    filter_is_selective,
+)
 from ontary.store.sqlite import _ontary_instant
 
 
@@ -48,6 +54,58 @@ def test_compiler_binds_field_names_and_operands(dialect: _sql.Dialect) -> None:
         assert fragment.count("{p}") == len(params)
     assert compile_filter(RowFilter(), dialect) == ("TRUE", [])
     assert compile_filter(RowFilter(scope=ScopeTerm((), "s", False)), dialect) == ("FALSE", [])
+
+
+@pytest.mark.parametrize(
+    "scope,selective",
+    [(None, True), (ScopeTerm((), "owned", False), True),
+     (ScopeTerm((), "owned", True), False),
+     (ScopeTerm((("self", None),), "owned", True), True),
+     (ScopeTerm((("prop", "team_id"),), "owned", True), True),
+     (ScopeTerm((("self", None),), "nul\x00", False), False),
+     (ScopeTerm((("prop", "team_id"),), "\ud800", False), False),
+     (ScopeTerm((("prop", "\ud800"),), "owned", False), False)],
+)
+def test_filter_selectivity_scope(scope: ScopeTerm | None, selective: bool) -> None:
+    assert filter_is_selective(RowFilter(scope=scope)) is selective
+    # A selective where cannot make an unconditional scope component exact.
+    assert filter_is_selective(RowFilter(
+        where=(WhereTerm("status", "str", "eq", "open"),), scope=scope,
+    )) is selective
+
+
+@pytest.mark.parametrize(
+    "term,selective",
+    [(WhereTerm("v", "str", "eq", "open"), True),
+     (WhereTerm("v", "json", "eq", None), True),
+     (WhereTerm("v", "json", "eq", 1), True),
+     (WhereTerm("v", "str", "in", []), True),
+     (WhereTerm("v", "str", "in", ["open", None]), True),
+     (WhereTerm("v", "json", "eq", {}), False),
+     (WhereTerm("v", "json", "eq", []), False),
+     (WhereTerm("v", "struct", "eq", None), False),
+     (WhereTerm("v", "json", "in", ["open", {}]), False),
+     (WhereTerm("v", "str", "eq", "nul\x00"), False),
+     (WhereTerm("v", "str", "eq", "\ud800"), False),
+     (WhereTerm("\udfff", "str", "eq", "open"), False),
+     (WhereTerm("v", "str", "in", ["open", "\ud800"]), False),
+     (WhereTerm("v", "str", "and", ()), False),
+     (WhereTerm("v", "str", "and", (
+         WhereTerm("v", "str", "and", (WhereTerm("v", "str", "eq", "\ud800"),)),
+     )), False),
+     (WhereTerm("v", "str", "and", (
+         WhereTerm("v", "str", "eq", "\ud800"),
+         WhereTerm("v", "str", "eq", "open"),
+     )), True)],
+)
+def test_filter_selectivity_where(term: WhereTerm, selective: bool) -> None:
+    assert filter_is_selective(RowFilter(where=(term,))) is selective
+    # Any unconditional top-level term prevents small batches, even alongside
+    # a selective where term and scope term.
+    assert filter_is_selective(RowFilter(
+        where=(WhereTerm("status", "str", "eq", "open"), term),
+        scope=ScopeTerm((("self", None),), "owned", False),
+    )) is selective
 
 
 @pytest.fixture(params=["sqlite", "postgres"], scope="module")
