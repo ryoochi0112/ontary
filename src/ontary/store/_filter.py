@@ -37,6 +37,14 @@ class RowFilter:
     scope: ScopeTerm | None = None
 
 
+OBJECT_FILTERED_ALL_SELECT_TEMPLATE = f"""
+SELECT {', '.join(_sql.OBJECT_COLUMNS)} FROM objects
+WHERE object_type = {{p}} AND tenant = {{p}} AND valid_to IS NULL
+  AND ({{filter}})
+ORDER BY row_id ASC
+"""
+
+
 OBJECT_FILTERED_PAGE_SELECT_TEMPLATE = f"""
 SELECT {', '.join(_sql.OBJECT_COLUMNS)} FROM objects
 WHERE object_type = {{p}} AND tenant = {{p}} AND valid_to IS NULL

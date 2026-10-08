@@ -211,15 +211,21 @@ def test_read_paths_use_prefilter_batches_and_prime_rows(
     consumer = make_consumer()
     calls = []
     original = store.read_page_filtered
+    original_all = store.read_all_filtered
 
     def fetch(obj_type, row_filter, after_key=None, batch=DEFAULT_BATCH):
         calls.append((row_filter, batch))
         return original(obj_type, row_filter, after_key=after_key, batch=batch)
 
+    def fetch_all(obj_type, row_filter):
+        calls.append((row_filter, None))
+        return original_all(obj_type, row_filter)
+
     def reread(*_args):
         pytest.fail("scope resolution re-read the row being judged")
 
     monkeypatch.setattr(store, "read_page_filtered", fetch)
+    monkeypatch.setattr(store, "read_all_filtered", fetch_all)
     monkeypatch.setattr(store, "read_current", reread)
     where = {"status": "open"}
     if path == "page":
@@ -234,9 +240,14 @@ def test_read_paths_use_prefilter_batches_and_prime_rows(
         assert query.exists(consumer, "Item", where)
     else:
         assert query.aggregate(consumer, "Item", where=where, func="count") == 4
-    expected_batch = DEFAULT_BATCH if python_scope or path not in {"page", "ordered", "exists"} else (
-        1 if path == "exists" else 3
-    )
+    # Full-stream reads judge one statement's snapshot (no batch); pages and
+    # exists walk batches sized by `filter_is_exact`.
+    if path in {"unbounded", "count", "aggregate"}:
+        expected_batch = None
+    elif python_scope:
+        expected_batch = DEFAULT_BATCH
+    else:
+        expected_batch = 1 if path == "exists" else 3
     assert calls
     assert all(batch == expected_batch for _, batch in calls)
     assert all(f.where == (WhereTerm("status", "str", "eq", "open"),) for f, _ in calls)
@@ -268,9 +279,13 @@ def test_read_paths_judge_where_and_scope_after_permissive_fetch(
     def permissive_rows(obj_type, _row_filter, after_row_id, batch):
         return store._page_rows(obj_type, after_row_id, batch)
 
+    def permissive_all_rows(obj_type, _row_filter):
+        return store._all_rows(obj_type)
+
     # Keep real rows, cursor validation, and batch limits, while forcing a
     # superset that makes the Python where and visibility checks essential.
     monkeypatch.setattr(store, "_filtered_page_rows", permissive_rows)
+    monkeypatch.setattr(store, "_filtered_all_rows", permissive_all_rows)
     where = {"status": "open"}
     if path in {"page", "ordered"}:
         order_by = "rank" if path == "ordered" else None

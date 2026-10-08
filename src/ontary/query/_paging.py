@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict
 from ontary.errors import ValidationFailed
 from ontary.query._host import _QueryHost
 from ontary.query._params import _OrderSpec
-from ontary.query._pushdown import _fetch_page, build_row_filter, filter_is_exact
+from ontary.query._pushdown import _fetch_all, _fetch_page, build_row_filter, filter_is_exact
 from ontary.query._where import _WhereMatcher
 from ontary.scope import _ScopeReadCache
 from ontary.security import Consumer
@@ -234,6 +234,11 @@ def _unbounded_results(
         )
 
     def _rows() -> Iterator[StoredObject]:
+        if stop_after is None:
+            # A full read must judge one statement's snapshot, including
+            # when sorting or counting the selection in Python.
+            yield from _fetch_all(query, obj_type, row_filter)
+            return
         cursor: str | None = None
         while True:
             batch = _fetch_page(query, obj_type, row_filter, cursor, batch_size)

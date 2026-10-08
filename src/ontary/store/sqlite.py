@@ -33,6 +33,7 @@ from ontary.meta import OntologyRegistry
 from ontary.store import _sql
 from ontary.store._core import StoreCore
 from ontary.store._filter import (
+    OBJECT_FILTERED_ALL_SELECT_TEMPLATE,
     OBJECT_FILTERED_PAGE_SELECT_TEMPLATE,
     RowFilter,
     compile_filter,
@@ -288,6 +289,19 @@ class ObjectStore(SqliteSchemaGate, StoreCore):
             self._conn,
             _sql.render(_sql.OBJECT_ALL_SELECT_TEMPLATE, "sqlite"),
             (obj_type, self._tenant),
+            dialect="sqlite",
+        ).rows
+        return [self._row_to_stored(row) for row in rows]
+
+    def _filtered_all_rows(
+        self, obj_type: str, row_filter: RowFilter
+    ) -> list[StoredObject]:
+        fragment, params = compile_filter(row_filter, "sqlite")
+        template = OBJECT_FILTERED_ALL_SELECT_TEMPLATE.replace("{filter}", fragment)
+        rows = _sql.execute(
+            self._conn,
+            _sql.render(template, "sqlite"),
+            [obj_type, self._tenant, *params],
             dialect="sqlite",
         ).rows
         return [self._row_to_stored(row) for row in rows]

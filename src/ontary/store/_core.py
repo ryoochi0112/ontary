@@ -169,6 +169,12 @@ class StoreCore(abc.ABC):
     def _all_rows(self, obj_type: str) -> list[StoredObject]:
         """Every live row of `obj_type` in this tenant, in row order."""
 
+    def _filtered_all_rows(
+        self, obj_type: str, row_filter: RowFilter
+    ) -> list[StoredObject]:
+        """Permissive default for backends without SQL filtering."""
+        return self._all_rows(obj_type)
+
     @abc.abstractmethod
     def _page_token_row_id(self, obj_type: str, token: str) -> int | None:
         """The row identity `token` was issued for, scoped to this tenant
@@ -265,6 +271,12 @@ class StoreCore(abc.ABC):
         """Raw read of every current row of `obj_type`, in `read_page` order.
         Trusted-caller-only."""
         return self._all_rows(obj_type)
+
+    def read_all_filtered(
+        self, obj_type: str, row_filter: RowFilter
+    ) -> list[StoredObject]:
+        """Raw full snapshot with a permissive prefilter; callers must judge each row."""
+        return self._filtered_all_rows(obj_type, row_filter)
 
     def read_page(
         self, obj_type: str, after_key: str | None = None, batch: int = DEFAULT_BATCH

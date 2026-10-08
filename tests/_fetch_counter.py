@@ -27,7 +27,10 @@ def count_fetched(store: StoreCore) -> Iterator[Counter[str]]:
         return fetch
 
     with pytest.MonkeyPatch.context() as patch:
-        for name in ("_all_rows", "_page_rows", "_filtered_page_rows", "_current_row", "_last_row"):
+        for name in (
+            "_all_rows", "_filtered_all_rows", "_page_rows", "_filtered_page_rows",
+            "_current_row", "_last_row",
+        ):
             patch.setattr(store, name, counted(
                 getattr(store, name), name in {"_current_row", "_last_row"},
             ))

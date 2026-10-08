@@ -11,7 +11,7 @@ from ontary.scope import CustomResolver, DirectProperty, ScopePolicy, SelfScope,
 from ontary.security import Consumer
 from ontary.store._core import StoreCore
 from ontary.store._filter import RowFilter, ScopeTerm, WhereTerm
-from ontary.store.values import PagedRow
+from ontary.store.values import PagedRow, StoredObject
 
 
 def scope_pushdown(policy: ScopePolicy, obj_type: str) -> Literal["sql", "python", "unscoped"]:
@@ -73,6 +73,17 @@ def build_row_filter(
         )
         scope = ScopeTerm(tuple(rules), consumer.scope_id, climb_possible)
     return RowFilter(where=where, scope=scope) if where or scope is not None else None
+
+
+def _fetch_all(
+    query: _QueryHost,
+    obj_type: str,
+    row_filter: RowFilter | None,
+) -> list[StoredObject]:
+    """Fetch a full snapshot, using the internal prefilter API when available."""
+    if row_filter is not None and isinstance(query._store, StoreCore):
+        return query._store.read_all_filtered(obj_type, row_filter)
+    return query._store.read_all(obj_type)
 
 
 def _fetch_page(

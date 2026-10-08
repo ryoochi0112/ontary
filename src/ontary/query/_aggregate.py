@@ -22,11 +22,11 @@ from ontary.errors import ValidationFailed, VisibilityError
 from ontary.query._disclosure import _ReadDisclosure, _record_disclosure
 from ontary.query._host import _QueryHost
 from ontary.query._params import _NUMERIC_PROPERTY_TYPES, _property_type
-from ontary.query._pushdown import _fetch_page, build_row_filter
+from ontary.query._pushdown import _fetch_all, build_row_filter
 from ontary.query._where import _compile_where, _NormalizedWhere, _validate_where_keys
 from ontary.scope import _ScopeReadCache, resolve_contributor
 from ontary.security import Consumer
-from ontary.store import DEFAULT_BATCH, StoredObject
+from ontary.store import StoredObject
 
 _MIN_N_COUNT_WITHHELD = "count withheld"
 _AGGREGATE_FUNCS = ("mean", "count", "sum", "min", "max")
@@ -117,31 +117,24 @@ def _visible_rows(
 ) -> list[StoredObject]:
     """Rows of `obj_type` matching `where` that `consumer` may see.
 
-    Extracted from `_aggregate` unchanged, and shared with
-    `count_contributors` so both describe the same population -- see that
-    method's docstring for why divergence here would be a disclosure and
-    not merely an inconsistency.
+    One storage statement supplies the snapshot shared by `_aggregate` and
+    `count_contributors`. A batched walk could count different versions or
+    populations across statements and incorrectly clear the min-N floor.
     """
     where_matcher = _compile_where(query._registry, obj_type, where)
     row_filter = build_row_filter(
         query._registry, query._policy, consumer, obj_type, where_matcher,
     )
     visible = []
-    cursor: str | None = None
-    while True:
-        batch = _fetch_page(query, obj_type, row_filter, cursor, DEFAULT_BATCH)
-        for paged_row in batch:
-            row = paged_row.obj
-            if scope_cache is not None:
-                scope_cache._prime(row)
-            if where_matcher is not None and not where_matcher(row.payload):
-                continue
-            if not query._visible(consumer, row, scope_cache=scope_cache):
-                continue
-            visible.append(row)
-        if len(batch) < DEFAULT_BATCH:
-            return visible
-        cursor = batch[-1].key
+    for row in _fetch_all(query, obj_type, row_filter):
+        if scope_cache is not None:
+            scope_cache._prime(row)
+        if where_matcher is not None and not where_matcher(row.payload):
+            continue
+        if not query._visible(consumer, row, scope_cache=scope_cache):
+            continue
+        visible.append(row)
+    return visible
 
 
 def _value_field_gate(
