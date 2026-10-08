@@ -11,6 +11,7 @@ from ontary.scope import CustomResolver, DirectProperty, ScopePolicy, SelfScope,
 from ontary.security import Consumer
 from ontary.store._core import StoreCore
 from ontary.store._filter import RowFilter, ScopeTerm, WhereTerm
+from ontary.store.protocol import Store
 from ontary.store.values import PagedRow, StoredObject
 
 
@@ -33,6 +34,18 @@ def filter_is_exact(policy: ScopePolicy, obj_type: str) -> bool:
     This classification only chooses the batch size.
     """
     return scope_pushdown(policy, obj_type) != "python"
+
+
+def store_filter_is_exact(
+    policy: ScopePolicy, obj_type: str, store: Store, row_filter: RowFilter | None,
+) -> bool:
+    """Choose small batches only when storage actually applies the prefilter."""
+    return (
+        row_filter is not None
+        and isinstance(store, StoreCore)
+        and type(store)._filtered_page_rows is not StoreCore._filtered_page_rows
+        and filter_is_exact(policy, obj_type)
+    )
 
 
 def _where_term(clause: _WhereClause) -> WhereTerm:

@@ -240,11 +240,12 @@ def test_read_paths_use_prefilter_batches_and_prime_rows(
         assert query.exists(consumer, "Item", where)
     else:
         assert query.aggregate(consumer, "Item", where=where, func="count") == 4
-    # Full-stream reads judge one statement's snapshot (no batch); pages and
-    # exists walk batches sized by `filter_is_exact`.
+    # Full-stream reads judge one statement's snapshot (no batch); row-id
+    # pages and exists walk batches sized by `store_filter_is_exact`, and
+    # ordered pages always walk DEFAULT_BATCH-sized batches.
     if path in {"unbounded", "count", "aggregate"}:
         expected_batch = None
-    elif python_scope:
+    elif python_scope or path == "ordered":
         expected_batch = DEFAULT_BATCH
     else:
         expected_batch = 1 if path == "exists" else 3

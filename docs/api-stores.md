@@ -162,7 +162,7 @@ Three implementations ship, all proven against one shared conformance suite:
 
 - **`ObjectStore`** — SQLite. History (close-old / insert-new), links, audit log.
 - **`InMemoryStore`** — pure Python. No file, no SQL; for tests and dogfooding.
-- **`PostgresStore`** — PostgreSQL-backed; available with the `postgres` extra.
+- **`PostgresStore`** — requires PostgreSQL 16 or later; available with the `postgres` extra.
 
 The outermost `transaction()` serializes a read followed by a write against
 concurrent writers on the same store. It is reentrant, and nested calls share the

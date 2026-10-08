@@ -12,7 +12,12 @@ from pydantic import BaseModel, ConfigDict
 from ontary.errors import ValidationFailed
 from ontary.query._host import _QueryHost
 from ontary.query._params import _OrderSpec
-from ontary.query._pushdown import _fetch_all, _fetch_page, build_row_filter, filter_is_exact
+from ontary.query._pushdown import (
+    _fetch_all,
+    _fetch_page,
+    build_row_filter,
+    store_filter_is_exact,
+)
 from ontary.query._where import _WhereMatcher
 from ontary.scope import _ScopeReadCache
 from ontary.security import Consumer
@@ -26,9 +31,11 @@ DEFAULT_READ_LIMIT = 1000
 Omitting ``limit`` returns a ``Page`` of at most this many rows. Passing
 ``limit=None`` is the explicit opt-in to the unbounded list form.
 
-Ordered pages materialize and sort the entire prefiltered stream, regardless
-of ``limit``. Permissive filters and wrapper stores may still fetch the whole
-object type; sorting costs O(N log N) per page for the fetched population.
+Ordered pages are a scale caveat: every page materializes and sorts the entire
+stream, regardless of ``limit``. With ``where``/scope pushdown on SQLite/Postgres,
+this is the prefiltered stream; permissive filters and wrapper stores may still
+fetch the whole object type. That is O(N log N) work per ordered page and
+O(N² log N) for a full ordered walk, where N is the fetched population.
 """
 
 _UNSET_LIMIT = object()
@@ -229,8 +236,10 @@ def _unbounded_results(
     )
     batch_size = DEFAULT_BATCH
     if stop_after is not None:
-        batch_size = stop_after if filter_is_exact(query._policy, obj_type) else max(
-            stop_after, DEFAULT_BATCH
+        batch_size = stop_after if store_filter_is_exact(
+            query._policy, obj_type, query._store, row_filter,
+        ) else max(
+            stop_after, DEFAULT_BATCH,
         )
 
     def _rows() -> Iterator[StoredObject]:
@@ -295,8 +304,10 @@ def _row_id_page(
     row_filter = build_row_filter(
         query._registry, query._policy, consumer, obj_type, where_matcher,
     )
-    batch_size = limit + 1 if filter_is_exact(query._policy, obj_type) else max(
-        limit + 1, DEFAULT_BATCH
+    batch_size = limit + 1 if store_filter_is_exact(
+        query._policy, obj_type, query._store, row_filter,
+    ) else max(
+        limit + 1, DEFAULT_BATCH,
     )
     cursor = after
     kept: list[tuple[str, StoredObject]] = []
@@ -359,9 +370,7 @@ def _ordered_page(
     row_filter = build_row_filter(
         query._registry, query._policy, consumer, obj_type, where_matcher,
     )
-    batch_size = limit + 1 if filter_is_exact(query._policy, obj_type) else max(
-        limit + 1, DEFAULT_BATCH
-    )
+    batch_size = max(limit + 1, DEFAULT_BATCH)
     entries = _read_all_paged_rows(
         query, obj_type, batch_size, row_filter, scope_cache=scope_cache,
     )
@@ -370,9 +379,10 @@ def _ordered_page(
         # over today's unfiltered stream to preserve its resume position and
         # the distinction between a stale cursor and a valid hidden row.
         _fetch_page(query, obj_type, None, after, 1)
-        entries = _read_all_paged_rows(
-            query, obj_type, batch_size, scope_cache=scope_cache,
-        )
+        if row_filter is not None:
+            entries = _read_all_paged_rows(
+                query, obj_type, batch_size, scope_cache=scope_cache,
+            )
     entries = _sort_entries(
             query,
             obj_type,
