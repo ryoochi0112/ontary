@@ -358,3 +358,66 @@ def test_surrogate_bind_safety(seeded: SeededStore, reference: SeededStore,
         assert result.has_more == expected.has_more
         assert not result.has_more
         assert result.next_cursor is None and expected.next_cursor is None
+
+
+@pytest.fixture
+def latin1_store() -> Iterator[SeededStore]:
+    dsn = os.environ.get("ONTARY_TEST_POSTGRES_DSN")
+    if not dsn:
+        pytest.skip("ONTARY_TEST_POSTGRES_DSN is not set")
+    import psycopg
+    from psycopg.conninfo import conninfo_to_dict, make_conninfo
+
+    from ontary.store.postgres import PostgresStore
+
+    registry = _registry()
+    schema = "ontary_test_pushdown_encoding_" + uuid.uuid4().hex
+    with psycopg.connect(dsn, autocommit=True, options="-csearch_path=pg_catalog") as conn:
+        conn.execute(f'CREATE SCHEMA "{schema}"')
+    store = None
+    try:
+        # Preserve existing DSN options while selecting the isolated schema and
+        # the real client bind domain that exposed the regression.
+        options = conninfo_to_dict(dsn).get("options", "")
+        options += f" -csearch_path={schema} -cclient_encoding=LATIN1"
+        store = PostgresStore(registry, make_conninfo(dsn, options=options))
+        assert store._conn.info.encoding == "iso8859-1"
+        yield SeededStore(store, registry)
+    finally:
+        if store is not None:
+            store._conn.close()
+        with psycopg.connect(dsn, autocommit=True, options="-csearch_path=pg_catalog") as conn:
+            conn.execute(f'DROP SCHEMA "{schema}" CASCADE')
+
+
+@pytest.mark.parametrize("limit", [None, 1])
+@pytest.mark.parametrize("probe", ["scope_id", "operand", "in"])
+def test_connection_encoding_bind_safety(latin1_store: SeededStore,
+                                         limit: int | None, probe: str) -> None:
+    reference = SeededStore(InMemoryStore(latin1_store.registry), latin1_store.registry)
+    payloads = [
+        {"id": "encoding-0", "team_id": "日本", "status": "開"},
+        {"id": "encoding-1", "team_id": "日本", "status": "closed"},
+        {"id": "encoding-2", "team_id": "owned", "status": "開"},
+        {"id": "encoding-3", "team_id": "owned", "status": "closed"},
+    ]
+    for seeded_store in (latin1_store, reference):
+        with seeded_store.store.transaction():
+            for payload in payloads:
+                seeded_store.store.insert("ScopeRows", payload, SRC)
+    consumer = _consumer("日本" if probe == "scope_id" else "owned")
+    where = ({"status": "開"} if probe == "operand" else
+             {"status": {"in": ["closed", "開"]}} if probe == "in" else None)
+    expected = reference.query("ScopeRows").get_objects(
+        consumer, "ScopeRows", where, limit=limit)
+    result = latin1_store.query("ScopeRows").get_objects(
+        consumer, "ScopeRows", where, limit=limit)
+    expected_ids = (["encoding-0", "encoding-1"] if probe == "scope_id" else
+                    ["encoding-2"] if probe == "operand" else
+                    ["encoding-2", "encoding-3"])
+    rows = result.items if limit is not None else result
+    expected_rows = expected.items if limit is not None else expected
+    assert _ids(rows) == _ids(expected_rows) == expected_ids[:limit]
+    if limit is not None:
+        assert result.has_more == expected.has_more == (len(expected_ids) > limit)
+        assert (result.next_cursor is not None) == (expected.next_cursor is not None)

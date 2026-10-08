@@ -606,3 +606,53 @@ def test_json_loaded_surrogate_operand_is_not_bound() -> None:
     for dialect in ("sqlite", "postgres"):
         assert compile_filter(RowFilter(where=(WhereTerm("status", "str", "eq", value),)),
                               dialect) == ("TRUE", [])
+
+
+@pytest.mark.parametrize("op", ["eq", "ne", "contains", "in", "gt", "gte", "lt", "lte"])
+def test_connection_encoding_where_bind_safety(op: str) -> None:
+    operand = ["open", "開", None] if op == "in" else "開"
+    term = WhereTerm("status", "str", op, operand)
+    row_filter = RowFilter(where=(term,))
+    assert compile_filter(row_filter, "postgres", encoding="iso8859-1") == ("TRUE", [])
+    assert not filter_is_selective(row_filter, encoding="iso8859-1")
+    assert filter_is_selective(row_filter)
+    assert compile_filter(row_filter, "postgres") == compile_filter(
+        row_filter, "postgres", encoding="utf-8")
+    assert compile_filter(row_filter, "postgres")[1]
+
+
+@pytest.mark.parametrize("value", ["日本", "nul\x00", "\ud800"])
+def test_connection_encoding_fields_and_scope_bind_safety(value: str) -> None:
+    filters = [RowFilter(where=(WhereTerm(value, "str", "eq", "open"),)),
+               RowFilter(scope=ScopeTerm((("self", None),), value, False)),
+               RowFilter(scope=ScopeTerm((("prop", "team_id"),), value, False)),
+               RowFilter(scope=ScopeTerm((("prop", value),), "owned", False))]
+    for row_filter in filters:
+        assert compile_filter(row_filter, "postgres", encoding="iso8859-1") == ("TRUE", [])
+        assert not filter_is_selective(row_filter, encoding="iso8859-1")
+
+
+def test_connection_encoding_nested_and_bind_safety() -> None:
+    unsafe = WhereTerm("status", "str", "eq", "開")
+    safe = WhereTerm("status", "str", "eq", "café")
+    nested = WhereTerm("status", "str", "and", (
+        WhereTerm("status", "str", "and", (unsafe,)), safe))
+    row_filter = RowFilter(where=(nested,))
+    fragment, params = compile_filter(row_filter, "postgres", encoding="iso8859-1")
+    safe_fragment, safe_params = compile_filter(RowFilter(where=(safe,)), "postgres")
+    assert fragment == f"((TRUE) AND {safe_fragment})"
+    assert params == safe_params
+    assert filter_is_selective(row_filter, encoding="iso8859-1")
+
+
+@pytest.mark.parametrize("row_filter", [
+    RowFilter(where=(WhereTerm("état", "str", "eq", "café"),)),
+    RowFilter(where=(WhereTerm("status", "str", "in", ["café", None]),)),
+    RowFilter(scope=ScopeTerm((("self", None),), "équipe", False)),
+    RowFilter(scope=ScopeTerm((("prop", "équipe"),), "café", False)),
+])
+def test_connection_encoding_bindable_sql_is_unchanged(row_filter: RowFilter) -> None:
+    expected = compile_filter(row_filter, "postgres")
+    assert expected[1]
+    assert compile_filter(row_filter, "postgres", encoding="iso8859-1") == expected
+    assert filter_is_selective(row_filter, encoding="iso8859-1")

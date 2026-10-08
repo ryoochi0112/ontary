@@ -60,69 +60,73 @@ _ISO_INSTANT = (
 )
 
 
-def _unbindable(value: object) -> bool:
-    """Strings outside both drivers' text domain must be judged in Python."""
+def _unbindable(value: object, encoding: str) -> bool:
+    """Strings outside the connection's text bind domain are judged in Python."""
     if not isinstance(value, str):
         return False
     if "\x00" in value:
         return True
     try:
-        value.encode("utf-8")
+        value.encode(encoding)
     except UnicodeEncodeError:
         return True
     return False
 
 
-def _compiles_to_true(term: WhereTerm | ScopeTerm) -> bool:
+def _compiles_to_true(term: WhereTerm | ScopeTerm, encoding: str = "utf-8") -> bool:
     """Identify unconditional pass-through components in either SQL dialect."""
     if isinstance(term, ScopeTerm):
         if not term.rules:
             return term.climb_possible
-        return _unbindable(term.scope_id) or any(
-            _unbindable(field) for _, field in term.rules
+        return _unbindable(term.scope_id, encoding) or any(
+            _unbindable(field, encoding) for _, field in term.rules
         )
     if term.op == "and":
-        return all(_compiles_to_true(child) for child in term.operand)
-    if _unbindable(term.field) or _unbindable(term.operand):
+        return all(_compiles_to_true(child, encoding) for child in term.operand)
+    if _unbindable(term.field, encoding) or _unbindable(term.operand, encoding):
         return True
     if term.op == "in":
         return any(_compiles_to_true(
-            WhereTerm(term.field, term.prop_type, "eq", item),
+            WhereTerm(term.field, term.prop_type, "eq", item), encoding,
         ) for item in term.operand)
     return term.op in {*_OPERATORS, "contains"} and (
         isinstance(term.operand, dict | list) or term.prop_type == "struct"
     )
 
 
-def filter_is_selective(row_filter: RowFilter) -> bool:
+def filter_is_selective(row_filter: RowFilter, encoding: str = "utf-8") -> bool:
     """Whether every component filters rather than unconditionally passing rows.
 
     This only controls batch sizing; Python still judges every fetched row.
     """
-    return all(not _compiles_to_true(term) for term in row_filter.where) and (
-        row_filter.scope is None or not _compiles_to_true(row_filter.scope)
+    return all(not _compiles_to_true(term, encoding) for term in row_filter.where) and (
+        row_filter.scope is None or not _compiles_to_true(row_filter.scope, encoding)
     )
 
 
-def compile_filter(f: RowFilter, dialect: _sql.Dialect) -> tuple[str, list[Any]]:
+def compile_filter(
+    f: RowFilter, dialect: _sql.Dialect, encoding: str = "utf-8",
+) -> tuple[str, list[Any]]:
     """Return fixed SQL with bind markers, and parameters in marker order."""
     parts: list[str] = []
     params: list[Any] = []
     for term in f.where:
-        fragment, values = _compile_term(term, dialect)
+        fragment, values = _compile_term(term, dialect, encoding)
         parts.append(fragment)
         params.extend(values)
     if f.scope is not None:
-        fragment, values = _compile_scope(f.scope, dialect)
+        fragment, values = _compile_scope(f.scope, dialect, encoding)
         parts.append(fragment)
         params.extend(values)
     return " AND ".join(parts) or "TRUE", params
 
 
-def _compile_scope(scope: ScopeTerm, dialect: _sql.Dialect) -> tuple[str, list[Any]]:
+def _compile_scope(
+    scope: ScopeTerm, dialect: _sql.Dialect, encoding: str,
+) -> tuple[str, list[Any]]:
     """Preserve the first resolving rule; leave hierarchy climbing to Python."""
     fallback = "TRUE" if scope.climb_possible else "FALSE"
-    if _compiles_to_true(scope):
+    if _compiles_to_true(scope, encoding):
         return "TRUE", []
     if not scope.rules:
         return "FALSE", []
@@ -172,11 +176,13 @@ def _compile_scope_property(
     return f"WHEN {resolves} THEN {match}", [*fields, scope_id]
 
 
-def _combine(terms: Iterable[WhereTerm], dialect: _sql.Dialect, join: str) -> tuple[str, list[Any]]:
+def _combine(
+    terms: Iterable[WhereTerm], dialect: _sql.Dialect, join: str, encoding: str,
+) -> tuple[str, list[Any]]:
     parts: list[str] = []
     params: list[Any] = []
     for term in terms:
-        fragment, values = _compile_term(term, dialect)
+        fragment, values = _compile_term(term, dialect, encoding)
         parts.append(fragment)
         params.extend(values)
     if not parts:
@@ -274,17 +280,19 @@ def _comparison(term: WhereTerm, kind: str, dialect: _sql.Dialect) -> tuple[str,
     return f"v {collate} {operator} o {collate}", []
 
 
-def _compile_term(term: WhereTerm, dialect: _sql.Dialect) -> tuple[str, list[Any]]:
+def _compile_term(
+    term: WhereTerm, dialect: _sql.Dialect, encoding: str,
+) -> tuple[str, list[Any]]:
     if term.op == "and":
-        return _combine(term.operand, dialect, " AND ")
+        return _combine(term.operand, dialect, " AND ", encoding)
     # Let Python judge strings outside the drivers' bind domain, without
     # binding any field or operand from the affected clause.
-    if _compiles_to_true(term):
+    if _compiles_to_true(term, encoding):
         return "TRUE", []
     if term.op == "in":
         return _combine(
             (WhereTerm(term.field, term.prop_type, "eq", item) for item in term.operand),
-            dialect, " OR ",
+            dialect, " OR ", encoding,
         )
     if term.op not in {*_OPERATORS, "contains"}:
         raise ValueError(f"unknown filter operator: {term.op}")
