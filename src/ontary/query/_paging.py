@@ -12,10 +12,12 @@ from pydantic import BaseModel, ConfigDict
 from ontary.errors import ValidationFailed
 from ontary.query._host import _QueryHost
 from ontary.query._params import _OrderSpec
+from ontary.query._pushdown import _fetch_page, build_row_filter, filter_is_exact
 from ontary.query._where import _WhereMatcher
 from ontary.scope import _ScopeReadCache
 from ontary.security import Consumer
 from ontary.store import DEFAULT_BATCH, StoredObject
+from ontary.store._filter import RowFilter
 from ontary.typesys import PropertyType
 
 DEFAULT_READ_LIMIT = 1000
@@ -24,11 +26,9 @@ DEFAULT_READ_LIMIT = 1000
 Omitting ``limit`` returns a ``Page`` of at most this many rows. Passing
 ``limit=None`` is the explicit opt-in to the unbounded list form.
 
-Ordered pages are a scale caveat: every page materializes and sorts the entire
-object type, regardless of ``limit`` or ``where`` selectivity. In the measured
-20,000-row case, ``limit=10`` read all 20,000 rows with ``order_by`` versus 500
-without it; that is O(N log N) work per ordered page and O(N² log N) for a full
-ordered walk.
+Ordered pages materialize and sort the entire prefiltered stream, regardless
+of ``limit``. Permissive filters and wrapper stores may still fetch the whole
+object type; sorting costs O(N log N) per page for the fetched population.
 """
 
 _UNSET_LIMIT = object()
@@ -183,14 +183,17 @@ def _sort_entries(
 
 
 def _read_all_paged_rows(
-    query: _QueryHost, obj_type: str, batch_size: int
+    query: _QueryHost, obj_type: str, batch_size: int,
+    row_filter: RowFilter | None = None,
+    *, scope_cache: _ScopeReadCache | None = None,
 ) -> list[tuple[str | None, StoredObject]]:
     cursor: str | None = None
     entries: list[tuple[str | None, StoredObject]] = []
     while True:
-        batch = query._store.read_page(
-            obj_type, after_key=cursor, batch=batch_size
-        )
+        batch = _fetch_page(query, obj_type, row_filter, cursor, batch_size)
+        if scope_cache is not None:
+            for paged_row in batch:
+                scope_cache._prime(paged_row.obj)
         entries.extend((paged_row.key, paged_row.obj) for paged_row in batch)
         if len(batch) < batch_size:
             return entries
@@ -221,18 +224,42 @@ def _unbounded_results(
     scope_cache: _ScopeReadCache,
     stop_after: int | None,
 ) -> list[StoredObject]:
-    rows = query._store.read_all(obj_type)
+    row_filter = build_row_filter(
+        query._registry, query._policy, consumer, obj_type, where_matcher,
+    )
+    batch_size = DEFAULT_BATCH
+    if stop_after is not None:
+        batch_size = stop_after if filter_is_exact(query._policy, obj_type) else max(
+            stop_after, DEFAULT_BATCH
+        )
+
+    def _rows() -> Iterator[StoredObject]:
+        cursor: str | None = None
+        while True:
+            batch = _fetch_page(query, obj_type, row_filter, cursor, batch_size)
+            if scope_cache is not None:
+                for paged_row in batch:
+                    scope_cache._prime(paged_row.obj)
+            for paged_row in batch:
+                yield paged_row.obj
+            if len(batch) < batch_size:
+                return
+            cursor = batch[-1].key
+
+    rows = _rows()
     if order_spec is not None:
         ordered = _sort_entries(query, 
             obj_type,
             [(None, row) for row in rows],
             order_spec,
         )
-        rows = [row for _key, row in ordered]
+        rows = (row for _key, row in ordered)
     # E1: the generator makes the bound count yielded rows by construction,
     # so there is nowhere to write a drifting "rows reached" counter.
     def _selected() -> Iterator[StoredObject]:
         for row in rows:
+            if scope_cache is not None:
+                scope_cache._prime(row)
             if where_matcher is not None and not where_matcher(row.payload):
                 continue
             if not query._visible(consumer, row, scope_cache=scope_cache):
@@ -260,11 +287,19 @@ def _row_id_page(
     # that row exists. The peek runs after `where` and `_visible`, so
     # hidden rows never count, and the peeked row is never redacted or
     # returned.
-    batch_size = max(limit + 1, DEFAULT_BATCH)
+    row_filter = build_row_filter(
+        query._registry, query._policy, consumer, obj_type, where_matcher,
+    )
+    batch_size = limit + 1 if filter_is_exact(query._policy, obj_type) else max(
+        limit + 1, DEFAULT_BATCH
+    )
     cursor = after
     kept: list[tuple[str, StoredObject]] = []
     while True:
-        batch = query._store.read_page(obj_type, after_key=cursor, batch=batch_size)
+        batch = _fetch_page(query, obj_type, row_filter, cursor, batch_size)
+        if scope_cache is not None:
+            for paged_row in batch:
+                scope_cache._prime(paged_row.obj)
         for paged_row in batch:
             cursor = paged_row.key
             if (
@@ -312,17 +347,31 @@ def _ordered_page(
     after: str | None,
     scope_cache: _ScopeReadCache,
 ) -> Page:
-    # The store cursor still validates against the store's row-id stream;
-    # the complete stream is then sorted in Python for this query. This
+    # A cursor in the filtered stream is already known to be current;
+    # the filtered stream is then sorted in Python for this query. This
     # keeps store-side ordering unchanged while making the returned
     # cursor a real opaque key for the last ordered row.
-    if after is not None:
-        query._store.read_page(obj_type, after_key=after, batch=1)
-
+    row_filter = build_row_filter(
+        query._registry, query._policy, consumer, obj_type, where_matcher,
+    )
+    batch_size = limit + 1 if filter_is_exact(query._policy, obj_type) else max(
+        limit + 1, DEFAULT_BATCH
+    )
+    entries = _read_all_paged_rows(
+        query, obj_type, batch_size, row_filter, scope_cache=scope_cache,
+    )
+    if after is not None and not any(key == after for key, _row in entries):
+        # A cursor from another where/scope may still be current. Recompute
+        # over today's unfiltered stream to preserve its resume position and
+        # the distinction between a stale cursor and a valid hidden row.
+        _fetch_page(query, obj_type, None, after, 1)
+        entries = _read_all_paged_rows(
+            query, obj_type, batch_size, scope_cache=scope_cache,
+        )
     entries = _sort_entries(
             query,
             obj_type,
-        _read_all_paged_rows(query, obj_type, max(limit, DEFAULT_BATCH)),
+        entries,
         order_spec,
     )
     if after is not None:
@@ -339,6 +388,8 @@ def _ordered_page(
 
     kept: list[tuple[str | None, StoredObject]] = []
     for key, row in entries:
+        if scope_cache is not None:
+            scope_cache._prime(row)
         if where_matcher is not None and not where_matcher(row.payload):
             continue
         if not query._visible(consumer, row, scope_cache=scope_cache):

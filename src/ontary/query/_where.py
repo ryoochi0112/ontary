@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, NoReturn
 
@@ -28,7 +28,19 @@ It is not in `_WHERE_OPERATORS`, so ``{"and": ...}`` from a caller is still
 """
 
 _WhereClause = tuple[str, PropertyType, str, Any]
-_WhereMatcher = Callable[[dict[str, Any]], bool]
+
+
+@dataclass(frozen=True)
+class CompiledWhere:
+    """Validated clauses shared by the Python judge and storage prefilter."""
+
+    clauses: tuple[_WhereClause, ...]
+
+    def __call__(self, payload: dict[str, Any]) -> bool:
+        return _evaluate_where(payload, self.clauses)
+
+
+_WhereMatcher = CompiledWhere
 
 
 _NormalizedCondition = tuple[str, str, Any]
@@ -407,7 +419,7 @@ def _compile_where_clause(
 
 def _compile_where(
     registry: OntologyRegistry, obj_type: str, where: _NormalizedWhere | None
-) -> _WhereMatcher | None:
+) -> CompiledWhere | None:
     """Validate operator clauses and compile them into one row matcher.
 
     Callers invoke this only after the existing unknown-field and hidden-
@@ -426,5 +438,4 @@ def _compile_where(
         for field, condition in where
     ]
 
-    frozen_clauses = tuple(clauses)
-    return lambda payload: _evaluate_where(payload, frozen_clauses)
+    return CompiledWhere(tuple(clauses))
