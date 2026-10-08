@@ -44,7 +44,7 @@ from typing import Any
 
 from ontary.audit import AuditEntry, WriteRecord
 from ontary.meta import Cardinality, OntologyRegistry
-from ontary.store._filter import RowFilter
+from ontary.store._filter import SQLITE_DOMAIN, BindDomain, RowFilter
 from ontary.store._shared import (
     AuditRowFields,
     StoreClock,
@@ -77,6 +77,8 @@ class StoreCore(abc.ABC):
     """Shared base of every `Store` backend: the public write methods, the
     clock, and write capture live here once; backends implement the abstract
     transaction and storage steps."""
+
+    bind_domain: BindDomain = SQLITE_DOMAIN
 
     def __init__(
         self,

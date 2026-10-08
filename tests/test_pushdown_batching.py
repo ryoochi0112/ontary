@@ -13,6 +13,7 @@ from ontary.query import GuardedQuery
 from ontary.scope import DirectProperty, ScopePolicy, SelfScope
 from ontary.security import Consumer
 from ontary.store import DEFAULT_BATCH, InMemoryStore, ObjectStore, Source
+from ontary.store._filter import BindDomain
 
 SRC = Source(source_system="batching-test")
 READER = Consumer(actor_id="reader", role="Reader", scope_level="team",
@@ -70,6 +71,20 @@ def _record_pages(monkeypatch, store):
 
         monkeypatch.setattr(store, name, record)
     return calls
+
+
+@pytest.mark.parametrize("path", ["page", "exists"])
+def test_operand_outside_store_domain_uses_default_batches(data, monkeypatch, path):
+    backend, registry, raw, store = data
+    monkeypatch.setattr(raw, "bind_domain", BindDomain(("iso8859-1",)))
+    query = _query(registry, store)
+    calls = _record_pages(monkeypatch, store)
+    if path == "exists":
+        assert not query.exists(READER, "Item", {"status": "中"})
+    else:
+        assert query.get_objects(READER, "Item", {"status": "中"}, limit=2).items == []
+    method = "read_page" if backend == "wrapper" else "read_page_filtered"
+    assert calls == [(method, None, DEFAULT_BATCH)]
 
 
 @pytest.mark.parametrize("path", ["page", "ordered", "exists"])

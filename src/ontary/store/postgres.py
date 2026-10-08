@@ -98,6 +98,20 @@ def _psycopg() -> Any:
     return psycopg
 
 
+def _bind_domain(client_encoding: str, server_encoding: str) -> BindDomain:
+    """Intersect the client codec with the server's representable text."""
+    psycopg = _psycopg()
+    from psycopg._encodings import pg2pyenc
+
+    if server_encoding == "SQL_ASCII":
+        return BindDomain((client_encoding,))
+    try:
+        server_codec = pg2pyenc(server_encoding.encode())
+    except psycopg.NotSupportedError:
+        server_codec = "ascii"
+    return BindDomain(tuple(dict.fromkeys((client_encoding, server_codec))))
+
+
 _SCHEMA_SQL = _sql.render_schema("postgres")
 """Fresh-create Postgres DDL rendered from the shared table specs."""
 
@@ -192,6 +206,9 @@ class PostgresStore(StoreCore):
         self._conn = psycopg.connect(dsn, autocommit=False)
         self._txn_depth = 0
         self._init_schema()
+        with self._conn.cursor() as cur:
+            cur.execute("SHOW server_encoding")
+            self.bind_domain = _bind_domain(self._conn.info.encoding, cur.fetchone()[0])
         # Session-scoped, not per-transaction: not every read this backend makes
         # opens one, and an unset variable means the policies match nothing --
         # which is the right failure but a useless one to hit on every SELECT.
@@ -420,7 +437,7 @@ class PostgresStore(StoreCore):
         self, obj_type: str, row_filter: RowFilter
     ) -> list[StoredObject]:
         fragment, params = compile_filter(
-            row_filter, "postgres", BindDomain((self._conn.info.encoding,))
+            row_filter, "postgres", self.bind_domain
         )
         template = OBJECT_FILTERED_ALL_SELECT_TEMPLATE.replace("{filter}", fragment)
         rows = _sql.execute(
@@ -477,7 +494,7 @@ class PostgresStore(StoreCore):
         self, obj_type: str, row_filter: RowFilter, after_row_id: int | None, batch: int
     ) -> list[PagedRow]:
         fragment, params = compile_filter(
-            row_filter, "postgres", BindDomain((self._conn.info.encoding,))
+            row_filter, "postgres", self.bind_domain
         )
         template = OBJECT_FILTERED_PAGE_SELECT_TEMPLATE.replace("{filter}", fragment)
         rows = _sql.execute(

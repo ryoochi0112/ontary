@@ -11,7 +11,6 @@ from ontary.scope import CustomResolver, DirectProperty, ScopePolicy, SelfScope,
 from ontary.security import Consumer
 from ontary.store._core import StoreCore
 from ontary.store._filter import (
-    SQLITE_DOMAIN,
     RowFilter,
     ScopeTerm,
     WhereTerm,
@@ -51,7 +50,7 @@ def store_filter_is_exact(
         and isinstance(store, StoreCore)
         and type(store)._filtered_page_rows is not StoreCore._filtered_page_rows
         and filter_is_exact(policy, obj_type)
-        and filter_is_selective(row_filter, SQLITE_DOMAIN)
+        and filter_is_selective(row_filter, store.bind_domain)
     )
 
 

@@ -110,6 +110,7 @@ class ObjectStore(SqliteSchemaGate, StoreCore):
         before refusing the operation. The default matches `sqlite3.connect`.
         """
         super().__init__(registry, tenant=tenant)
+        self.bind_domain = SQLITE_DOMAIN
         self._conn = sqlite3.connect(path, timeout=busy_timeout)
         self._conn.row_factory = sqlite3.Row
         self._conn.create_function("ontary_instant", 1, _ontary_instant, deterministic=True)
@@ -297,7 +298,7 @@ class ObjectStore(SqliteSchemaGate, StoreCore):
     def _filtered_all_rows(
         self, obj_type: str, row_filter: RowFilter
     ) -> list[StoredObject]:
-        fragment, params = compile_filter(row_filter, "sqlite", SQLITE_DOMAIN)
+        fragment, params = compile_filter(row_filter, "sqlite", self.bind_domain)
         template = OBJECT_FILTERED_ALL_SELECT_TEMPLATE.replace("{filter}", fragment)
         rows = _sql.execute(
             self._conn,
@@ -364,7 +365,7 @@ class ObjectStore(SqliteSchemaGate, StoreCore):
     def _filtered_page_rows(
         self, obj_type: str, row_filter: RowFilter, after_row_id: int | None, batch: int
     ) -> list[PagedRow]:
-        fragment, params = compile_filter(row_filter, "sqlite", SQLITE_DOMAIN)
+        fragment, params = compile_filter(row_filter, "sqlite", self.bind_domain)
         template = OBJECT_FILTERED_PAGE_SELECT_TEMPLATE.replace("{filter}", fragment)
         rows = _sql.execute(
             self._conn,
