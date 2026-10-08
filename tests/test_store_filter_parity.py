@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import pytest
-from _filter_cases import FAMILIES, FILTER_CASES, INJECTION, MISSING, FilterCase
+from _filter_cases import FAMILIES, FILTER_CASES, INJECTION, MISSING, SURROGATES, FilterCase
 
 from ontary.meta import ObjectTypeDef, OntologyRegistry, PropertyDef
 from ontary.query._where import _evaluate_where_clause, _WhereClause
@@ -185,3 +185,36 @@ def test_where_operand_injection(populated_store: PopulatedStore) -> None:
     assert _walk(store, "InjectionRows", RowFilter(where=(
         WhereTerm("value", "str", "eq", INJECTION),))) == expected
     assert store._conn.execute("SELECT count(*) FROM objects").fetchone()[0] == before
+
+
+@pytest.mark.parametrize("case", [case for case in FILTER_CASES if "surrogate" in case.name],
+                         ids=lambda case: case.name)
+def test_surrogate_where_python_result_parity(populated_store: PopulatedStore, case: FilterCase) -> None:
+    rows = populated_store.payloads[case.family]
+    selected = _walk(populated_store.store, case.family, RowFilter(where=(case.term,)))
+    expected = {obj_id for obj_id, payload in rows.items()
+                if _evaluate_where_clause(payload, _clause(case.term))}
+    assert expected <= selected
+    actual = {obj_id for obj_id in selected
+              if _evaluate_where_clause(rows[obj_id], _clause(case.term))}
+    assert actual == expected
+
+
+@pytest.mark.parametrize("scope_id", SURROGATES)
+@pytest.mark.parametrize("rules", [(("self", None),), (("prop", "value"),),
+    (("prop", "value"), ("self", None)), (("self", None), ("prop", "value"))])
+def test_surrogate_scope_python_result_parity(populated_store: PopulatedStore, rules, scope_id: str) -> None:
+    policy = ScopePolicy(levels=["team"], rules={"ScopeRows": [
+        SelfScope(level="team") if kind == "self" else
+        DirectProperty(level="team", property_name=field) for kind, field in rules
+    ]})
+    consumer = Consumer(actor_id="reader", role="Reader", scope_level="team",
+                        scope_id=scope_id, kind="human")
+    def visible(obj_id: str) -> bool:
+        return covers_scope(policy, consumer, resolve_owning_scope(
+            policy, populated_store.store, "ScopeRows", obj_id))
+    expected = {obj_id for obj_id in populated_store.payloads["ScopeRows"] if visible(obj_id)}
+    selected = _walk(populated_store.store, "ScopeRows",
+                     RowFilter(scope=ScopeTerm(rules, scope_id, False)))
+    assert expected <= selected
+    assert {obj_id for obj_id in selected if visible(obj_id)} == expected == set()

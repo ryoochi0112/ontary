@@ -497,3 +497,54 @@ def test_stored_nonfinite_payloads_are_permissive(
     # pass that entire row through, even a probe of a different field.
     assert "1" in ids
     assert ("normal" in ids) == ("normal" in expected)
+
+
+@pytest.mark.parametrize("dialect", ["sqlite", "postgres"])
+@pytest.mark.parametrize("value", ["\ud800", "\udfff", "prefix\ud800suffix", "nul\x00tail"])
+@pytest.mark.parametrize("op", ["eq", "ne", "contains", "gt", "gte", "lt", "lte"])
+def test_unbindable_where_strings_are_not_bound(dialect: _sql.Dialect, value: str, op: str) -> None:
+    for term in (WhereTerm(value, "str", op, "open"),
+                 WhereTerm("status", "str", op, value)):
+        assert compile_filter(RowFilter(where=(term,)), dialect) == ("TRUE", [])
+
+
+@pytest.mark.parametrize("dialect", ["sqlite", "postgres"])
+@pytest.mark.parametrize("value", ["\ud800", "\udfff", "nul\x00tail"])
+@pytest.mark.parametrize("items", [[None, "open"], ["open", None]])
+def test_unbindable_in_item_is_not_bound(dialect: _sql.Dialect, value: str, items) -> None:
+    for operands in ([value, *items], [*items, value]):
+        term = WhereTerm("status", "str", "in", operands)
+        assert compile_filter(RowFilter(where=(term,)), dialect) == ("TRUE", [])
+
+
+@pytest.mark.parametrize("dialect", ["sqlite", "postgres"])
+@pytest.mark.parametrize("value", ["\ud800", "\udfff", "nul\x00tail"])
+def test_unbindable_nested_and_strings_are_not_bound(dialect: _sql.Dialect, value: str) -> None:
+    unsafe = WhereTerm("status", "str", "eq", value)
+    nested = WhereTerm("status", "str", "and", (
+        WhereTerm("status", "str", "and", (unsafe,)),))
+    assert compile_filter(RowFilter(where=(nested,)), dialect) == ("((TRUE))", [])
+    safe = WhereTerm("status", "str", "eq", "open")
+    fragment, params = compile_filter(RowFilter(where=(
+        WhereTerm("status", "str", "and", (nested, safe)),)), dialect)
+    safe_fragment, safe_params = compile_filter(RowFilter(where=(safe,)), dialect)
+    assert fragment == f"(((TRUE)) AND {safe_fragment})"
+    assert params == safe_params
+
+
+@pytest.mark.parametrize("dialect", ["sqlite", "postgres"])
+@pytest.mark.parametrize("value", ["\ud800", "\udfff", "prefix\ud800suffix", "nul\x00tail"])
+def test_unbindable_scope_strings_are_not_bound(dialect: _sql.Dialect, value: str) -> None:
+    for scope in (ScopeTerm((("self", None),), value, False),
+                  ScopeTerm((("prop", "team_id"),), value, False),
+                  ScopeTerm((("prop", value), ("self", None)), "owned", False),
+                  ScopeTerm((("self", None), ("prop", value)), "owned", False)):
+        assert compile_filter(RowFilter(scope=scope), dialect) == ("TRUE", [])
+
+
+def test_json_loaded_surrogate_operand_is_not_bound() -> None:
+    value = json.loads('"\\ud800"')
+    assert value == "\ud800"
+    for dialect in ("sqlite", "postgres"):
+        assert compile_filter(RowFilter(where=(WhereTerm("status", "str", "eq", value),)),
+                              dialect) == ("TRUE", [])

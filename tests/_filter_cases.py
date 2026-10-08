@@ -10,6 +10,7 @@ from ontary.store._filter import WhereTerm
 from ontary.typesys import PropertyType
 
 INJECTION = "x'); DROP TABLE objects; --"
+SURROGATES = ("\ud800", "\udfff", "prefix\ud800suffix")
 MISSING = object()
 
 
@@ -140,4 +141,20 @@ def _grid() -> tuple[FilterCase, ...]:
     return tuple(cases)
 
 
-FILTER_CASES = _grid()
+def _surrogate_cases() -> tuple[FilterCase, ...]:
+    cases = []
+    # Unbindable operands deliberately widen the entire clause to TRUE.
+    # These new cases promise containment, with Python deciding final matches.
+    for family in ("str", "choices", "json-str"):
+        prop_type, values, _ = FAMILIES[family]
+        permissive_values = tuple(StoredValue(v.label, v.value, False) for v in values)
+        for i, value in enumerate(SURROGATES):
+            for op, operand in (("eq", value), ("ne", value), ("contains", value),
+                                ("in", ["open", value, None])):
+                cases.append(FilterCase(f"{family}-{op}-surrogate-{i}", family,
+                                        WhereTerm("value", prop_type, op, operand),
+                                        permissive_values))
+    return tuple(cases)
+
+
+FILTER_CASES = _grid() + _surrogate_cases()

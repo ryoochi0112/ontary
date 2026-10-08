@@ -336,3 +336,25 @@ def test_fetch_counter_steps_and_restoration(seeded: SeededStore) -> None:
             raise RuntimeError("restore")
     assert all(getattr(store, name) == original for name, original in originals.items())
     assert {name: store.__dict__[name] for name in names if name in store.__dict__} == instance_originals
+
+
+@pytest.mark.parametrize("limit", [None, 5])
+@pytest.mark.parametrize("probe", ["operand", "in", "scope_id"])
+@pytest.mark.parametrize("shape", ["direct", "self", "both"])
+def test_surrogate_bind_safety(seeded: SeededStore, reference: SeededStore,
+                               limit: int | None, probe: str, shape: str) -> None:
+    consumer = _consumer("\ud800" if probe == "scope_id" else
+                         str(MATCHES[0]) if shape == "self" else "owned")
+    where = ({"status": "\ud800"} if probe == "operand" else
+             {"status": {"in": ["\ud800"]}} if probe == "in" else None)
+    expected = reference.query("ScopeRows", shape).get_objects(
+        consumer, "ScopeRows", where, limit=limit)
+    result = seeded.query("ScopeRows", shape).get_objects(
+        consumer, "ScopeRows", where, limit=limit)
+    rows = result.items if limit is not None else result
+    expected_rows = expected.items if limit is not None else expected
+    assert _ids(rows) == _ids(expected_rows) == []
+    if limit is not None:
+        assert result.has_more == expected.has_more
+        assert not result.has_more
+        assert result.next_cursor is None and expected.next_cursor is None

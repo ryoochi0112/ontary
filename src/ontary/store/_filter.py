@@ -60,6 +60,19 @@ _ISO_INSTANT = (
 )
 
 
+def _unbindable(value: object) -> bool:
+    """Strings outside both drivers' text domain must be judged in Python."""
+    if not isinstance(value, str):
+        return False
+    if "\x00" in value:
+        return True
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        return True
+    return False
+
+
 def compile_filter(f: RowFilter, dialect: _sql.Dialect) -> tuple[str, list[Any]]:
     """Return fixed SQL with bind markers, and parameters in marker order."""
     parts: list[str] = []
@@ -80,9 +93,7 @@ def _compile_scope(scope: ScopeTerm, dialect: _sql.Dialect) -> tuple[str, list[A
     fallback = "TRUE" if scope.climb_possible else "FALSE"
     if not scope.rules:
         return fallback, []
-    if "\x00" in scope.scope_id or any(
-        field is not None and "\x00" in field for _, field in scope.rules
-    ):
+    if _unbindable(scope.scope_id) or any(_unbindable(field) for _, field in scope.rules):
         return "TRUE", []
     parts: list[str] = []
     params: list[Any] = []
@@ -235,12 +246,12 @@ def _comparison(term: WhereTerm, kind: str, dialect: _sql.Dialect) -> tuple[str,
 def _compile_term(term: WhereTerm, dialect: _sql.Dialect) -> tuple[str, list[Any]]:
     if term.op == "and":
         return _combine(term.operand, dialect, " AND ")
-    # PostgreSQL text parameters cannot contain NUL. Let Python judge these
-    # clauses on both backends, without binding the field or operand.
-    if "\x00" in term.field or (isinstance(term.operand, str) and "\x00" in term.operand):
+    # Let Python judge strings outside the drivers' bind domain, without
+    # binding any field or operand from the affected clause.
+    if _unbindable(term.field) or _unbindable(term.operand):
         return "TRUE", []
     if term.op == "in":
-        if any(isinstance(item, str) and "\x00" in item for item in term.operand):
+        if any(_unbindable(item) for item in term.operand):
             return "TRUE", []
         return _combine(
             (WhereTerm(term.field, term.prop_type, "eq", item) for item in term.operand),
