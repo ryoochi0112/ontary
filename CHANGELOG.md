@@ -31,6 +31,11 @@ you**.
 - When a filtered read hits a database error, the query retries an unfiltered
   read for the same rows instead of raising. On Postgres, the fallback runs under
   a savepoint, preserving the caller's transaction and earlier writes (#68).
+- Ingest reads in batches, so it costs a constant number of reads per 500 records
+  (#69).
+- `traverse` reads its targets in one statement, and `traverse_many` costs a
+  constant number of reads per call (#69).
+- The BOM example explodes its tree in a constant number of reads per level (#69).
 
 ### Changed
 
@@ -50,6 +55,14 @@ you**.
   shared write and read path, `StoreCore` (#67). Each backend supplies only its
   storage steps, so a write rule is fixed in one place. The public `Store` surface,
   the SQLite and Postgres schema, and `SCHEMA_VERSION` are unchanged.
+- Ingest is all-or-nothing on unexpected errors. Before, rows written earlier in the
+  call stayed committed; per-record refusals still leave valid records committed
+  (#69).
+- An identical re-ingest of an object writes no row and keeps its original
+  `valid_from` and `Source` (#69).
+- Typed `traverse` and `traverse_many` now accept anchor models whose primary key is
+  not a `str` (for example an `int` or `Enum` key). Typed `traverse` used to reject
+  them (#69).
 
 ### Fixed
 
@@ -76,6 +89,14 @@ you**.
   backend. `ObjectStore` and `PostgresStore` used to check only the newest row.
   This only differs when an object has more than one live row, which the SQL unique
   index forbids (#67).
+
+### Added
+
+- `traverse_many` on `OntologyClient` (typed and string forms), `BoundQuery`, and
+  `ActionContext` (#69).
+- `IngestReport.unchanged_ids` (#69).
+- `Store.read_current_many`, `links_from_many`, `links_to_many`, `upsert_objects`,
+  and `create_links` (#69).
 
 ## [0.25.0] — 2026-10-07
 

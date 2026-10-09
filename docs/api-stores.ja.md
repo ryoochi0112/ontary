@@ -278,13 +278,19 @@ client.ingest_links(
 `Ticket.__name__` を渡してください。宣言した `api_name` が異なる場合はそちらを渡します。
 
 `bulk_upsert` と `bulk_link` はエンジン層であり、常に `IngestReport` を返します。
-クライアントのメソッドはバッチを最後まで処理するため、別のレコードが失敗しても
-有効なレコードはコミットされたままです。クライアントはデフォルトで失敗時に
+クライアントのメソッドはバッチを最後まで処理します。各呼び出し（`ingest`、
+`ingest_links`、`bulk_upsert`、`bulk_link`）は 1 つのトランザクションで実行します。
+レコード単位の拒否があっても、有効なレコードはコミットされたままです。オブジェクトの
+拒否コードは `INVALID_RECORD`、`OWNED_PROPERTY_REFUSED`、`TRANSITION_NOT_ALLOWED`、
+`RULE_VIOLATED` です。リンクの拒否コードは `CARDINALITY_VIOLATION` と
+`LINK_ENDPOINT_NOT_FOUND` です。それ以外のエラーは呼び出し全体をロールバックするため、
+先に処理した行もコミットされません。クライアントはデフォルトで失敗時に
 `IngestError` を送出します。`.report` に完全なレポートが入り、メッセージには
 コミット済みと失敗したレコード数が含まれます。`on_error="report"` を渡すと、
 送出せずにレポートを返す従来の動作になります。
 
-`IngestReport` — `inserted_ids: list[str]`、`errors: list[IngestError]`。レコードは
+`IngestReport` — `inserted_ids: list[str]`、`unchanged_ids: list[str]`、
+`errors: list[IngestError]`。レコードは
 宣言された形状に対して検証されます。主キーの欠落、必須プロパティの欠落、未知の
 プロパティ、型の不一致は `INVALID_RECORD` になります。オントロジー所有の型への
 書き込みは `OWNED_TYPE_REFUSED`、オントロジー所有プロパティの指定は
@@ -293,6 +299,15 @@ client.ingest_links(
 他のペアはそのまま登録されるため、オブジェクトをリンクより先に ingest してください。
 リンクの読み込みの再実行は冪等です。有効なリンクと同一のペアは no-op になり、
 `inserted_ids` にはそのまま含まれるため、2 回目の実行は 1 回目と同じレポートを返します。
+
+オブジェクトを同一内容で再 ingest しても、行は書き込まれません。既存の行は元の
+`valid_from` と `Source` を保ちます。変更のないレコード（オブジェクトもリンクも）は
+`unchanged_ids` に入り、`inserted_ids` にも含まれます。等価性は各値の保存された表記で
+比較します。同じ時刻でもオフセットの表記が異なる datetime は、変更として扱います。
+
+1 回の呼び出しは、実行中ずっとテナントの書き込みロックを保持します。Postgres では
+アドバイザリロック、SQLite では `BEGIN IMMEDIATE` です。非常に大きなロードは、
+複数の呼び出しに分けてください。
 
 `date` / `datetime` の値は、ISO-8601 文字列または `date` / オフセット付き
 `datetime` オブジェクトとして書き込みます。naive な `datetime` オブジェクトは
