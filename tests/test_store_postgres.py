@@ -31,7 +31,10 @@ from ontary import (
 )
 from ontary.client import OntologyRuntime
 from ontary.errors import ConflictError, VisibilityError
-from ontary.store import SCHEMA_VERSION, Store
+from ontary.meta import ObjectTypeDef, OntologyRegistry, PropertyDef
+from ontary.query import GuardedQuery
+from ontary.scope import ScopePolicy
+from ontary.store import DEFAULT_BATCH, SCHEMA_VERSION, InMemoryStore, Store
 
 DSN = os.environ.get("ONTARY_TEST_POSTGRES_DSN")
 
@@ -87,6 +90,69 @@ def _dsn_for(schema: str) -> str:
     assert DSN is not None
     separator = "&" if "?" in DSN else "?"
     return f"{DSN}{separator}options=-csearch_path%3D{schema}"
+
+
+def test_latin1_server_with_utf8_client_keeps_reads_usable(monkeypatch) -> None:
+    import psycopg
+    from psycopg import sql
+    from psycopg.conninfo import make_conninfo
+
+    from ontary.store.postgres import PostgresStore
+
+    registry = OntologyRegistry()
+    registry.register_object_type(ObjectTypeDef(
+        api_name="Item", display_name="Item", description="Encoding domain", layer="L0",
+        primary_key="id", properties=[
+            PropertyDef(name="id", type="str"), PropertyDef(name="s", type="str"),
+        ],
+    ))
+    registry.validate()
+    policy = ScopePolicy(levels=["org"], min_n=1, unscoped_types={"Item"})
+    policy.validate(registry)
+    consumer = Consumer(actor_id="reader", role="Reader", scope_level="org",
+                        scope_id="org-1", kind="human")
+    reference = InMemoryStore(registry)
+    name = f"ontary_test_{uuid.uuid4().hex[:12]}"
+    assert DSN is not None
+    with psycopg.connect(DSN, autocommit=True) as admin:
+        try:
+            admin.execute(sql.SQL(
+                "CREATE DATABASE {} ENCODING 'LATIN1' "
+                "LC_COLLATE 'C' LC_CTYPE 'C' TEMPLATE template0"
+            ).format(sql.Identifier(name)))
+        except psycopg.errors.InsufficientPrivilege:
+            pytest.skip("Postgres role lacks CREATEDB for the LATIN1 database test")
+        store = None
+        try:
+            dsn = make_conninfo(DSN, dbname=name, client_encoding="UTF8",
+                               options="-csearch_path=public")
+            store = PostgresStore(registry, dsn)
+            assert store._conn.info.encoding == "utf-8"
+            assert "iso8859-1" in store.bind_domain.encodings
+            for payload in ({"id": "1", "s": "plain"}, {"id": "2", "s": "café"}):
+                reference.insert("Item", payload, SRC)
+                store.insert("Item", payload, SRC)
+            query = GuardedQuery(store, registry, policy)
+            expected = GuardedQuery(reference, registry, policy).get_objects(
+                consumer, "Item", where={"s": "中"}, limit=2,
+            )
+            batches = []
+            original = store.read_page_filtered
+
+            def record(*args, **kwargs):
+                batches.append(kwargs["batch"])
+                return original(*args, **kwargs)
+
+            monkeypatch.setattr(store, "read_page_filtered", record)
+            page = query.get_objects(consumer, "Item", where={"s": "中"}, limit=2)
+            assert page.items == expected.items
+            assert batches == [DEFAULT_BATCH]
+            assert query.get_objects(consumer, "Item", where={"s": "中"}).items == expected.items
+            assert len(query.get_objects(consumer, "Item").items) == 2
+        finally:
+            if store is not None:
+                store.close()
+            admin.execute(sql.SQL("DROP DATABASE {}").format(sql.Identifier(name)))
 
 
 # -- the schema stamp ---------------------------------------------------------

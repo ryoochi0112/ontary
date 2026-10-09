@@ -449,6 +449,7 @@ class _ScopeReadCache:
     Each operation has a separate mapping so reads with different semantics
     cannot share an entry. Link results are stored immutably and copied back
     to preserve the store methods' fresh-list behaviour.
+    Priming ensures the fetched version is the one judged by scope resolution.
     """
 
     def __init__(self) -> None:
@@ -458,6 +459,10 @@ class _ScopeReadCache:
         self._links_to: dict[tuple[str, str], tuple[str, ...]] = {}
         self._links_from_asof: dict[tuple[str, str, str], tuple[str, ...]] = {}
         self._links_to_asof: dict[tuple[str, str, str], tuple[str, ...]] = {}
+
+    def _prime(self, row: StoredObject) -> None:
+        """Seed this row as current so its scope uses the fetched version."""
+        self._current[(row.lineage.object_type, row.lineage.object_id)] = row
 
     def read_current(
         self, store: Store, obj_type: str, obj_id: str

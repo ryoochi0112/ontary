@@ -31,6 +31,15 @@ from ontary.errors import ConflictError
 from ontary.meta import OntologyRegistry
 from ontary.store import _sql
 from ontary.store._core import StoreCore
+from ontary.store._filter import (
+    OBJECT_FILTERED_ALL_SELECT_TEMPLATE,
+    OBJECT_FILTERED_PAGE_SELECT_TEMPLATE,
+    SQLITE_DOMAIN,
+    RowFilter,
+    _ontary_instant,
+    compile_filter,
+    compile_row_filter,
+)
 from ontary.store._shared import (
     AuditRowFields,
     decode_audit_entry,
@@ -87,8 +96,10 @@ class ObjectStore(SqliteSchemaGate, StoreCore):
         before refusing the operation. The default matches `sqlite3.connect`.
         """
         super().__init__(registry, tenant=tenant)
+        self.bind_domain = SQLITE_DOMAIN
         self._conn = sqlite3.connect(path, timeout=busy_timeout)
         self._conn.row_factory = sqlite3.Row
+        self._conn.create_function("ontary_instant", 1, _ontary_instant, deterministic=True)
         self._txn_depth = 0
         self._init_schema()
 
@@ -270,6 +281,33 @@ class ObjectStore(SqliteSchemaGate, StoreCore):
         ).rows
         return [self._row_to_stored(row) for row in rows]
 
+    def prefilter_exact(self, row_filter: RowFilter) -> bool:
+        return compile_row_filter(row_filter, "sqlite", self.bind_domain).exact
+
+    def _filtered_all_rows(
+        self, obj_type: str, row_filter: RowFilter
+    ) -> list[StoredObject]:
+        fragment, params = compile_filter(row_filter, "sqlite", self.bind_domain)
+
+        def read() -> list[StoredObject]:
+            template = OBJECT_FILTERED_ALL_SELECT_TEMPLATE.replace("{filter}", fragment)
+            rows = _sql.execute(
+                self._conn,
+                _sql.render(template, "sqlite"),
+                [obj_type, self._tenant, *params],
+                dialect="sqlite",
+            ).rows
+            return [self._row_to_stored(row) for row in rows]
+
+        return _sql.prefilter(
+            self._conn,
+            read,
+            lambda: self._all_rows(obj_type),
+            dialect="sqlite",
+            errors=(sqlite3.Error, ValueError, OverflowError),
+            on_fallback=lambda: self._prefilter_fallback(obj_type),
+        )
+
     def _page_token_row_id(self, obj_type: str, token: str) -> int | None:
         """Resolve an untrusted `after_key` PAGE TOKEN to the `row_id` it
         was issued for, via `idx_objects_page_token`'s unique index -- one
@@ -309,30 +347,48 @@ class ObjectStore(SqliteSchemaGate, StoreCore):
         for why), resolved back to `row_id` by `_page_token_row_id` when it
         comes back as `after_key`."""
         if after_row_id is None:
-            cur = self._conn.execute(
-                """
-                SELECT * FROM objects
-                WHERE object_type = ? AND valid_to IS NULL AND tenant = ?
-                ORDER BY row_id ASC
-                LIMIT ?
-                """,
+            rows = _sql.execute(
+                self._conn,
+                _sql.render(_sql.OBJECT_PAGE_FIRST_SELECT_TEMPLATE, "sqlite"),
                 (obj_type, self._tenant, batch),
-            )
+                dialect="sqlite",
+            ).rows
         else:
-            cur = self._conn.execute(
-                """
-                SELECT * FROM objects
-                WHERE object_type = ? AND valid_to IS NULL AND row_id > ?
-                  AND tenant = ?
-                ORDER BY row_id ASC
-                LIMIT ?
-                """,
+            rows = _sql.execute(
+                self._conn,
+                _sql.render(_sql.OBJECT_PAGE_AFTER_SELECT_TEMPLATE, "sqlite"),
                 (obj_type, after_row_id, self._tenant, batch),
-            )
-        rows = cur.fetchall()
-        return [
-            PagedRow(key=row["page_token"], obj=self._row_to_stored(row)) for row in rows
-        ]
+                dialect="sqlite",
+            ).rows
+        return [PagedRow(key=row["page_token"], obj=self._row_to_stored(row)) for row in rows]
+
+    def _filtered_page_rows(
+        self, obj_type: str, row_filter: RowFilter, after_row_id: int | None, batch: int
+    ) -> list[PagedRow]:
+        fragment, params = compile_filter(row_filter, "sqlite", self.bind_domain)
+
+        def read() -> list[PagedRow]:
+            template = OBJECT_FILTERED_PAGE_SELECT_TEMPLATE.replace("{filter}", fragment)
+            rows = _sql.execute(
+                self._conn,
+                _sql.render(template, "sqlite"),
+                [
+                    obj_type, self._tenant,
+                    after_row_id if after_row_id is not None else 0,
+                    *params, batch,
+                ],
+                dialect="sqlite",
+            ).rows
+            return [PagedRow(key=row["page_token"], obj=self._row_to_stored(row)) for row in rows]
+
+        return _sql.prefilter(
+            self._conn,
+            read,
+            lambda: self._page_rows(obj_type, after_row_id, batch),
+            dialect="sqlite",
+            errors=(sqlite3.Error, ValueError, OverflowError),
+            on_fallback=lambda: self._prefilter_fallback(obj_type),
+        )
 
     # -- storage steps: links ----------------------------------------------
 
@@ -440,8 +496,10 @@ class ObjectStore(SqliteSchemaGate, StoreCore):
         )
 
     def _audit_rows(self) -> list[AuditEntry]:
-        cur = self._conn.execute(
-            "SELECT * FROM audit_log WHERE tenant = ? ORDER BY seq ASC",
+        rows = _sql.execute(
+            self._conn,
+            _sql.render(_sql.AUDIT_LOG_SELECT_TEMPLATE, "sqlite"),
             (self._tenant,),
-        )
-        return [decode_audit_entry(row) for row in cur.fetchall()]
+            dialect="sqlite",
+        ).rows
+        return [decode_audit_entry(row) for row in rows]

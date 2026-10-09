@@ -49,6 +49,14 @@ from ontary.errors import ConflictError
 from ontary.meta import OntologyRegistry
 from ontary.store import _sql
 from ontary.store._core import StoreCore
+from ontary.store._filter import (
+    OBJECT_FILTERED_ALL_SELECT_TEMPLATE,
+    OBJECT_FILTERED_PAGE_SELECT_TEMPLATE,
+    BindDomain,
+    RowFilter,
+    compile_filter,
+    compile_row_filter,
+)
 from ontary.store._shared import (
     AuditRowFields,
     decode_audit_entry,
@@ -89,6 +97,20 @@ def _psycopg() -> Any:
             raise
         raise ImportError(POSTGRES_EXTRA_HINT) from exc
     return psycopg
+
+
+def _bind_domain(client_encoding: str, server_encoding: str) -> BindDomain:
+    """Intersect the client codec with the server's representable text."""
+    psycopg = _psycopg()
+    from psycopg._encodings import pg2pyenc
+
+    if server_encoding == "SQL_ASCII":
+        return BindDomain((client_encoding,))
+    try:
+        server_codec = pg2pyenc(server_encoding.encode())
+    except psycopg.NotSupportedError:
+        server_codec = "ascii"
+    return BindDomain(tuple(dict.fromkeys((client_encoding, server_codec))))
 
 
 _SCHEMA_SQL = _sql.render_schema("postgres")
@@ -185,6 +207,9 @@ class PostgresStore(StoreCore):
         self._conn = psycopg.connect(dsn, autocommit=False)
         self._txn_depth = 0
         self._init_schema()
+        with self._conn.cursor() as cur:
+            cur.execute("SHOW server_encoding")
+            self.bind_domain = _bind_domain(self._conn.info.encoding, cur.fetchone()[0])
         # Session-scoped, not per-transaction: not every read this backend makes
         # opens one, and an unset variable means the policies match nothing --
         # which is the right failure but a useless one to hit on every SELECT.
@@ -354,8 +379,6 @@ class PostgresStore(StoreCore):
             dialect="postgres",
         )
 
-    _OBJECT_COLUMNS = ", ".join(_sql.OBJECT_COLUMNS)
-
     def _row_to_stored(self, row: tuple[Any, ...]) -> StoredObject:
         (
             _row_id,
@@ -411,6 +434,33 @@ class PostgresStore(StoreCore):
         ).rows
         return [self._row_to_stored(row) for row in rows]
 
+    def prefilter_exact(self, row_filter: RowFilter) -> bool:
+        return compile_row_filter(row_filter, "postgres", self.bind_domain).exact
+
+    def _filtered_all_rows(
+        self, obj_type: str, row_filter: RowFilter
+    ) -> list[StoredObject]:
+        fragment, params = compile_filter(row_filter, "postgres", self.bind_domain)
+
+        def read() -> list[StoredObject]:
+            template = OBJECT_FILTERED_ALL_SELECT_TEMPLATE.replace("{filter}", fragment)
+            rows = _sql.execute(
+                self._conn,
+                _sql.render(template, "postgres"),
+                [obj_type, self._tenant, *params],
+                dialect="postgres",
+            ).rows
+            return [self._row_to_stored(row) for row in rows]
+
+        return _sql.prefilter(
+            self._conn,
+            read,
+            lambda: self._all_rows(obj_type),
+            dialect="postgres",
+            errors=(_psycopg().Error,),
+            on_fallback=lambda: self._prefilter_fallback(obj_type),
+        )
+
     def _page_token_row_id(self, obj_type: str, token: str) -> int | None:
         """Resolve a cursor token to a row identity, scoped to `obj_type`;
         `None` when the token is unknown (the core refuses it).
@@ -434,28 +484,55 @@ class PostgresStore(StoreCore):
     def _page_rows(
         self, obj_type: str, after_row_id: int | None, batch: int
     ) -> list[PagedRow]:
-        with self._conn.cursor() as cur:
-            if after_row_id is None:
-                cur.execute(
-                    f"""
-                    SELECT {self._OBJECT_COLUMNS} FROM objects
-                    WHERE object_type = %s AND valid_to IS NULL AND tenant = %s
-                    ORDER BY row_id ASC LIMIT %s
-                    """,
-                    (obj_type, self._tenant, batch),
-                )
-            else:
-                cur.execute(
-                    f"""
-                    SELECT {self._OBJECT_COLUMNS} FROM objects
-                    WHERE object_type = %s AND valid_to IS NULL AND row_id > %s
-                      AND tenant = %s
-                    ORDER BY row_id ASC LIMIT %s
-                    """,
-                    (obj_type, after_row_id, self._tenant, batch),
-                )
-            rows = cur.fetchall()
-        return [PagedRow(key=str(row[9]), obj=self._row_to_stored(row)) for row in rows]
+        if after_row_id is None:
+            rows = _sql.execute(
+                self._conn,
+                _sql.render(_sql.OBJECT_PAGE_FIRST_SELECT_TEMPLATE, "postgres"),
+                (obj_type, self._tenant, batch),
+                dialect="postgres",
+            ).rows
+        else:
+            rows = _sql.execute(
+                self._conn,
+                _sql.render(_sql.OBJECT_PAGE_AFTER_SELECT_TEMPLATE, "postgres"),
+                (obj_type, after_row_id, self._tenant, batch),
+                dialect="postgres",
+            ).rows
+        page_token_idx = _sql.OBJECT_COLUMNS.index("page_token")
+        return [
+            PagedRow(key=str(row[page_token_idx]), obj=self._row_to_stored(row)) for row in rows
+        ]
+
+    def _filtered_page_rows(
+        self, obj_type: str, row_filter: RowFilter, after_row_id: int | None, batch: int
+    ) -> list[PagedRow]:
+        fragment, params = compile_filter(row_filter, "postgres", self.bind_domain)
+
+        def read() -> list[PagedRow]:
+            template = OBJECT_FILTERED_PAGE_SELECT_TEMPLATE.replace("{filter}", fragment)
+            rows = _sql.execute(
+                self._conn,
+                _sql.render(template, "postgres"),
+                [
+                    obj_type, self._tenant,
+                    after_row_id if after_row_id is not None else 0,
+                    *params, batch,
+                ],
+                dialect="postgres",
+            ).rows
+            page_token_idx = _sql.OBJECT_COLUMNS.index("page_token")
+            return [
+                PagedRow(key=str(row[page_token_idx]), obj=self._row_to_stored(row)) for row in rows
+            ]
+
+        return _sql.prefilter(
+            self._conn,
+            read,
+            lambda: self._page_rows(obj_type, after_row_id, batch),
+            dialect="postgres",
+            errors=(_psycopg().Error,),
+            on_fallback=lambda: self._prefilter_fallback(obj_type),
+        )
 
     # -- links -----------------------------------------------------------
 

@@ -37,6 +37,14 @@ _WRITE_SQL = re.compile(
     r"\b(?:INSERT\s+INTO\s+(?:objects|links|audit_log)|UPDATE\s+(?:objects|links))\b",
     re.IGNORECASE,
 )
+_READ_SQL = re.compile(
+    r"\bSELECT\b[\s\S]*?\bFROM\s+(?:objects|links|audit_log)\b",
+    re.IGNORECASE,
+)
+_READ_SQL_EXEMPT = re.compile(
+    r"\b(?:information_schema|schema_meta|set_config|pg_advisory_xact_lock)\b",
+    re.IGNORECASE,
+)
 
 
 def _check_names() -> frozenset[str]:
@@ -121,6 +129,31 @@ def sql_violations(source: str, filename: str) -> list[str]:
     return found
 
 
+def read_sql_violations(source: str, name: str) -> list[str]:
+    """Return 'file:line: message' for inline backend read-SQL literals."""
+    found: list[str] = []
+    seen_lines: set[int] = set()
+    tree = _parse(source, name)
+    for node in ast.walk(tree):
+        literal: str | None = None
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            literal = node.value
+        elif isinstance(node, ast.JoinedStr):
+            # ``Constant`` nodes hold only the text between f-string
+            # expressions, so inspect the full source to catch templates such
+            # as ``f"SELECT {columns} FROM objects"``.
+            literal = ast.get_source_segment(source, node)
+        if (
+            literal is not None
+            and node.lineno not in seen_lines
+            and not _READ_SQL_EXEMPT.search(literal)
+            and _READ_SQL.search(literal)
+        ):
+            found.append(f"{name}:{node.lineno}: inline read SQL literal")
+            seen_lines.add(node.lineno)
+    return found
+
+
 def test_the_derived_check_helper_set_is_not_empty() -> None:
     names = _check_names()
     assert names, "no check_* names found in ontary.store._shared"
@@ -138,6 +171,13 @@ def test_backend_holds_no_write_rules(backend: str) -> None:
 def test_backend_holds_no_inline_write_sql(backend: str) -> None:
     path = _STORE_DIR / backend
     violations = sql_violations(path.read_text(), str(path))
+    assert not violations, "\n".join(violations)
+
+
+@pytest.mark.parametrize("backend", _SQL_BACKENDS)
+def test_backend_holds_no_inline_read_sql(backend: str) -> None:
+    path = _STORE_DIR / backend
+    violations = read_sql_violations(path.read_text(), str(path))
     assert not violations, "\n".join(violations)
 
 
@@ -193,3 +233,15 @@ def test_sql_detector_ignores_reads_and_other_tables() -> None:
         sql_violations("q = 'SELECT * FROM objects'\nr = 'UPDATE schema_meta SET v = 1'\n", "x.py")
         == []
     )
+
+
+def test_read_sql_detector_catches_inline_reads_and_ignores_exemptions() -> None:
+    assert read_sql_violations('q = "SELECT * FROM objects WHERE x"\n', "x.py") == [
+        "x.py:1: inline read SQL literal"
+    ]
+    assert read_sql_violations('q = "SELECT 1 FROM information_schema.tables"\n', "x.py") == []
+
+
+def test_read_sql_detector_catches_fstring_reads() -> None:
+    source = 'q = f"SELECT {columns} FROM objects WHERE x"\n'
+    assert read_sql_violations(source, "x.py") == ["x.py:1: inline read SQL literal"]

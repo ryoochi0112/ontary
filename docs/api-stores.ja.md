@@ -156,7 +156,7 @@ target の level に答える hop は、その target の他の hop がまった
 
 - **`ObjectStore`** — SQLite。履歴（close-old / insert-new）、リンク、監査ログ。
 - **`InMemoryStore`** — 純 Python。ファイルも SQL も無し。テストやドッグフーディング向け。
-- **`PostgresStore`** — PostgreSQL ベース。`postgres` extra で利用可能。
+- **`PostgresStore`** — PostgreSQL 16 以降が必要。`postgres` extra で利用可能。
 
 最外層の `transaction()` は、同じストア上の並行 writer に対して、読み取りに続く
 書き込みを直列化します。再入可能であり、ネストした呼び出しは最外層の

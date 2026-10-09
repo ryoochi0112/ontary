@@ -11,6 +11,27 @@ you**.
 
 ## [Unreleased]
 
+### Performance
+
+- `where` filters and declared `SelfScope` / `DirectProperty` scope checks now run
+  in SQL on SQLite and Postgres (#68).
+- Python still makes the final decision on every fetched row, so results are
+  unchanged (#68).
+- Types with a `ViaLink` rule, a `CustomResolver`, or a `row_visibility` predicate
+  still check scope in Python; their `where` filters still run in SQL (#68).
+- The Postgres backend now requires PostgreSQL 16 or later, a breaking requirement
+  for Postgres users in this pre-1.0 minor release (#68).
+- A `where` value or scope id outside the connection's safe bind domain makes
+  Python filter its clause instead of SQL. That includes NUL bytes, lone
+  surrogates, integers outside 64 bits, non-finite floats, strings over 64 KiB,
+  and text the database encoding cannot carry. Results stay the same; the query
+  only loses the fetched-row bound for that clause (#68).
+- `in` lists of any length now use one array parameter in SQL, so large lists no
+  longer hit SQLite expression-depth or Postgres parameter-count limits (#68).
+- When a filtered read hits a database error, the query retries an unfiltered
+  read for the same rows instead of raising. On Postgres, the fallback runs under
+  a savepoint, preserving the caller's transaction and earlier writes (#68).
+
 ### Changed
 
 - `ontary.query` is now a package of concern submodules, and `src/ontary` has no
