@@ -11,6 +11,20 @@ you**.
 
 ## [Unreleased]
 
+## [0.26.0] — 2026-10-09
+
+```bash
+uv add "ontary @ git+https://github.com/ryoochi0112/ontary@v0.26.0"
+```
+
+A minor release that completes the M4 performance work, with breaking changes for some
+callers. Filtered reads and scope checks run in SQL (#68). Ingest and traversal cost a
+constant number of reads, and `traverse_many` is new (#69). All three stores share one
+write and read path (#67), and `ontary.query` is split into submodules (#66). Two
+changes can break you. The Postgres backend now requires PostgreSQL 16 or later. Ingest
+now rolls back the whole call on an unexpected error. Public imports and results are
+unchanged, and the store schema stays at v14, so a 0.25.0 store needs no re-ingest.
+
 ### Performance
 
 - `where` filters and declared `SelfScope` / `DirectProperty` scope checks now run
