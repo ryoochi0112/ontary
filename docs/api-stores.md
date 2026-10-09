@@ -284,13 +284,19 @@ typed model exists. With a class in hand, pass `Ticket.__name__`, or its
 declared `api_name` when that differs.
 
 `bulk_upsert` and `bulk_link` are the engine layer and always return an
-`IngestReport`. The client methods run the complete batch first, so valid
-records remain committed even when another record fails. By default, a failed
+`IngestReport`. The client methods run the complete batch first. Each call
+(`ingest`, `ingest_links`, `bulk_upsert`, `bulk_link`) runs in one transaction.
+A per-record refusal leaves the valid records committed. On the object path the
+refusal codes are `INVALID_RECORD`, `OWNED_PROPERTY_REFUSED`,
+`TRANSITION_NOT_ALLOWED`, and `RULE_VIOLATED`. On the link path they are
+`CARDINALITY_VIOLATION` and `LINK_ENDPOINT_NOT_FOUND`. Any other error rolls
+back the whole call, so no earlier row stays committed. By default, a failed
 client batch raises `IngestError`; its `.report` is the full report and its
 message names the committed and failed counts. Pass `on_error="report"` to
 return the report without raising, preserving the report-returning behavior.
 
-`IngestReport` — `inserted_ids: list[str]`, `errors: list[IngestError]`. Records are
+`IngestReport` — `inserted_ids: list[str]`, `unchanged_ids: list[str]`,
+`errors: list[IngestError]`. Records are
 validated against declared shape: a missing primary key, a missing required property,
 an unknown property, or a type mismatch yields `INVALID_RECORD`. Writing an
 ontology-owned type raises `OWNED_TYPE_REFUSED`; supplying an ontology-owned property
@@ -300,6 +306,16 @@ cardinality violation; the other pairs still land, so ingest objects before thei
 links. Re-running a link load is idempotent: a pair identical to a live link is a
 no-op and is still listed in `inserted_ids`, so the second run returns the same
 report as the first.
+
+An identical re-ingest of an object writes no row. The existing row keeps its
+original `valid_from` and `Source`. Unchanged records, objects and links alike,
+are listed in `unchanged_ids` and also in `inserted_ids`. Equality compares the
+stored spelling of each value. A datetime re-spelled with a different offset
+counts as a change, even when it names the same instant.
+
+One call holds the tenant's write lock for its whole duration: a Postgres
+advisory lock, or `BEGIN IMMEDIATE` on SQLite. Split very large loads into
+several calls.
 
 A `date` or `datetime` value is written as an ISO-8601 string or a `date` /
 offset-aware `datetime` object; a naive `datetime` object is refused with

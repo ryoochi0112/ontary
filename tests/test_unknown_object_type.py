@@ -59,7 +59,7 @@ UNKNOWN_TYPE_INVOKERS: dict[str, Invoker] = {
     "count_contributors": lambda q, c: q.count_contributors(c, NOPE),
     "visible_events": lambda q, c: q.visible_events(c, about=(NOPE, "x")),
 }
-COVERED_ELSEWHERE = {"traverse", "traverse_page"}
+COVERED_ELSEWHERE = {"traverse", "traverse_many", "traverse_page"}
 
 
 def _registry(
@@ -337,6 +337,68 @@ def test_client_traverse_keeps_unknown_name_for_link_errors(
     assert [row.payload["id"] for row in client.traverse("Book", "onShelf", "shelf-1-book-0")] == [
         "shelf-1"
     ]
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("anchors", [[], ["x"]])
+@pytest.mark.parametrize("consumer", [_human(), _ai()], ids=["human", "ai"])
+def test_guarded_traverse_many_refuses_an_undeclared_target_first(
+    query: GuardedQuery, reverse: bool, anchors: list[str], consumer: Consumer,
+) -> None:
+    # An unvalidated registry can reach GuardedQuery. The target-type check
+    # must still precede policy coherence and reads, even for empty anchors.
+    query._registry.register_link_type(LinkTypeDef(
+        api_name="toNope",
+        from_type=NOPE if reverse else "Book",
+        to_type="Book" if reverse else NOPE,
+        cardinality=Cardinality.MANY_TO_MANY,
+        description="A link with an undeclared target",
+    ))
+    query._policy.unscoped_types.add(NOPE)
+    query._policy.rules[NOPE] = [DirectProperty(level="shelf", property_name="id")]
+
+    with raises_code(ValidationFailed, "UNKNOWN_OBJECT_TYPE") as many_error:
+        query.traverse_many(consumer, "toNope", iter(anchors), reverse=reverse)
+    with raises_code(ValidationFailed, "UNKNOWN_OBJECT_TYPE") as single_error:
+        query.traverse(consumer, "toNope", "x", reverse=reverse)
+    assert str(many_error.value) == str(single_error.value) == NOPE_MESSAGE
+    assert many_error.value.kind == "validation"
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("anchors", [[], ["x"]])
+def test_guarded_traverse_many_keeps_unknown_link_errors(
+    query: GuardedQuery, reverse: bool, anchors: list[str],
+) -> None:
+    with raises_code(ValidationFailed, "UNKNOWN_LINK_TYPE") as many_error:
+        query.traverse_many(_human(), "noSuchLink", iter(anchors), reverse=reverse)
+    with raises_code(ValidationFailed, "UNKNOWN_LINK_TYPE") as single_error:
+        query.traverse(_human(), "noSuchLink", "x", reverse=reverse)
+    assert str(many_error.value) == str(single_error.value) == "unregistered link type: 'noSuchLink'"
+
+
+@pytest.mark.parametrize(
+    ("reverse", "anchors", "expected"),
+    [
+        (
+            False,
+            ["shelf-2-book-0", "shelf-1-book-0", "missing", "shelf-1-book-0"],
+            {"shelf-2-book-0": [], "shelf-1-book-0": ["shelf-1"], "missing": []},
+        ),
+        (
+            True,
+            ["shelf-2", "shelf-1", "missing", "shelf-1"],
+            {"shelf-2": [], "shelf-1": ["shelf-1-book-0", "shelf-1-book-1", "shelf-1-book-2"],
+             "missing": []},
+        ),
+    ],
+)
+def test_guarded_traverse_many_reads_declared_targets(
+    query: GuardedQuery, reverse: bool, anchors: list[str], expected: dict[str, list[str]],
+) -> None:
+    rows = query.traverse_many(_human(), "onShelf", iter(anchors), reverse=reverse)
+    assert list(rows) == list(expected)
+    assert {anchor: [row.payload["id"] for row in group] for anchor, group in rows.items()} == expected
 
 
 def test_require_object_type_resolves_or_refuses(client: OntologyClient) -> None:

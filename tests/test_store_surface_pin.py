@@ -42,18 +42,23 @@ EXPECTED_SIGNATURES = {
     "capture_action_writes": "(self, *, at: 'str | None' = None) -> 'AbstractContextManager[list[WriteRecord]]'",
     "close_link": "(self, link_type: 'str', from_id: 'str', to_id: 'str') -> 'bool'",
     "create_link": "(self, link_type: 'str', from_id: 'str', to_id: 'str') -> 'None'",
+    "create_links": "(self, link_type: 'str', pairs: 'Sequence[tuple[str, str]]', *, refusals: 'frozenset[str]' = frozenset()) -> 'list[RowOutcome]'",
     "insert": "(self, obj_type: 'str', payload: 'dict[str, Any]', source: \"'Source'\") -> 'str'",
+    "links_from_many": "(self, link_type: 'str', from_ids: 'Iterable[str]') -> 'dict[str, list[str]]'",
     "links_from": "(self, link_type: 'str', from_id: 'str') -> 'list[str]'",
     "links_from_asof": "(self, link_type: 'str', from_id: 'str', asof: 'str') -> 'list[str]'",
+    "links_to_many": "(self, link_type: 'str', to_ids: 'Iterable[str]') -> 'dict[str, list[str]]'",
     "links_to": "(self, link_type: 'str', to_id: 'str') -> 'list[str]'",
     "links_to_asof": "(self, link_type: 'str', to_id: 'str', asof: 'str') -> 'list[str]'",
     "read_all": "(self, obj_type: 'str') -> 'list[StoredObject]'",
+    "read_current_many": "(self, obj_type: 'str', ids: 'Iterable[str]') -> 'dict[str, StoredObject]'",
     "read_current": "(self, obj_type: 'str', obj_id: 'str') -> 'StoredObject | None'",
     "read_last": "(self, obj_type: 'str', obj_id: 'str') -> 'StoredObject | None'",
     "read_page": "(self, obj_type: 'str', after_key: 'str | None' = None, batch: 'int' = 500) -> 'list[PagedRow]'",
     "retire_object": "(self, object_type: 'str', obj_id: 'str') -> 'StoredObject'",
     "transaction": "(self) -> 'AbstractContextManager[Any]'",
     "update": "(self, obj_type: 'str', obj_id: 'str', payload_changes: 'dict[str, Any]', source: \"'Source'\") -> 'None'",
+    "upsert_objects": "(self, obj_type: 'str', records: 'Sequence[dict[str, Any]]', source: 'Source', *, refusals: 'frozenset[str]' = frozenset()) -> 'list[RowOutcome]'",
 }
 
 

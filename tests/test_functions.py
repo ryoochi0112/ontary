@@ -609,6 +609,7 @@ def test_bound_query_exposes_only_the_guarded_read_methods() -> None:
         "get",
         "list",
         "traverse",
+        "traverse_many",
         "aggregate",
         "aggregate_by",
         # `count_contributors` is a derived READ, min-N gated like the
@@ -1223,3 +1224,67 @@ def test_function_returning_a_read_property_and_the_python_datetime_agree() -> N
 
     assert read_back == direct == "2026-10-06T09:00:00+00:00"
     assert isinstance(read_back, str)
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("typed", [False, True])
+def test_registered_function_many_matches_single_traversals(make_consumer, reverse, typed) -> None:
+    from test_traverse_many import LINK_STEPS, count_reads
+
+    ontology = Ontology(name="function-many", scope_levels=["org"], min_n=1)
+
+    @ontology.object(layer="L0", scope="unscoped")
+    class Board(OntologyObject):
+        id: str = prop(primary_key=True)
+
+    @ontology.object(layer="L0", scope=[DirectProperty(level="org", property_name="org_id")])
+    class Record(OntologyObject):
+        id: str = prop(primary_key=True)
+        org_id: str
+
+    link = ontology.link("pins", Board, Record, "MANY_TO_MANY")
+    anchors = ["r", "foreign", "missing"] if reverse else ["b", "empty", "missing"]
+    anchor_cls = Record if reverse else Board
+    model = Record(id="r", org_id="org-1") if reverse else Board(id="b")
+
+    @ontology.function(api_name="walk")
+    def walk(query: BoundQuery) -> dict[str, Any]:
+        with count_reads(store) as calls:
+            rows = query.traverse_many(
+                link if typed else "pins",
+                iter([model, *anchors[1:], anchors[0]]) if typed else iter([*anchors, anchors[0]]),
+                reverse=reverse,
+            )
+        assert sum(calls[name] for name in LINK_STEPS) + calls["_current_rows_many"] <= 2
+        assert list(rows) == anchors
+        assert rows == {
+            anchor: query.traverse(link if typed else "pins", anchor, reverse=reverse)
+            for anchor in anchors
+        }
+        assert rows["missing"] == [] and rows[anchors[0]]
+        with count_reads(store) as calls:
+            assert query.traverse_many(link if typed else "pins", iter(()), reverse=reverse) == {}
+        assert not calls
+        if typed:
+            wrong = Board(id="b") if reverse else Record(id="r", org_id="org-1")
+            with raises_code(ValidationFailed, "INVALID_PARAMS"):
+                query.traverse_many(link, [wrong], reverse=reverse)
+            assert isinstance(model, anchor_cls)
+        else:
+            with raises_code(ValidationFailed, "UNKNOWN_LINK_TYPE") as many:
+                query.traverse_many("unknown", [], reverse=reverse)
+            with raises_code(ValidationFailed, "UNKNOWN_LINK_TYPE") as single:
+                query.traverse("unknown", "missing", reverse=reverse)
+            assert str(many.value) == str(single.value)
+        return {anchor: len(group) for anchor, group in rows.items()}
+
+    ontology.validate()
+    store = ObjectStore(ontology.registry)
+    for obj_id in ("b", "empty"):
+        store.insert("Board", {"id": obj_id}, SRC)
+    for obj_id, org_id in (("r", "org-1"), ("foreign", "org-2")):
+        store.insert("Record", {"id": obj_id, "org_id": org_id}, SRC)
+        store.create_link("pins", "b", obj_id)
+    client = OntologyClient(ontology, store, make_consumer())
+    result = client.call_function("walk", {})
+    assert result[anchors[0]] == 1 and result["missing"] == 0

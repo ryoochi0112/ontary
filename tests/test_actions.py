@@ -5013,6 +5013,7 @@ def test_action_context_exposes_no_store_handle(
         "retire",
         "save",
         "traverse",
+        "traverse_many",
         "unlink",
     }
     assert "retire_object" not in public_attrs
@@ -5028,6 +5029,48 @@ def test_action_context_exposes_no_store_handle(
         if not name.startswith("__") and getattr(ctx, name, None) is store
     }
     assert store_valued == {"_store"}
+
+
+def test_action_context_traverse_many_hands_out_objects_per_anchor(
+    make_registry: RegistryFactory,
+    make_store: StoreFactory,
+) -> None:
+    """A shared target is independently handed out, even outside caller scope."""
+    registry = make_registry(
+        object_types=ACTION_OBJECT_TYPES,
+        link_types=ACTION_LINK_TYPES,
+        action_types=ACTION_TYPES,
+    )
+    _bind_action_classes(registry)
+    store = make_store(registry)
+    _seed_shelves(store)
+    store.insert("Book", {"id": "book-1", "status": "available"}, SRC)
+    store.create_link("onShelf", "book-1", "shelf-1")
+    store.create_link("onShelf", "book-1", "shelf-2")
+    ctx = ActionContext(store, SRC, _librarian(scope_id="shelf-1"), registry=registry)
+
+    forward = ctx.traverse_many(onShelf, iter([Book(id="book-1"), "missing", "book-1"]))
+    assert list(forward) == ["book-1", "missing"]
+    assert [shelf.id for shelf in forward["book-1"]] == ["shelf-1", "shelf-2"]
+    assert all(isinstance(shelf, Shelf) for shelf in forward["book-1"])
+    assert forward["missing"] == []
+
+    reverse = ctx.traverse_many(
+        onShelf, iter(["shelf-2", Shelf(id="shelf-1"), "shelf-2", "missing"]), reverse=True
+    )
+    assert list(reverse) == ["shelf-2", "shelf-1", "missing"]
+    assert {anchor: [book.id for book in books] for anchor, books in reverse.items()} == {
+        "shelf-2": ["book-1"], "shelf-1": ["book-1"], "missing": [],
+    }
+    first, second = reverse["shelf-2"][0], reverse["shelf-1"][0]
+    assert isinstance(first, Book) and isinstance(second, Book)
+    assert first is not second
+    first.status = "checked-out"
+    assert second.status == "available"
+    with store.transaction():
+        ctx.save(first)
+        ctx.save(second)
+    assert store.read_current("Book", "book-1").payload["status"] == "checked-out"
 
 
 def test_action_context_retire_requires_action_transaction(

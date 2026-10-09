@@ -6,13 +6,13 @@ seam the engine is written against.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Sequence
 from contextlib import AbstractContextManager
 from datetime import datetime
 from typing import Any, Protocol, runtime_checkable
 
 from ontary.audit import AuditEntry, WriteRecord
-from ontary.store.values import DEFAULT_BATCH, PagedRow, Source, StoredObject
+from ontary.store.values import DEFAULT_BATCH, PagedRow, RowOutcome, Source, StoredObject
 
 
 @runtime_checkable
@@ -54,6 +54,22 @@ class Store(Protocol):
         current row merging `payload_changes` over it."""
         ...
 
+    def upsert_objects(
+        self,
+        obj_type: str,
+        records: Sequence[dict[str, Any]],
+        source: Source,
+        *,
+        refusals: frozenset[str] = frozenset(),
+    ) -> list[RowOutcome]:
+        """Raw, trusted-caller-only bulk upsert in one transaction.
+
+        Outcomes follow input order. Listed refusals leave their row unwritten;
+        other errors roll back the whole call. Identical merged payloads write
+        nothing and preserve lineage. See the protocol's layering rule.
+        """
+        ...
+
     def retire_object(self, object_type: str, obj_id: str) -> StoredObject:
         """Close the current row for `(object_type, obj_id)` without inserting
         a replacement, returning the row with its closing `valid_to`."""
@@ -63,6 +79,21 @@ class Store(Protocol):
         """Create a link, enforcing the link type's declared cardinality."""
         ...
 
+    def create_links(
+        self,
+        link_type: str,
+        pairs: Sequence[tuple[str, str]],
+        *,
+        refusals: frozenset[str] = frozenset(),
+    ) -> list[RowOutcome]:
+        """Raw, trusted-caller-only bulk link creation in one transaction.
+
+        Outcomes follow input order with canonical ``from->to`` ids. Listed
+        refusals leave their pair unwritten; other errors roll back the call.
+        Identical live pairs write nothing. See the protocol's layering rule.
+        """
+        ...
+
     def close_link(self, link_type: str, from_id: str, to_id: str) -> bool:
         """Close the live link matching all three identifiers."""
         ...
@@ -70,6 +101,24 @@ class Store(Protocol):
     def links_from(self, link_type: str, from_id: str) -> list[str]:
         """Ids of every current target reachable from `from_id` via
         `link_type`, in the order every link read declares below."""
+        ...
+
+    def links_from_many(
+        self, link_type: str, from_ids: Iterable[str]
+    ) -> dict[str, list[str]]:
+        """Raw, trusted-caller-only targets per canonical, distinct anchor.
+        Every requested anchor is included, with `[]` when it has no links.
+        Lists equal `links_from`, including order and duplicates.
+        Raises `UNKNOWN_LINK_TYPE` for an undeclared link type."""
+        ...
+
+    def links_to_many(
+        self, link_type: str, to_ids: Iterable[str]
+    ) -> dict[str, list[str]]:
+        """Raw, trusted-caller-only sources per canonical, distinct anchor.
+        Every requested anchor is included, with `[]` when it has no links.
+        Lists equal `links_to`, including order and duplicates.
+        Raises `UNKNOWN_LINK_TYPE` for an undeclared link type."""
         ...
 
     def links_to(self, link_type: str, to_id: str) -> list[str]:
@@ -134,6 +183,14 @@ class Store(Protocol):
         """Raw (unredacted, unscoped) read of one object's current row, or
         `None` if it does not exist. Engine-internal / trusted-caller-only
         -- see the protocol docstring's layering rule."""
+        ...
+
+    def read_current_many(
+        self, obj_type: str, ids: Iterable[str]
+    ) -> dict[str, StoredObject]:
+        """Raw, trusted-caller-only current rows, omitting missing or retired ids.
+        Canonical ids are de-duplicated in first-seen order. Empty input
+        returns `{}` without reading storage."""
         ...
 
     def read_last(self, obj_type: str, obj_id: str) -> StoredObject | None:

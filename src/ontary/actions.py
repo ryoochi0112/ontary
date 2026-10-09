@@ -15,7 +15,7 @@ names (compare the prototype's `_TARGET_PARAM_TYPES` /
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from datetime import datetime
 from typing import Any, Literal, NoReturn, TypeVar, cast, overload
 
@@ -132,7 +132,8 @@ class ActionContext:
         self._capability_accesses = (
             capability_accesses if capability_accesses is not None else []
         )
-        # Objects this context handed out via `get`/`all`/`create`/`traverse`,
+        # Objects this context handed out via `get`/`all`/`create`/`traverse`
+        # or `traverse_many`,
         # keyed by `id(obj)`: (the object itself, its api_name, its declared
         # property values at hand-out). `save` diffs against the snapshot, and
         # holding the object keeps its `id()` from being reused (#41).
@@ -371,7 +372,7 @@ class ActionContext:
         context handed it out, and nothing when none did.
 
         Only an object from this context's `get`, `all`, `create` or
-        `traverse` can be saved (`OBJECT_NOT_LOADED` otherwise): the diff
+        `traverse` or `traverse_many` can be saved (`OBJECT_NOT_LOADED` otherwise): the diff
         needs its snapshot, and a hand-built object would overwrite fields
         the handler never read. A changed primary key is refused by the store
         (`PRIMARY_KEY_IMMUTABLE`)."""
@@ -435,12 +436,57 @@ class ActionContext:
 
     def _hand_out_ids(self, cls: type[_O], ids: list[str]) -> list[_O]:
         api_name = self._api_name(cls, "traverse")
+        rows = self._store.read_current_many(api_name, ids)
         found = []
         for obj_id in ids:
-            stored = self._store.read_current(api_name, obj_id)
+            stored = rows.get(obj_id)
             if stored is not None:
                 found.append(self._hand_out(cls, stored))
         return found
+
+    @overload
+    def traverse_many(
+        self, link: LinkHandle[_F, _T], anchors: Iterable[_F | str], /,
+        *, reverse: Literal[False] = False,
+    ) -> dict[str, list[_T]]: ...
+    @overload
+    def traverse_many(
+        self, link: LinkHandle[_F, _T], anchors: Iterable[_T | str], /,
+        *, reverse: Literal[True],
+    ) -> dict[str, list[_F]]: ...
+    def traverse_many(
+        self,
+        link: LinkHandle[_F, _T],
+        anchors: Iterable[_F | _T | str],
+        /,
+        *,
+        reverse: bool = False,
+    ) -> dict[str, list[_T]] | dict[str, list[_F]]:
+        """Return live targets per canonical, distinct anchor in input order.
+
+        This trusted read returns raw, unredacted, unscoped data. Each
+        anchor receives its own objects, remembered for `save`, including
+        when a target is shared by multiple anchors.
+        """
+        operation = "traverse_many"
+        link_api_name = self._link_type(link, operation)
+        anchor_ids = (self._endpoint_id(anchor, operation) for anchor in anchors)
+        if reverse:
+            targets = self._store.links_to_many(link_api_name, anchor_ids)
+            return self._hand_out_many(link.from_cls, targets)
+        targets = self._store.links_from_many(link_api_name, anchor_ids)
+        return self._hand_out_many(link.to_cls, targets)
+
+    def _hand_out_many(
+        self, cls: type[_O], targets: dict[str, list[str]],
+    ) -> dict[str, list[_O]]:
+        api_name = self._api_name(cls, "traverse_many")
+        ids = list(dict.fromkeys(obj_id for group in targets.values() for obj_id in group))
+        rows = self._store.read_current_many(api_name, ids) if ids else {}
+        return {
+            anchor_id: [self._hand_out(cls, rows[obj_id]) for obj_id in group if obj_id in rows]
+            for anchor_id, group in targets.items()
+        }
 
     def _insert(self, obj_type: str, payload: dict[str, Any]) -> str:
         if self._registry is not None:

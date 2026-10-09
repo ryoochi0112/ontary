@@ -145,6 +145,29 @@ list を返し、正の `limit` を渡すとページを返します。
 sensitivity の強制が適用されます。`reverse=True` はリンクの対象側から辿り、
 identity-revealing の拒否は双方向で対称です。
 
+### `traverse_many`
+
+`traverse_many` は、1 回の呼び出しで多数のアンカーから同じリンクを辿ります。形式は
+`traverse` と同じく 2 通りです。型付き形式は
+`client.traverse_many(LinkHandle, anchors, reverse=False)` で、各アンカーにはオブジェクト
+またはその id を渡します。文字列形式は
+`client.traverse_many(obj_type, link, anchor_ids, reverse=False)` です。
+
+```python
+by_comment = client.traverse_many("Comment", "commentOnTicket", [comment_a, comment_b])
+# {"comment-a": [<ticket row>], "comment-b": []}
+```
+
+戻り値は `{anchor_id: [rows]}` の `dict` です。キーは重複を除いたアンカー id で、最初に
+現れた順に並びます。重複したアンカーは 1 つのキーにまとまります。未知のアンカーは `[]`
+になります。各リストのスコープによる絞り込み、リダクション、行の順序はアンカーごとに
+`traverse` と同じで、identity-revealing なリンクの拒否も同じように適用されます。
+`reverse=True` はリンクの対象側から辿ります。
+
+アンカーの数によらず、読み取りの回数は一定です（リンクの読み取り 1 回とオブジェクトの
+読み取り 1 回）。ページングはなく、`limit` と `after` は受け付けません。
+`traverse_many` はまだ MCP では使えません。
+
 ### 可視行のカウント
 
 `count(obj_type, where=None)` は、コンシューマーのスコープと行可視性のチェックを

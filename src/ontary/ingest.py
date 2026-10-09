@@ -26,7 +26,6 @@ from ontary.meta import (
     normalize_declared_payload,
 )
 from ontary.store import Source, Store
-from ontary.store._shared import canonical_id
 from ontary.typesys import validate_scalar
 
 
@@ -128,6 +127,7 @@ class IngestReport(BaseModel):
     """Outcome of a bulk_upsert / bulk_link call."""
 
     inserted_ids: list[str] = Field(default_factory=list)
+    unchanged_ids: list[str] = Field(default_factory=list)
     errors: list[IngestError] = Field(default_factory=list)
 
     @property
@@ -213,18 +213,19 @@ def bulk_upsert(
     records: list[dict[str, Any]],
     source: Source,
 ) -> IngestReport:
-    """Validate then write each record; per-record rejection, no partial writes.
+    """Validate records, then upsert them in one transaction per call.
 
     Each record is validated against the ObjectTypeDef *before* any write for
     that record happens. Invalid records are collected as typed errors
     (record index + reason) in the returned report; valid records are
-    written with the given lineage `Source`. One invalid record never blocks
-    or partially-writes the rest of the batch.
+    written with the given lineage `Source`. Expected per-record refusals
+    leave valid records committed. Unexpected errors propagate and roll back
+    the whole call, making those failures all-or-nothing.
 
-    A record whose primary key already has a current row is routed to
-    `store.update` (closing the prior row, inserting a new current one) so
-    that re-ingesting a known id updates history instead of creating a
-    second `valid_to IS NULL` row for the same id. Because a source record
+    A record whose primary key already has a current row is merged over that
+    row. An identical merged payload writes nothing and keeps the existing
+    version and lineage; a changed payload closes the prior row and inserts
+    a new current one. Because a source record
     can never carry an owned property (rejected by `_validate_record`
     above), that merge preserves whatever an action most recently wrote to
     an owned property while refreshing every source-backed property from
@@ -266,9 +267,9 @@ def bulk_upsert(
             ]
         )
 
-    for i, record in enumerate(records):
-        if obj_def.is_owned_type:
-            report.errors.append(
+    if obj_def.is_owned_type:
+        return IngestReport(
+            errors=[
                 IngestError(
                     index=i,
                     reason=(
@@ -277,34 +278,39 @@ def bulk_upsert(
                     ),
                     code="OWNED_TYPE_REFUSED",
                 )
-            )
-            continue
+                for i in range(len(records))
+            ]
+        )
 
+    valid_indices: list[int] = []
+    valid_records: list[dict[str, Any]] = []
+    rejections: dict[int, tuple[str, str]] = {}
+    for i, record in enumerate(records):
         record = normalize_declared_payload(obj_def, record)
         rejection = _validate_record(obj_def, record)
         if rejection is None:
-            pk_value = record.get(obj_def.primary_key)
-            current = (
-                store.read_current(obj_type, canonical_id(pk_value))
-                if pk_value is not None else None
-            )
-            try:
-                if current is not None:
-                    store.update(obj_type, canonical_id(pk_value), record, source)
-                    report.inserted_ids.append(canonical_id(pk_value))
-                else:
-                    payload = dict(obj_def.owned_property_defaults())
-                    payload.update(record)
-                    obj_id = store.insert(obj_type, payload, source)
-                    report.inserted_ids.append(obj_id)
-            except OntaryError as exc:
-                if exc.code not in ("TRANSITION_NOT_ALLOWED", "RULE_VIOLATED"):
-                    raise
-                rejection = exc.code, str(exc)
-        if rejection is not None:
-            code, reason = rejection
-            report.errors.append(IngestError(index=i, reason=reason, code=code))
+            valid_indices.append(i)
+            valid_records.append(record)
+        else:
+            rejections[i] = rejection
 
+    outcomes = store.upsert_objects(
+        obj_type,
+        valid_records,
+        source,
+        refusals=frozenset({"TRANSITION_NOT_ALLOWED", "RULE_VIOLATED"}),
+    )
+    for i, outcome in zip(valid_indices, outcomes, strict=True):
+        if outcome.status == "refused":
+            assert outcome.error is not None
+            rejections[i] = outcome.error.code, str(outcome.error)
+        else:
+            assert outcome.id is not None
+            report.inserted_ids.append(outcome.id)
+            if outcome.status == "unchanged":
+                report.unchanged_ids.append(outcome.id)
+    for i, (code, reason) in sorted(rejections.items()):
+        report.errors.append(IngestError(index=i, reason=reason, code=code))
     return report
 
 
@@ -315,13 +321,16 @@ def bulk_link(
     pairs: list[tuple[str, str]],
     source: Source,
 ) -> IngestReport:
-    """Create links for each (from_id, to_id) pair; per-pair rejection.
+    """Create links in one transaction per call, with per-pair rejection.
 
     Cardinality violations, endpoints with no live row
     (`LINK_ENDPOINT_NOT_FOUND`, #36), and unknown link types are surfaced
     per-pair in the returned report rather than aborting the whole batch. `source` is
     accepted for symmetry with `bulk_upsert` and future lineage-on-links
     support; the current store schema does not persist link lineage.
+    Unexpected errors propagate and roll back the whole call, making those
+    failures all-or-nothing. An identical live pair writes nothing and is
+    listed in `unchanged_ids` as well as `inserted_ids`.
 
     Authority: refuses outright, before writing anything, if `store`
     already has a caller-opened `transaction()` block
@@ -370,24 +379,27 @@ def bulk_link(
             ]
         )
 
-    for i, (from_id, to_id) in enumerate(pairs):
-        try:
-            store.create_link(link_type, from_id, to_id)
-        except ConflictError as exc:
-            if exc.code != "CARDINALITY_VIOLATION":
-                raise
-            report.errors.append(
-                IngestError(index=i, reason=str(exc), code="CARDINALITY_VIOLATION")
-            )
-        except ValidationFailed as exc:
-            # #36: an endpoint with no live row is a per-pair rejection like
-            # cardinality -- the rest of the batch still lands.
-            if exc.code != "LINK_ENDPOINT_NOT_FOUND":
-                raise
-            report.errors.append(
-                IngestError(index=i, reason=str(exc), code="LINK_ENDPOINT_NOT_FOUND")
-            )
+    outcomes = store.create_links(
+        link_type,
+        pairs,
+        refusals=frozenset({"CARDINALITY_VIOLATION", "LINK_ENDPOINT_NOT_FOUND"}),
+    )
+    for i, outcome in enumerate(outcomes):
+        if outcome.status == "refused":
+            assert outcome.error is not None
+            if outcome.error.code == "CARDINALITY_VIOLATION":
+                report.errors.append(IngestError(
+                    index=i, reason=str(outcome.error), code="CARDINALITY_VIOLATION"
+                ))
+            elif outcome.error.code == "LINK_ENDPOINT_NOT_FOUND":
+                report.errors.append(IngestError(
+                    index=i, reason=str(outcome.error), code="LINK_ENDPOINT_NOT_FOUND"
+                ))
+            else:
+                raise outcome.error
         else:
-            report.inserted_ids.append(f"{canonical_id(from_id)}->{canonical_id(to_id)}")
-
+            assert outcome.id is not None
+            report.inserted_ids.append(outcome.id)
+            if outcome.status == "unchanged":
+                report.unchanged_ids.append(outcome.id)
     return report
