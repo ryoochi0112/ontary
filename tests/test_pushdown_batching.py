@@ -336,3 +336,129 @@ def test_sql_wrapper_uses_default_batches(sql_data, monkeypatch, path):
         page = query.get_objects(READER, "Item", {"rank": {"gt": 10}}, limit=2)
         assert [row.payload["id"] for row in page.items] == ["11"]
     assert calls == [("read_page", None, DEFAULT_BATCH)]
+
+
+@pytest.fixture(scope="module", params=["sqlite", "postgres"])
+def large_integer_data(request: pytest.FixtureRequest) -> Iterator[tuple]:
+    registry = OntologyRegistry()
+    registry.register_object_type(ObjectTypeDef(
+        api_name="Item", display_name="Item", description="Adaptive batches", layer="L0",
+        primary_key="id", properties=[
+            PropertyDef(name="id", type="str"),
+            PropertyDef(name="ext", type="int"),
+        ],
+    ))
+    registry.validate()
+    schema = None
+    store = None
+    if request.param == "postgres":
+        dsn = os.environ.get("ONTARY_TEST_POSTGRES_DSN")
+        if not dsn:
+            pytest.skip("ONTARY_TEST_POSTGRES_DSN is not set")
+        import psycopg
+        from psycopg.conninfo import conninfo_to_dict, make_conninfo
+
+        schema = "ontary_test_" + uuid.uuid4().hex
+        with psycopg.connect(dsn, autocommit=True, options="-csearch_path=pg_catalog") as conn:
+            conn.execute(f'CREATE SCHEMA "{schema}"')
+    try:
+        if schema is None:
+            store = ObjectStore(registry)
+        else:
+            options = conninfo_to_dict(dsn).get("options", "") + f" -csearch_path={schema}"
+            store = PostgresStore(registry, make_conninfo(dsn, options=options))
+        with store.transaction():
+            for i in range(3000):
+                store.insert("Item", {"id": str(i), "ext": 2**60 + i}, SRC)
+        yield request.param, registry, store
+    finally:
+        if store is not None:
+            store._conn.close()
+        if schema is not None:
+            with psycopg.connect(dsn, autocommit=True, options="-csearch_path=pg_catalog") as conn:
+                conn.execute(f'DROP SCHEMA "{schema}" CASCADE')
+
+
+@pytest.mark.parametrize("path", ["exists", "page"])
+@pytest.mark.parametrize("operand", [2**60 + 2999, 5], ids=["last-row", "in-domain"])
+def test_large_integer_adaptive_batch_sequence(large_integer_data, monkeypatch, path, operand):
+    from _fetch_counter import count_fetched
+
+    dialect, registry, store = large_integer_data
+    query = _query(registry, store, unscoped=True)
+    batches = []
+    returned = []
+    original = store._filtered_page_rows
+
+    def record(obj_type, row_filter, after_row_id, batch):
+        batches.append(batch)
+        rows = original(obj_type, row_filter, after_row_id, batch)
+        returned.append(len(rows))
+        return rows
+
+    monkeypatch.setattr(store, "_filtered_page_rows", record)
+    matches = operand != 5
+    with count_fetched(store) as fetched:
+        if path == "exists":
+            result = query.exists(READER, "Item", {"ext": operand})
+            assert fetched.total() <= 3000
+            assert result is matches
+        else:
+            page = query.get_objects(READER, "Item", {"ext": operand}, limit=5)
+            assert fetched.total() <= 3000
+            assert [row.payload["id"] for row in page.items] == (["2999"] if matches else [])
+            assert not page.has_more and page.next_cursor is None
+    if dialect == "postgres" and matches:
+        # The sixth full batch satisfies exists; a page still needs the
+        # seventh (empty) batch to establish that there is no peek row.
+        expected = [500] * (6 if path == "exists" else 7)
+    elif path == "exists":
+        expected = [1, 2, 4, 8, 16, 32, 64, 128, 256, 500, 500, 500, 500, 500]
+    else:
+        expected = [6, 12, 24, 48, 96, 192, 384, 500, 500, 500, 500, 500]
+    assert batches == expected
+    if dialect == "sqlite" or not matches:
+        assert returned[-1] == (489 if path == "exists" else 238)
+
+
+def test_nullable_climbing_scope_batch_sequence(monkeypatch):
+    from _fetch_counter import count_fetched
+
+    registry = OntologyRegistry()
+    registry.register_object_type(ObjectTypeDef(
+        api_name="Team", display_name="Team", description="Nullable climbing scope", layer="L0",
+        primary_key="id", properties=[
+            PropertyDef(name="id", type="str"),
+            PropertyDef(name="company_id", type="str", required=False),
+        ],
+    ))
+    registry.validate()
+    policy = ScopePolicy(levels=["team", "company"], min_n=1, rules={
+        "Team": [SelfScope(level="team"),
+                 DirectProperty(level="company", property_name="company_id")],
+    })
+    policy.validate(registry)
+    consumer = Consumer(actor_id="reader", role="Reader", scope_level="company",
+                        scope_id="owned", kind="human")
+    store = ObjectStore(registry)
+    try:
+        with store.transaction():
+            for i in range(3000):
+                store.insert("Team", {"id": str(i),
+                                      "company_id": "owned" if i == 2999 else None}, SRC)
+        batches = []
+        original = store._filtered_page_rows
+
+        def record(obj_type, row_filter, after_row_id, batch):
+            batches.append(batch)
+            return original(obj_type, row_filter, after_row_id, batch)
+
+        monkeypatch.setattr(store, "_filtered_page_rows", record)
+        query = GuardedQuery(store, registry, policy)
+        with count_fetched(store) as fetched:
+            result = query.exists(consumer, "Team")
+            assert fetched.total() <= 3000
+            assert result
+        assert batches == [1, 2, 4, 8, 16, 32, 64, 128, 256, 500, 500, 500, 500, 500]
+    finally:
+        store._conn.close()

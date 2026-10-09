@@ -220,6 +220,10 @@ def _effective_limit(limit: int | None | object) -> int | None:
     )
 
 
+def _next_batch(current: int, cap: int) -> int:
+    return min(current * 2, cap)
+
+
 def _unbounded_results(
     query: _QueryHost,
     consumer: Consumer,
@@ -249,16 +253,22 @@ def _unbounded_results(
             yield from _fetch_all(query, obj_type, row_filter)
             return
         cursor: str | None = None
+        current_batch = batch_size
+        batch_cap = max(stop_after, DEFAULT_BATCH)
         while True:
-            batch = _fetch_page(query, obj_type, row_filter, cursor, batch_size)
+            batch = _fetch_page(query, obj_type, row_filter, cursor, current_batch)
             if scope_cache is not None:
                 for paged_row in batch:
                     scope_cache._prime(paged_row.obj)
             for paged_row in batch:
                 yield paged_row.obj
-            if len(batch) < batch_size:
+            if len(batch) < current_batch:
                 return
             cursor = batch[-1].key
+            current_batch = (
+                _next_batch(current_batch, batch_cap)
+                if len(batch) == current_batch else current_batch
+            )
 
     rows = _rows()
     if order_spec is not None:
@@ -309,6 +319,7 @@ def _row_id_page(
     ) else max(
         limit + 1, DEFAULT_BATCH,
     )
+    batch_cap = max(limit + 1, DEFAULT_BATCH)
     cursor = after
     kept: list[tuple[str, StoredObject]] = []
     while True:
@@ -330,6 +341,8 @@ def _row_id_page(
                 break
         if len(kept) > limit or len(batch) < batch_size:
             break
+        if len(batch) == batch_size:
+            batch_size = _next_batch(batch_size, batch_cap)
     return _page_of(query, consumer, obj_type, kept, limit)
 
 

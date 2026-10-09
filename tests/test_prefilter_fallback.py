@@ -174,8 +174,10 @@ def test_persistent_fallback_pages_terminate_and_resume(seeded, monkeypatch, ove
         assert page.items == seeded.reference.read_all("Item")[7:9]
         assert page.has_more
         assert page.next_cursor is not None
-        assert len(batches) == (2 if oversized else 4)
-        assert all(batch == 3 for batch, _returned in batches)
+        # A full fallback batch grows the next request; an oversized one does not.
+        assert [batch for batch, _returned in batches] == (
+            [3, 3] if oversized else [3, 6, 12]
+        )
         if oversized:
             assert all(returned > batch for batch, returned in batches)
 
