@@ -6,13 +6,14 @@ import asyncio
 import itertools
 import json
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, cast
 
 import pytest
 from conftest import ConsumerFactory, StoreFactory, raises_code
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_serializer
 
 from ontary import (
     ActionContext,
@@ -221,6 +222,97 @@ def _register_pydantic_defaults(
     }
 
 
+def _register_stripping_validators(
+    ontology: Ontology,
+    building_type: type[OntologyObject],
+    session_type: type[OntologyObject],
+    room_type: type[OntologyObject],
+    book: Callable[[ActionContext, str | None], dict[str, Any]],
+    received: list[str | None],
+) -> dict[str, type[ActionParams]]:
+    """Params classes whose validator rewrites a gated id (#250)."""
+
+    class StrippedRefParams(ActionParams):
+        model_config = ConfigDict(str_strip_whitespace=True)
+
+        session_id: str = target(session_type)
+        room_id: str = ref(room_type)
+
+    @ontology.action(
+        StrippedRefParams, target=session_type, roles=["Coordinator"], api_name="stripped_ref"
+    )
+    def stripped_ref(ctx: ActionContext, params: StrippedRefParams) -> dict[str, Any]:
+        return book(ctx, params.room_id)
+
+    class StrippedTargetParams(ActionParams):
+        model_config = ConfigDict(str_strip_whitespace=True)
+
+        session_id: str = target(session_type)
+
+    @ontology.action(
+        StrippedTargetParams, target=session_type, roles=["Coordinator"],
+        api_name="stripped_target",
+    )
+    def stripped_target(ctx: ActionContext, params: StrippedTargetParams) -> dict[str, Any]:
+        received.append(params.session_id)
+        return {"ok": params.session_id}
+
+    class StrippedExcludedRefParams(ActionParams):
+        model_config = ConfigDict(str_strip_whitespace=True)
+
+        session_id: str = target(session_type)
+        room_id: str = ref(room_type, exclude=True)
+
+    class StrippedAliasedRefParams(ActionParams):
+        model_config = ConfigDict(str_strip_whitespace=True, serialize_by_alias=True)
+
+        session_id: str = target(session_type)
+        room_id: str = ref(room_type, serialization_alias="roomId")
+
+    class SerializedRefParams(ActionParams):
+        model_config = ConfigDict(str_strip_whitespace=True)
+
+        session_id: str = target(session_type)
+        room_id: str = ref(room_type)
+
+        @field_serializer("room_id")
+        def _in_scope_spelling(self, value: str) -> str:
+            return value.replace("b", "a")
+
+    classes: dict[str, type[ActionParams]] = {
+        "stripped_excluded_ref": StrippedExcludedRefParams,
+        "stripped_aliased_ref": StrippedAliasedRefParams,
+        "serialized_ref": SerializedRefParams,
+    }
+    for api_name, params_cls in classes.items():
+        def handler(ctx: ActionContext, params: Any) -> dict[str, Any]:
+            return book(ctx, params.room_id)
+
+        ontology.action(params_cls, target=session_type, roles=["Coordinator"], api_name=api_name)(
+            handler
+        )
+
+    class StrippedScopeRefParams(ActionParams):
+        model_config = ConfigDict(str_strip_whitespace=True)
+
+        building_id: str = scope_ref(building_type)
+
+    @ontology.action(
+        StrippedScopeRefParams, target=building_type, roles=["Coordinator"],
+        api_name="stripped_scope_ref",
+    )
+    def stripped_scope_ref(ctx: ActionContext, params: StrippedScopeRefParams) -> dict[str, Any]:
+        received.append(params.building_id)
+        return {"ok": params.building_id}
+
+    return {
+        "stripped_ref": StrippedRefParams,
+        "stripped_target": StrippedTargetParams,
+        "stripped_scope_ref": StrippedScopeRefParams,
+        **classes,
+    }
+
+
 @pytest.fixture
 def world(
     make_consumer: ConsumerFactory,
@@ -384,6 +476,10 @@ def world(
         return params.model_dump()
 
     params_classes["audit_defaults"] = AuditDefaultsParams
+
+    params_classes.update(_register_stripping_validators(
+        ontology, Building, Session, Room, _book, received
+    ))
     params_classes.update(_register_pydantic_defaults(ontology, Session, Room, factory_calls))
     ontology.validate()
 
@@ -913,3 +1009,94 @@ def test_given_a_raising_default_factory_when_dict_then_invalid_params_is_audite
     assert entry.writes == []
     assert world.factory_calls == ["raising-default"]
     assert params == {"session_id": "s-a"}
+
+
+@pytest.mark.parametrize("path", _PATHS)
+@pytest.mark.parametrize(
+    ("api_name", "params"),
+    [
+        ("stripped_ref", {"session_id": "s-a", "room_id": " r-b "}),
+        ("stripped_target", {"session_id": " s-b "}),
+    ],
+)
+def test_given_a_validator_that_rewrites_an_out_of_scope_id_when_called_then_the_engine_denies(
+    world: _World, path: str, api_name: str, params: dict[str, Any]
+) -> None:
+    before = _snapshot(world)
+
+    _assert_denied(world, path, params, api_name=api_name)
+
+    assert world.received == []
+    assert _snapshot(world) == before
+    entries = world.store.audit_entries()
+    assert len(entries) == 1
+    assert entries[-1].error_code == "SCOPE_DENIED"
+    # The audit names the id the gate checked: the post-validation value.
+    assert entries[-1].params == {
+        name: value.strip() for name, value in params.items()
+    }
+
+
+@pytest.mark.parametrize("path", _PATHS)
+def test_given_a_validator_that_rewrites_an_in_scope_id_when_called_then_the_audit_records_it(
+    world: _World, path: str
+) -> None:
+    _execute(world, path, {"session_id": " s-a ", "room_id": " r-a "}, api_name="stripped_ref")
+
+    assert world.received == ["r-a"]
+    entry = world.store.audit_entries()[-1]
+    assert entry.outcome == "ok"
+    assert entry.params == {"session_id": "s-a", "room_id": "r-a"}
+    assert entry.target_id == "s-a"
+
+
+@pytest.mark.parametrize("path", ("dynamic", "mcp"))
+@pytest.mark.parametrize(
+    "api_name", ["stripped_excluded_ref", "stripped_aliased_ref", "serialized_ref"]
+)
+def test_given_a_ref_the_dump_hides_or_rewrites_when_called_then_the_gate_checks_the_handler_value(
+    world: _World, path: str, api_name: str
+) -> None:
+    before = _snapshot(world)
+
+    _assert_denied(world, path, {"session_id": "s-a", "room_id": " r-b "}, api_name=api_name)
+
+    assert world.received == []
+    assert _snapshot(world) == before
+    assert world.store.audit_entries()[-1].params["room_id"] == "r-b"
+
+
+def test_given_a_serializer_that_rewrites_a_typed_ref_when_called_then_the_gate_checks_the_attribute(
+    world: _World,
+) -> None:
+    _assert_denied(world, "typed", {"session_id": "s-a", "room_id": "r-b"}, api_name="serialized_ref")
+
+    assert world.received == []
+    assert world.store.audit_entries()[-1].params["room_id"] == "r-b"
+
+
+def test_given_a_foreign_model_with_a_rewritten_ref_when_executed_then_the_engine_denies(
+    world: _World,
+) -> None:
+    class Foreign(BaseModel):
+        session_id: str
+        room_id: str
+
+    with raises_code(PermissionDenied, "SCOPE_DENIED"):
+        world.client.actions.execute(
+            world.consumer, "stripped_ref", Foreign(session_id="s-a", room_id=" r-b ")
+        )
+
+    assert world.received == []
+    assert world.store.audit_entries()[-1].params["room_id"] == "r-b"
+
+
+@pytest.mark.parametrize("path", _PATHS)
+def test_given_a_validator_that_rewrites_a_scope_ref_when_called_then_the_audit_names_the_handler_value(
+    world: _World, path: str
+) -> None:
+    _assert_denied(world, path, {"building_id": " b-b "}, api_name="stripped_scope_ref")
+
+    assert world.received == []
+    assert world.store.audit_entries()[-1].params == {"building_id": "b-b"}
+

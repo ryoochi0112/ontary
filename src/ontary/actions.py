@@ -851,10 +851,6 @@ class ActionExecutor:
         self._validate_params_json_safe(
             consumer, action_name, action_def, params_dict, invocation_id, instant
         )
-        unscoped_params = self._enforce_scope(
-            consumer, action_name, action_def, params_dict, invocation_id, instant
-        )
-
         params_obj = self._coerce_typed_params(
             consumer,
             action_name,
@@ -864,7 +860,26 @@ class ActionExecutor:
             params_cls,
             invocation_id,
             instant,
-            unscoped_params,
+            self._unscoped_params(action_def, params_dict),
+        )
+        if params_obj is not None:
+            # #250: the gate, preflight, `target_id` and audit must check the
+            # object ids the handler reads. A validator may rewrite an id (for
+            # example `str_strip_whitespace`), and a dump may drop, rename or
+            # reserialize one, so read each id from the model's attribute.
+            # Only object-id params are replaced, so every other audited value
+            # keeps its spelling. Markers are `str`-annotated, so the
+            # attribute is already its JSON value.
+            params_dict = params_dict | {
+                param.name: getattr(params_obj, param.name)
+                for param in self._param_rules(action_def)
+                if param.name in type(params_obj).model_fields
+            }
+            self._validate_params(
+                consumer, action_name, action_def, params_dict, invocation_id, instant
+            )
+        unscoped_params = self._enforce_scope(
+            consumer, action_name, action_def, params_dict, invocation_id, instant
         )
 
         providers = self._preflight_capabilities(
@@ -1368,6 +1383,20 @@ class ActionExecutor:
         parsing) or outside its declared `choices` (#42)."""
         return validate_scalar(value, param.type, param.choices, fields=param.fields)
 
+    def _unscoped_params(
+        self, action_def: ActionTypeDef, params: dict[str, Any]
+    ) -> list[str]:
+        """The present `target` and `ref` parameters that refer to an unscoped
+        type and so skip the scope gate (#35). Decided from the declaration
+        alone, so a refusal audited before the gate names them too."""
+        return [
+            param.name
+            for param in self._param_rules(action_def)
+            if param.name in params
+            and param.scope_semantics in ("target", None)
+            and param.refers_to in self._policy.unscoped_types
+        ]
+
     def _enforce_scope(
         self,
         consumer: Consumer,
@@ -1404,13 +1433,7 @@ class ActionExecutor:
         # entry denied on an EARLIER scoped parameter still names every
         # parameter that is exempt from the gate.
         param_rules = self._param_rules(action_def)
-        unscoped_params = [
-            param.name
-            for param in param_rules
-            if param.name in params
-            and param.scope_semantics in ("target", None)
-            and param.refers_to in self._policy.unscoped_types
-        ]
+        unscoped_params = self._unscoped_params(action_def, params)
         for param in param_rules:
             if param.name not in params or param.name in unscoped_params:
                 continue

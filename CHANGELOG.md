@@ -36,6 +36,20 @@ you**.
   They say the traversal cursor is the object id of the last kept row. This is a
   documentation change only; behavior is unchanged.
 
+### Fixed
+
+- **The scope gate now checks the id the handler receives on dynamic and MCP calls (#250).**
+  Before, the gate checked the raw dict value, and the params class validated it
+  afterwards. A validator that rewrites an id, such as `str_strip_whitespace`, could
+  turn a never-stored id that skipped the gate into an out-of-scope object's id. The
+  engine now validates the params class first. The gate, capability preflight, and
+  audit then use the value the handler receives for each `target()`, `ref()`, and
+  `scope_ref()` parameter: the model attribute, not its serialized form. This also
+  covers a field excluded from or renamed in the dump, a field serializer, and a
+  typed call. Other audited values are unchanged. A side effect: a dict call that is both
+  out of scope and invalid for the params class is now refused as invalid params,
+  not `SCOPE_DENIED`.
+
 ## [0.26.0] — 2026-10-09
 
 ```bash
