@@ -42,6 +42,7 @@ EXPECTED_SIGNATURES = {
     "capture_action_writes": "(self, *, at: 'str | None' = None) -> 'AbstractContextManager[list[WriteRecord]]'",
     "close_link": "(self, link_type: 'str', from_id: 'str', to_id: 'str') -> 'bool'",
     "create_link": "(self, link_type: 'str', from_id: 'str', to_id: 'str') -> 'None'",
+    "create_links": "(self, link_type: 'str', pairs: 'Sequence[tuple[str, str]]', *, refusals: 'frozenset[str]' = frozenset()) -> 'list[RowOutcome]'",
     "insert": "(self, obj_type: 'str', payload: 'dict[str, Any]', source: \"'Source'\") -> 'str'",
     "links_from_many": "(self, link_type: 'str', from_ids: 'Iterable[str]') -> 'dict[str, list[str]]'",
     "links_from": "(self, link_type: 'str', from_id: 'str') -> 'list[str]'",
@@ -57,6 +58,7 @@ EXPECTED_SIGNATURES = {
     "retire_object": "(self, object_type: 'str', obj_id: 'str') -> 'StoredObject'",
     "transaction": "(self) -> 'AbstractContextManager[Any]'",
     "update": "(self, obj_type: 'str', obj_id: 'str', payload_changes: 'dict[str, Any]', source: \"'Source'\") -> 'None'",
+    "upsert_objects": "(self, obj_type: 'str', records: 'Sequence[dict[str, Any]]', source: 'Source', *, refusals: 'frozenset[str]' = frozenset()) -> 'list[RowOutcome]'",
 }
 
 

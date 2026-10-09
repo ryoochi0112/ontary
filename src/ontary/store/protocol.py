@@ -6,13 +6,13 @@ seam the engine is written against.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from contextlib import AbstractContextManager
 from datetime import datetime
 from typing import Any, Protocol, runtime_checkable
 
 from ontary.audit import AuditEntry, WriteRecord
-from ontary.store.values import DEFAULT_BATCH, PagedRow, Source, StoredObject
+from ontary.store.values import DEFAULT_BATCH, PagedRow, RowOutcome, Source, StoredObject
 
 
 @runtime_checkable
@@ -54,6 +54,22 @@ class Store(Protocol):
         current row merging `payload_changes` over it."""
         ...
 
+    def upsert_objects(
+        self,
+        obj_type: str,
+        records: Sequence[dict[str, Any]],
+        source: Source,
+        *,
+        refusals: frozenset[str] = frozenset(),
+    ) -> list[RowOutcome]:
+        """Raw, trusted-caller-only bulk upsert in one transaction.
+
+        Outcomes follow input order. Listed refusals leave their row unwritten;
+        other errors roll back the whole call. Identical merged payloads write
+        nothing and preserve lineage. See the protocol's layering rule.
+        """
+        ...
+
     def retire_object(self, object_type: str, obj_id: str) -> StoredObject:
         """Close the current row for `(object_type, obj_id)` without inserting
         a replacement, returning the row with its closing `valid_to`."""
@@ -61,6 +77,21 @@ class Store(Protocol):
 
     def create_link(self, link_type: str, from_id: str, to_id: str) -> None:
         """Create a link, enforcing the link type's declared cardinality."""
+        ...
+
+    def create_links(
+        self,
+        link_type: str,
+        pairs: Sequence[tuple[str, str]],
+        *,
+        refusals: frozenset[str] = frozenset(),
+    ) -> list[RowOutcome]:
+        """Raw, trusted-caller-only bulk link creation in one transaction.
+
+        Outcomes follow input order with canonical ``from->to`` ids. Listed
+        refusals leave their pair unwritten; other errors roll back the call.
+        Identical live pairs write nothing. See the protocol's layering rule.
+        """
         ...
 
     def close_link(self, link_type: str, from_id: str, to_id: str) -> bool:

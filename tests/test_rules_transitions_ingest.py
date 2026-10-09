@@ -148,7 +148,7 @@ def test_other_store_errors_still_propagate(
     def fail_update(*args: object, **kwargs: object) -> None:
         raise ValidationFailed("unexpected store rejection", code="INVALID_RECORD")
 
-    monkeypatch.setattr(store, "update", fail_update)
+    monkeypatch.setattr(store, "_close_object_rows", fail_update)
     with pytest.raises(ValidationFailed, match="unexpected store rejection") as caught:
         client.ingest("Order", [
             {"id": "existing", "status": "paid"},
