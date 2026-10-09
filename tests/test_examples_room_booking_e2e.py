@@ -493,6 +493,41 @@ def test_given_a_building_a_coordinator_when_booking_across_buildings_then_the_r
     assert coordinator.list(Booking, limit=None) == before
 
 
+def test_given_a_building_a_coordinator_when_rescheduling_to_a_building_b_room_then_scope_denied(
+    world: World, coordinator: OntologyClient
+) -> None:
+    session_id = world.ids["session_a_review_id"]
+    old_booking_id = world.bookings["a_review"]
+    old_room_id = world.ids["room_a_hall_id"]
+    other_building_room_id = world.ids["room_b_hall_id"]
+    before = coordinator.list(Booking, limit=None)
+
+    assert [
+        booking.id for booking in coordinator.traverse(booking_session, session_id, reverse=True)
+    ] == [old_booking_id]
+    assert [room.id for room in coordinator.traverse(booking_room, old_booking_id)] == [old_room_id]
+
+    with raises_code("SCOPE_DENIED"):
+        coordinator.execute(
+            RescheduleSession(
+                session_id=session_id,
+                room_id=other_building_room_id,
+                starts_at=at(12),
+                ends_at=at(13),
+            )
+        )
+
+    assert coordinator.list(Booking, limit=None) == before
+    assert [
+        booking.id for booking in coordinator.traverse(booking_session, session_id, reverse=True)
+    ] == [old_booking_id]
+    assert [room.id for room in coordinator.traverse(booking_room, old_booking_id)] == [old_room_id]
+    denied = world.store.audit_entries()[-1]
+    assert denied.outcome == "denied"
+    assert denied.error_code == "SCOPE_DENIED"
+    assert denied.writes == []
+
+
 def test_given_a_building_a_coordinator_when_reading_building_b_then_schedule_is_invisible(
     world: World, coordinator: OntologyClient
 ) -> None:

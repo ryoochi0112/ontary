@@ -33,7 +33,7 @@ See [`ontology.py`](ontology.py) for the full declaration.
 | Attendees fit the room capacity. | Action check | `book_session`, `reschedule_session` |
 | A booking never starts in the past. | Action check | `book_session`, `reschedule_session` |
 | A session has one live booking. | Action check | `book_session` |
-| A room and its session share a building. | Action check | `book_session`, `reschedule_session` |
+| A coordinator cannot use a room from another building. | Engine scope check on `target()` and `ref()` | `book_session`, `reschedule_session` |
 
 The fixture clock reads 2026-10-05 08:00 UTC when the world is seeded.
 The seeded bookings are on 2026-10-06.
@@ -90,7 +90,7 @@ A `room_id` and times on Session would store the same fact twice and would break
 So Booking is its own object type, owned by the engine, with one link to each side.
 The design guide explains this shape in [Links and object-backed link types](../../docs/ontology-design.md#links-and-object-backed-link-types).
 
-## Overlaps, the same-building check, and why they are action checks
+## Overlaps and why they are action checks
 
 An overlap check needs to see the other bookings of the room.
 A rule sees one object only, so it cannot do that check (ontary#156).
@@ -98,10 +98,8 @@ So `book_session` and `reschedule_session` check overlap in the action.
 They read the room's live bookings by traversing `booking_room`.
 `ActionContext` has no `where`, so the action filters the bookings in Python.
 
-The action also checks that the room and the session share a building.
-The engine scope-checks the `target()` parameter, which is the session.
-It does not scope-check a `ref()` parameter, which is the room.
-Without this check, a coordinator could link a session to a room in another building.
+The engine scope-checks both the `target()` session and the `ref()` room.
+A building-A coordinator who passes a building-B room is refused with `SCOPE_DENIED`.
 
 The rule `ends_after_start` is a different case.
 It compares two fields of one Booking, so it is a rule.
