@@ -70,6 +70,7 @@ from ontary.meta import (
     TransitionDef,
     default_action_description,
     default_function_description,
+    primary_key_sensitivity_violation,
     target_param_mismatch,
 )
 from ontary.model import ActionParams as ActionParams
@@ -398,6 +399,17 @@ def _check_event_metadata(
             )
 
 
+def _check_primary_key_sensitivity(
+    class_name: str, field_name: str, sensitivity: Sensitivity, *, primary_key: bool
+) -> None:
+    if primary_key:
+        body = primary_key_sensitivity_violation(sensitivity)
+        if body is not None:
+            raise ValidationFailed(
+                f"{class_name}.{field_name}: {body}", code="ONTOLOGY_INVALID"
+            )
+
+
 def _derive_properties(
     cls: type[OntologyObject] | type[Event], *, event: bool = False
 ) -> tuple[list[PropertyDef], str]:
@@ -473,6 +485,9 @@ def _derive_properties(
             )
             choices = meta.get("choices")
         sensitivity = meta.get("sensitivity") or Sensitivity()
+        _check_primary_key_sensitivity(
+            cls.__name__, field_name, sensitivity, primary_key=bool(meta.get("primary_key"))
+        )
         restricted = not sensitivity.human_visible or not sensitivity.ai_usable
         if restricted and not is_optional:
             raise ValidationFailed(

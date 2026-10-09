@@ -402,6 +402,101 @@ class TestAC6Gate:
         assert prop_def.required is False
 
 
+class TestPrimaryKeySensitivity:
+    @pytest.mark.parametrize(
+        "sensitivity",
+        [Sensitivity(human_visible=False), Sensitivity(ai_usable=False)],
+    )
+    def test_restricted_optional_primary_key_rejected(
+        self, make_ontology: OntologyFactory, sensitivity: Sensitivity
+    ) -> None:
+        ontology = make_ontology(name="t", scope_levels=[])
+
+        with pytest.raises(ValidationFailed) as exc_info:
+
+            @ontology.object(layer="L0")
+            class Member(OntologyObject):
+                pk: str | None = prop(
+                    primary_key=True, default=None, sensitivity=sensitivity
+                )
+
+        assert exc_info.value.code == "ONTOLOGY_INVALID"
+        for text in (
+            "Member.pk", "primary key", "always visible", "remove sensitivity",
+            "separate restricted property",
+        ):
+            assert text in str(exc_info.value)
+
+    def test_primary_key_refusal_precedes_optional_refusal(
+        self, make_ontology: OntologyFactory
+    ) -> None:
+        ontology = make_ontology(name="t", scope_levels=[])
+
+        with pytest.raises(ValidationFailed) as exc_info:
+
+            @ontology.object(layer="L0")
+            class Member(OntologyObject):
+                pk: str = prop(
+                    primary_key=True, sensitivity=Sensitivity(human_visible=False)
+                )
+
+        assert exc_info.value.code == "ONTOLOGY_INVALID"
+        for text in (
+            "Member.pk", "primary key", "always visible", "remove sensitivity",
+            "separate restricted property",
+        ):
+            assert text in str(exc_info.value)
+        assert "requires an Optional annotation" not in str(exc_info.value)
+
+    @pytest.mark.parametrize(
+        "sensitivity",
+        [Sensitivity(human_visible=False), Sensitivity(ai_usable=False)],
+    )
+    def test_direct_restricted_primary_key_rejected(
+        self, sensitivity: Sensitivity
+    ) -> None:
+        with pytest.raises(ValidationFailed) as exc_info:
+            ObjectTypeDef(
+                api_name="Member",
+                display_name="Member",
+                description="A Member.",
+                layer="L0",
+                primary_key="pk",
+                properties=[
+                    PropertyDef(
+                        name="pk", type="str", required=False, sensitivity=sensitivity
+                    )
+                ],
+            )
+
+        assert exc_info.value.code == "ONTOLOGY_INVALID"
+        for text in (
+            "ObjectTypeDef 'Member'.pk", "primary key", "always visible",
+            "remove sensitivity", "separate restricted property",
+        ):
+            assert text in str(exc_info.value)
+
+    @pytest.mark.parametrize(
+        "sensitivity",
+        [Sensitivity(human_visible=False), Sensitivity(ai_usable=False)],
+    )
+    def test_default_primary_key_with_restricted_property_accepted(
+        self, make_ontology: OntologyFactory, sensitivity: Sensitivity
+    ) -> None:
+        ontology = make_ontology(name="t", scope_levels=[])
+
+        @ontology.object(layer="L0")
+        class Member(OntologyObject):
+            pk: str = prop(primary_key=True)
+            secret: str | None = prop(default=None, sensitivity=sensitivity)
+
+        obj_def = ontology.registry.get_object_type("Member")
+        props = {prop_def.name: prop_def for prop_def in obj_def.properties}
+        assert obj_def.primary_key == "pk"
+        assert props["pk"].sensitivity == Sensitivity()
+        assert props["secret"].sensitivity == sensitivity
+
+
 class TestPrimaryKey:
     def test_missing_primary_key_rejected(self) -> None:
         ontology = Ontology(name="t", scope_levels=[])
