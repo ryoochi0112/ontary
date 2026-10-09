@@ -253,6 +253,21 @@ class ObjectStore(SqliteSchemaGate, StoreCore):
         row = rows[0] if rows else None
         return None if row is None else self._row_to_stored(row)
 
+    def _current_rows_many(self, obj_type: str, ids: list[str]) -> dict[str, StoredObject]:
+        rows = _sql.execute(
+            self._conn,
+            _sql.render(_sql.OBJECT_CURRENT_MANY_SELECT_TEMPLATE, "sqlite"),
+            (obj_type, json.dumps(ids, ensure_ascii=False), self._tenant),
+            dialect="sqlite",
+        ).rows
+        result: dict[str, StoredObject] = {}
+        # Rows arrive in row_id order, matching the single-row live pick.
+        for row in rows:
+            obj_id = str(row["id"])
+            if obj_id not in result:
+                result[obj_id] = self._row_to_stored(row)
+        return {obj_id: result[obj_id] for obj_id in ids if obj_id in result}
+
     def _last_row(self, obj_type: str, obj_id: str) -> StoredObject | None:
         """One object's newest row, live or retired -- what `_current_row`
         cannot serve because it filters on `valid_to IS NULL`."""
@@ -442,6 +457,30 @@ class ObjectStore(SqliteSchemaGate, StoreCore):
             dialect="sqlite",
         ).rows
         return [str(row["from_id"]) for row in rows]
+
+    def _link_ids_from_many(self, link_type: str, ids: list[str]) -> dict[str, list[str]]:
+        rows = _sql.execute(
+            self._conn,
+            _sql.render(_sql.LINKS_FROM_MANY_SELECT_TEMPLATE, "sqlite"),
+            (link_type, json.dumps(ids, ensure_ascii=False), self._tenant),
+            dialect="sqlite",
+        ).rows
+        result: dict[str, list[str]] = {obj_id: [] for obj_id in ids}
+        for row in rows:
+            result[str(row["from_id"])].append(str(row["to_id"]))
+        return result
+
+    def _link_ids_to_many(self, link_type: str, ids: list[str]) -> dict[str, list[str]]:
+        rows = _sql.execute(
+            self._conn,
+            _sql.render(_sql.LINKS_TO_MANY_SELECT_TEMPLATE, "sqlite"),
+            (link_type, json.dumps(ids, ensure_ascii=False), self._tenant),
+            dialect="sqlite",
+        ).rows
+        result: dict[str, list[str]] = {obj_id: [] for obj_id in ids}
+        for row in rows:
+            result[str(row["to_id"])].append(str(row["from_id"]))
+        return result
 
     def _link_ids_from_asof(
         self, link_type: str, from_id: str, asof: str

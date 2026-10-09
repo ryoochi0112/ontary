@@ -415,6 +415,21 @@ class PostgresStore(StoreCore):
         row = rows[0] if rows else None
         return None if row is None else self._row_to_stored(row)
 
+    def _current_rows_many(self, obj_type: str, ids: list[str]) -> dict[str, StoredObject]:
+        rows = _sql.execute(
+            self._conn,
+            _sql.render(_sql.OBJECT_CURRENT_MANY_SELECT_TEMPLATE, "postgres"),
+            (obj_type, ids, self._tenant),
+            dialect="postgres",
+        ).rows
+        result: dict[str, StoredObject] = {}
+        # Rows arrive in row_id order, matching the single-row live pick.
+        for row in rows:
+            obj_id = str(row[2])
+            if obj_id not in result:
+                result[obj_id] = self._row_to_stored(row)
+        return {obj_id: result[obj_id] for obj_id in ids if obj_id in result}
+
     def _last_row(self, obj_type: str, obj_id: str) -> StoredObject | None:
         rows = _sql.execute(
             self._conn,
@@ -584,6 +599,30 @@ class PostgresStore(StoreCore):
             dialect="postgres",
         ).rows
         return [str(row[0]) for row in rows]
+
+    def _link_ids_from_many(self, link_type: str, ids: list[str]) -> dict[str, list[str]]:
+        rows = _sql.execute(
+            self._conn,
+            _sql.render(_sql.LINKS_FROM_MANY_SELECT_TEMPLATE, "postgres"),
+            (link_type, ids, self._tenant),
+            dialect="postgres",
+        ).rows
+        result: dict[str, list[str]] = {obj_id: [] for obj_id in ids}
+        for row in rows:
+            result[str(row[0])].append(str(row[1]))
+        return result
+
+    def _link_ids_to_many(self, link_type: str, ids: list[str]) -> dict[str, list[str]]:
+        rows = _sql.execute(
+            self._conn,
+            _sql.render(_sql.LINKS_TO_MANY_SELECT_TEMPLATE, "postgres"),
+            (link_type, ids, self._tenant),
+            dialect="postgres",
+        ).rows
+        result: dict[str, list[str]] = {obj_id: [] for obj_id in ids}
+        for row in rows:
+            result[str(row[0])].append(str(row[1]))
+        return result
 
     def _link_ids_from_asof(
         self, link_type: str, from_id: str, asof: str

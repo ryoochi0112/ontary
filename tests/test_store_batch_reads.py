@@ -13,7 +13,7 @@ from test_store_conformance import STORE_FACTORIES, StoreFactory, build_registry
 
 from ontary.errors import ValidationFailed
 from ontary.meta import Cardinality, LinkTypeDef
-from ontary.store import InMemoryStore, ObjectStore, Source, Store
+from ontary.store import InMemoryStore, ObjectStore, Source, Store, _sql
 from ontary.store._core import StoreCore
 from ontary.store.postgres import PostgresStore
 
@@ -180,8 +180,13 @@ def test_core_defaults_loop_single_storage_steps() -> None:
         assert getattr(StoreCore, name)(store, type_name, ids) == expected
 
 
-def test_in_memory_batch_preserves_duplicate_rows_and_first_live_pick() -> None:
-    store = InMemoryStore(_registry())
+def test_batch_preserves_duplicate_rows_and_first_live_pick(store_factory: StoreFactory) -> None:
+    store = store_factory(_registry())
+    if isinstance(store, (ObjectStore, PostgresStore)):
+        # Exercise the defensive pick/grouping rules in a disposable store.
+        store._conn.execute("DROP INDEX idx_objects_live_id")
+        store._conn.execute("DROP INDEX idx_links_live_pair")
+        store._conn.commit()
     _seed(store)
     source = Source(source_system="duplicate-row")
     store._insert_object_row(
@@ -191,8 +196,15 @@ def test_in_memory_batch_preserves_duplicate_rows_and_first_live_pick() -> None:
         "2026-01-02T00:00:00+00:00",
         source,
     )
-    store._insert_link_row("batchLink", "many", "z", store._links[0]["valid_from"])
+    first = store.read_current("Team", "many")
+    assert first is not None
+    store._insert_link_row("batchLink", "many", "z", first.lineage.valid_from)
     assert store.read_current_many("Team", ["many"]) == {"many": store.read_current("Team", "many")}
+    assert store.read_current_many("Team", ["many"])["many"].payload["name"] == "many"
+    assert store.links_from_many("batchLink", ["many"])["many"] == store.links_from(
+        "batchLink", "many"
+    )
+    assert store.links_to_many("batchLink", ["z"])["z"] == store.links_to("batchLink", "z")
     assert store.links_from_many("batchLink", ["many"])["many"] == ["a", "z", "z", "é", "zero"]
     assert store.links_to_many("batchLink", ["z"])["z"] == ["many", "many", "one"]
 
@@ -236,3 +248,33 @@ def test_in_memory_batch_scans_each_storage_collection_once(monkeypatch) -> None
     assert links.scans == 1
     store.links_to_many("batchLink", ["z", "a", "zero", "missing"])
     assert links.scans == 2
+
+
+@pytest.mark.parametrize("count", [1, 10, 2000])
+@pytest.mark.parametrize(
+    ("step", "type_name", "present"),
+    [
+        ("_current_rows_many", "Team", "many"),
+        ("_link_ids_from_many", "batchLink", "many"),
+        ("_link_ids_to_many", "batchLink", "z"),
+    ],
+)
+def test_sql_batch_step_executes_one_statement(
+    store_factory: StoreFactory, monkeypatch, count, step, type_name, present
+) -> None:
+    store = store_factory(_registry())
+    if isinstance(store, InMemoryStore):
+        pytest.skip("SQL statement contract applies to SQLite and Postgres")
+    _seed(store)
+    ids = [present, *(f"missing-{i}" for i in range(count - 1))]
+    execute = Mock(wraps=_sql.execute)
+    monkeypatch.setattr(_sql, "execute", execute)
+    result = getattr(store, step)(type_name, ids)
+    assert execute.call_count == 1
+    if step == "_current_rows_many":
+        assert list(result) == [present]
+        assert result[present].payload == {"id": "many", "name": "many"}
+    else:
+        expected = ["a", "z", "é", "zero"] if present == "many" else ["many", "one"]
+        assert result[present] == expected
+        assert all(result[obj_id] == [] for obj_id in ids[1:])

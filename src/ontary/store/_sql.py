@@ -456,6 +456,13 @@ ORDER BY row_id ASC
 LIMIT 1
 """
 
+OBJECT_CURRENT_MANY_SELECT_TEMPLATE = f"""
+SELECT {_OBJECT_COLUMN_LIST} FROM objects
+WHERE object_type = {{p}} AND id {{in_ids}} AND valid_to IS NULL
+  AND tenant = {{p}}
+ORDER BY row_id ASC
+"""
+
 # `read_last` must be a SUPERSET of `read_current`, never a different pick:
 # the action target gate resolves scope from it while every consumer read
 # resolves scope from `read_current`, so the two disagreeing means the gate
@@ -511,6 +518,20 @@ SELECT {_LINKS_TO_COLUMN_LIST} FROM links
 WHERE link_type = {{p}} AND to_id = {{p}} AND valid_to IS NULL
   AND tenant = {{p}}
 ORDER BY valid_from{{collate}} ASC, from_id{{collate}} ASC
+"""
+
+LINKS_FROM_MANY_SELECT_TEMPLATE = """
+SELECT from_id, to_id FROM links
+WHERE link_type = {p} AND from_id {in_ids} AND valid_to IS NULL
+  AND tenant = {p}
+ORDER BY from_id{collate} ASC, valid_from{collate} ASC, to_id{collate} ASC
+"""
+
+LINKS_TO_MANY_SELECT_TEMPLATE = """
+SELECT to_id, from_id FROM links
+WHERE link_type = {p} AND to_id {in_ids} AND valid_to IS NULL
+  AND tenant = {p}
+ORDER BY to_id{collate} ASC, valid_from{collate} ASC, from_id{collate} ASC
 """
 
 LINKS_FROM_ASOF_SELECT_TEMPLATE = f"""
@@ -632,6 +653,10 @@ def render(template: str, dialect: Dialect, *, placeholder_count: int | None = N
         template = template.replace("{placeholders}", placeholders(dialect, placeholder_count))
     elif placeholder_count is not None:
         raise ValueError("placeholder_count is only valid for a placeholder list")
+    template = template.replace(
+        "{in_ids}",
+        "IN (SELECT value FROM json_each({p}))" if dialect == "sqlite" else "= ANY({p}::text[])",
+    )
     template = template.replace("{collate}", _COLLATE_BINARY[dialect])
     return template.replace("{p}", _placeholder(dialect))
 
