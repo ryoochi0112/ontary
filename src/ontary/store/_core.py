@@ -26,6 +26,15 @@ The order of steps of each write:
    the write closes, then the storage steps write and close rows.
 5. The write record is captured after the transaction exits.
 
+The bulk object path holds one transaction over the whole call and reads
+current rows once per chunk, remembering both missing ids and earlier writes.
+Each record is prepared or merged and checked before comparing canonical JSON.
+An identical merge spends no clock tick and makes no write or write record.
+Changed rows use the same `_apply_insert` / `_apply_update` steps as single-row
+writes, with their clock reads inside the bulk transaction. Listed refusals
+leave that record unwritten; every other exception rolls back the whole call.
+Write records are captured only after the bulk transaction exits.
+
 Every public read canonicalizes ids, resolves a link type against the
 registry, and checks the page batch and cursor here; backends supply only the
 read storage steps.
@@ -37,16 +46,18 @@ from __future__ import annotations
 
 import abc
 import json
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import AbstractContextManager, contextmanager
 from datetime import datetime
 from typing import Any
 
 from ontary.audit import AuditEntry, WriteRecord
-from ontary.meta import Cardinality, OntologyRegistry
+from ontary.errors import OntaryError
+from ontary.meta import Cardinality, OntologyRegistry, normalize_declared_payload
 from ontary.store._filter import SQLITE_DOMAIN, BindDomain, RowFilter
 from ontary.store._shared import (
     AuditRowFields,
+    PreparedInsert,
     StoreClock,
     WriteCapture,
     canonical_id,
@@ -64,13 +75,34 @@ from ontary.store._shared import (
     object_already_exists,
     prepare_insert,
     resolve_link_type,
+    resolve_object_type,
     retire_object_refusal,
     unknown_page_token,
 )
-from ontary.store.values import DEFAULT_BATCH, PagedRow, Source, StoredObject
+from ontary.store.values import DEFAULT_BATCH, Lineage, PagedRow, RowOutcome, Source, StoredObject
+
+INGEST_BATCH = DEFAULT_BATCH
 
 _FROM_SIDE_CARDINALITIES = (Cardinality.ONE_TO_ONE, Cardinality.MANY_TO_ONE)
 _TO_SIDE_CARDINALITIES = (Cardinality.ONE_TO_ONE, Cardinality.ONE_TO_MANY)
+
+
+def _written_object(
+    obj_type: str, obj_id: str, encoded_payload: str, valid_from: str, source: Source
+) -> StoredObject:
+    """The just-written storage value, without another storage read."""
+    return StoredObject(
+        payload=json.loads(encoded_payload),
+        lineage=Lineage(
+            object_type=obj_type,
+            object_id=obj_id,
+            valid_from=valid_from,
+            valid_to=None,
+            source_system=source.source_system,
+            source_id=source.source_id,
+            extracted_at=source.extracted_at,
+        ),
+    )
 
 
 class StoreCore(abc.ABC):
@@ -411,17 +443,30 @@ class StoreCore(abc.ABC):
         prepared = prepare_insert(
             self._registry, obj_type, payload, capturing=self._write_capture.active
         )
+        self._apply_insert(obj_type, prepared, source, check_exists=True)
+        obj_id = prepared.obj_id
+        self._record_write(WriteRecord(op="create", object_type=obj_type, object_id=obj_id))
+        return obj_id
+
+    def _apply_insert(
+        self,
+        obj_type: str,
+        prepared: PreparedInsert,
+        source: Source,
+        *,
+        check_exists: bool = False,
+    ) -> StoredObject:
+        """Encode, stamp, and insert a prepared row; bulk already checked existence."""
         obj_id = prepared.obj_id
         # `json.dumps`, not a lenient encoder: an unencodable payload must
         # fail the write on every backend, before the clock is read.
         encoded = json.dumps(prepared.payload)
         now = self._now()
         with self.transaction():
-            if self.read_current(obj_type, obj_id) is not None:
+            if check_exists and self.read_current(obj_type, obj_id) is not None:
                 raise object_already_exists(obj_type, obj_id)
             self._insert_object_row(obj_type, obj_id, encoded, now, source)
-        self._record_write(WriteRecord(op="create", object_type=obj_type, object_id=obj_id))
-        return obj_id
+        return _written_object(obj_type, obj_id, encoded, now, source)
 
     def update(
         self,
@@ -440,18 +485,109 @@ class StoreCore(abc.ABC):
             merged = merge_update(
                 obj_def, obj_type, obj_id, current, payload_changes, capturing=capturing
             )
-            # Encoded before the clock read and before any row is closed, so
-            # an unencodable merge leaves the old row live even when the
-            # caller catches the error inside an outer transaction.
-            encoded = json.dumps(merged)
-            now = self._now()
-            for row in self._live_object_rows(obj_type, obj_id):
-                ensure_not_before(
-                    row.lineage.valid_from, now, what=f"{obj_type} {obj_id}"
-                )
-            self._close_object_rows(obj_type, obj_id, now)
-            self._insert_object_row(obj_type, obj_id, encoded, now, source)
+            self._apply_update(obj_type, obj_id, merged, source)
         self._record_write(WriteRecord(op="update", object_type=obj_type, object_id=obj_id))
+
+    def _apply_update(
+        self, obj_type: str, obj_id: str, merged: dict[str, Any], source: Source
+    ) -> StoredObject:
+        """Replace a validated row inside the caller's transaction."""
+        # Encoded before the clock read and before any row is closed, so
+        # an unencodable merge leaves the old row live even when the
+        # caller catches the error inside an outer transaction.
+        encoded = json.dumps(merged)
+        now = self._now()
+        for row in self._live_object_rows(obj_type, obj_id):
+            ensure_not_before(row.lineage.valid_from, now, what=f"{obj_type} {obj_id}")
+        self._close_object_rows(obj_type, obj_id, now)
+        self._insert_object_row(obj_type, obj_id, encoded, now, source)
+        return _written_object(obj_type, obj_id, encoded, now, source)
+
+    def upsert_objects(
+        self,
+        obj_type: str,
+        records: Sequence[dict[str, Any]],
+        source: Source,
+        *,
+        refusals: frozenset[str] = frozenset(),
+    ) -> list[RowOutcome]:
+        """Trusted bulk upsert, in input order, with one transaction for the call.
+
+        Listed validation refusals leave their record unwritten. Other errors
+        propagate and roll back the batch. Identical merged payloads keep their
+        existing version and lineage without reading the clock.
+        """
+        obj_def = resolve_object_type(self._registry, obj_type)
+        capturing = self._write_capture.active
+        outcomes: list[RowOutcome] = []
+        known: dict[str, StoredObject | None] = {}
+        with self.transaction():
+            for start in range(0, len(records), INGEST_BATCH):
+                chunk = records[start : start + INGEST_BATCH]
+                # Match prepare_insert: declared choices normalize Enum keys
+                # before deriving the id used by storage and the known map.
+                ids = [
+                    canonical_id(raw_id)
+                    if (
+                        raw_id := normalize_declared_payload(obj_def, record).get(obj_def.primary_key)
+                    ) is not None
+                    else None
+                    for record in chunk
+                ]
+                new_ids = list(
+                    dict.fromkeys(
+                        obj_id for obj_id in ids if obj_id is not None and obj_id not in known
+                    )
+                )
+                current_rows = self.read_current_many(obj_type, new_ids)
+                known.update((obj_id, current_rows.get(obj_id)) for obj_id in new_ids)
+                for record, obj_id in zip(chunk, ids, strict=True):
+                    try:
+                        current = known.get(obj_id) if obj_id is not None else None
+                        if current is None:
+                            prepared = prepare_insert(
+                                self._registry,
+                                obj_type,
+                                {**obj_def.owned_property_defaults(), **record},
+                                capturing=capturing,
+                            )
+                            written = self._apply_insert(obj_type, prepared, source)
+                            known[prepared.obj_id] = written
+                            outcomes.append(RowOutcome("inserted", prepared.obj_id, None))
+                        else:
+                            check_update_authority(
+                                self._registry, obj_type, record, capturing=capturing
+                            )
+                            obj_id = current.lineage.object_id
+                            merged = merge_update(
+                                obj_def, obj_type, obj_id, current, record, capturing=capturing
+                            )
+                            if json.dumps(
+                                merged, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+                            ) == json.dumps(
+                                current.payload,
+                                sort_keys=True,
+                                separators=(",", ":"),
+                                ensure_ascii=False,
+                            ):
+                                outcomes.append(RowOutcome("unchanged", obj_id, None))
+                            else:
+                                known[obj_id] = self._apply_update(obj_type, obj_id, merged, source)
+                                outcomes.append(RowOutcome("updated", obj_id, None))
+                    except OntaryError as error:
+                        if error.code not in refusals:
+                            raise
+                        outcomes.append(RowOutcome("refused", obj_id, error))
+        for outcome in outcomes:
+            if outcome.status in {"inserted", "updated"}:
+                self._record_write(
+                    WriteRecord(
+                        op="create" if outcome.status == "inserted" else "update",
+                        object_type=obj_type,
+                        object_id=outcome.id,
+                    )
+                )
+        return outcomes
 
     def retire_object(self, object_type: str, obj_id: str) -> StoredObject:
         obj_id = canonical_id(obj_id)

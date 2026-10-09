@@ -6,10 +6,13 @@ single canonical copy -- the per-backend duplicates are gone.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
+
+from ontary.errors import OntaryError
 
 DEFAULT_TENANT = "default"
 """The tenant a store uses when none is named.
@@ -28,6 +31,15 @@ round-trip, NOT a cap on how much a caller can ultimately read (repeated
 `read_page` calls, or `read_all`, still walk every row). Callers needing a
 different tradeoff between round-trips and per-call memory pass `batch=`
 explicitly; 500 is a reasonable default for typical row sizes."""
+
+
+@dataclass(frozen=True)
+class RowOutcome:
+    """One bulk record's result, in the same position as its input record."""
+
+    status: Literal["inserted", "updated", "unchanged", "refused"]
+    id: str | None
+    error: OntaryError | None
 
 
 class Source(BaseModel):
