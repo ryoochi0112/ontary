@@ -49,6 +49,14 @@ you**.
   typed call. Other audited values are unchanged. A side effect: a dict call that is both
   out of scope and invalid for the params class is now refused as invalid params,
   not `SCOPE_DENIED`.
+- **`ActionContext` now keys an object by its canonical id (#242).** `link`, `unlink`,
+  `traverse`, `traverse_many`, `retire`, `save`, and `emit` derived an object's id
+  with `str()`. For a primary key that holds a `(str, Enum)` member, `str()` gives
+  `'Id.O1'`, not the stored value `'o1'`. This happens with an object built by
+  `model_construct`, or when a handler sets the key to the equal member. `traverse`
+  and `traverse_many` then returned nothing. `save` failed on the second save after
+  the key changed. The other calls refused the object as missing. The context now
+  uses the same canonical id as every store (#91).
 
 ## [0.26.0] — 2026-10-09
 
