@@ -66,6 +66,10 @@ you**.
 
 ### Fixed
 
+- `traverse_many` now refuses a bare `str` or `bytes` as the anchors with
+  `INVALID_PARAMS`. Before, a single id such as `"ab"` was read as the anchors
+  `"a"` and `"b"`. The check covers the client, `BoundQuery`, `ActionContext`,
+  and `GuardedQuery` (#240).
 - A refused `create_link` for a cardinality limit now gives the same message on
   `PostgresStore` as on the other two stores (#67).
 - The reads that decide a `create_link` refusal or no-op (endpoint existence, an

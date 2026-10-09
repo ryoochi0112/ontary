@@ -161,6 +161,19 @@ def canonical_id(value: object) -> str:
     return str(value)
 
 
+def refuse_bare_anchors(anchors: object) -> None:
+    """Refuse a bare `str` or `bytes` passed where `traverse_many` wants an
+    iterable of anchors (#240). Both are iterable, so without this check one
+    id would silently become one anchor per character."""
+    if isinstance(anchors, (str, bytes)):
+        raise ValidationFailed(
+            f"traverse_many anchors must be an iterable of ids or objects, not a "
+            f"bare {type(anchors).__name__}; wrap a single anchor in a list: "
+            f"[{anchors!r}]",
+            code="INVALID_PARAMS",
+        )
+
+
 def resolve_object_type(registry: OntologyRegistry, obj_type: str) -> ObjectTypeDef:
     """Registry lookup using the public coded unknown-object refusal."""
     return registry.get_object_type(obj_type)

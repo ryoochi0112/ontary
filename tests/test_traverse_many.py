@@ -538,3 +538,67 @@ def test_typed_model_anchors_use_canonical_written_ids(
     missing_key = Node.model_construct()
     with raises_code(ValidationFailed, "INVALID_PARAMS"):
         client.traverse_many(link, [missing_key], reverse=reverse)
+
+
+@pytest.mark.parametrize("bare", ["ab", b"ab", AnchorId.ONE], ids=["str", "bytes", "str-enum"])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_bare_string_anchors_are_refused_on_every_surface(
+    store_factory, make_ontology, make_policy, make_consumer, bare, reverse,
+) -> None:
+    """#240: a bare str is an Iterable[str]; it must not become one anchor per character."""
+    from ontary.functions import BoundQuery
+
+    ontology = make_ontology(name="bare-anchors")
+
+    @ontology.object(layer="L0", scope="unscoped", owned=True)
+    class Node(OntologyObject):
+        id: str = prop(primary_key=True)
+
+    link = ontology.link("next", Node, Node, "MANY_TO_MANY", owned=True)
+
+    def refusal(call: Any) -> str:
+        try:
+            call()
+        except ValidationFailed as exc:
+            return f"{exc.code}: {exc}"
+        return "accepted"
+
+    @ontology.function(api_name="walkBare")
+    def walk(query: BoundQuery) -> dict[str, Any]:
+        return {
+            "typed": refusal(lambda: query.traverse_many(link, bare, reverse=reverse)),
+            "string": refusal(lambda: query.traverse_many("next", bare, reverse=reverse)),
+        }
+
+    class Params(ActionParams):
+        node_id: str = target(Node)
+
+    @ontology.action(Params, target=Node, roles=["Member"], api_name="WalkBare")
+    def walk_action(ctx: ActionContext, params: Params) -> dict[str, Any]:
+        return {"action": refusal(lambda: ctx.traverse_many(link, bare, reverse=reverse))}
+
+    ontology.validate()
+    store = store_factory(ontology.registry)
+    for obj_id in ("a", "b", "ab"):
+        store.insert("Node", {"id": obj_id}, SRC)
+    store.create_link("next", "a", "b")
+    store.create_link("next", "b", "a")
+    client = OntologyRuntime(ontology, store).for_consumer(make_consumer())
+    query = GuardedQuery(store, ontology.registry, make_policy(unscoped_types={"Node"}))
+    with count_reads(store) as calls:
+        results = {
+            "client typed": refusal(lambda: client.traverse_many(link, bare, reverse=reverse)),
+            "client string": refusal(
+                lambda: client.traverse_many("Node", "next", bare, reverse=reverse)
+            ),
+            "guarded": refusal(
+                lambda: query.traverse_many(make_consumer(), "next", bare, reverse=reverse)
+            ),
+        }
+    assert not calls
+    results |= {f"function {k}": v for k, v in client.call_function("walkBare", {}).items()}
+    results |= client.execute("WalkBare", {"node_id": "a"})
+    assert len(results) == 6
+    for surface, outcome in results.items():
+        assert outcome.startswith("INVALID_PARAMS: "), (surface, outcome)
+        assert "traverse_many" in outcome and "list" in outcome, (surface, outcome)
