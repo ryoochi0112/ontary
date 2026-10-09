@@ -1,4 +1,4 @@
-"""Bulk object writes share single-write rules, retain history, and bound reads."""
+"""Bulk writes share single-write rules, retain history, and bound reads."""
 
 from __future__ import annotations
 
@@ -19,6 +19,7 @@ from test_store_conformance import (
     STORE_FACTORIES,
     StoreFactory,
     _datetime_ontology,
+    _link_history_rows,
     _note_registry,
     _order_registry,
     build_authority_registry,
@@ -28,8 +29,8 @@ from test_store_conformance import (
 import ontary.store as store_pkg
 from ontary import Ontology, OntologyObject, prop
 from ontary.audit import WriteRecord
-from ontary.errors import PreconditionFailed, ValidationFailed
-from ontary.meta import RuleDef
+from ontary.errors import AuthorityError, ConflictError, PreconditionFailed, ValidationFailed
+from ontary.meta import Cardinality, LinkTypeDef, RuleDef
 from ontary.store import Source
 from ontary.store._core import StoreCore
 
@@ -666,3 +667,404 @@ def test_history_counter_includes_closed_rows_and_filters_tenant_type_and_id(
     assert history_rows(store, "Company", "a") == 1
     monkeypatch.setattr(store, "_tenant", "foreign")
     assert history_rows(store, "Team", "a") == 0
+
+
+_LINK_REFUSALS = frozenset({"CARDINALITY_VIOLATION", "LINK_ENDPOINT_NOT_FOUND"})
+
+
+def _bulk_link_registry(cardinality, *, same_type=False, owned=False):
+    registry = build_registry()
+    registry.register_link_type(
+        LinkTypeDef(
+            api_name="bulkLink",
+            from_type="Team",
+            to_type="Team" if same_type else "Department",
+            cardinality=cardinality,
+            description="Bulk test link",
+            owned=owned,
+        )
+    )
+    registry.validate()
+    return registry
+
+
+def _seed_bulk_link_endpoints(store, ids=("a", "b")):
+    records = [{"id": obj_id, "name": obj_id} for obj_id in ids]
+    for obj_type in ("Team", "Department"):
+        store.upsert_objects(obj_type, records, _SOURCE)
+
+
+def test_bulk_link_outcomes_preserve_order_and_refusals_leave_no_link_history(
+    store_factory,
+) -> None:
+    store = store_factory(_bulk_link_registry(Cardinality.MANY_TO_ONE))
+    _seed_bulk_link_endpoints(store)
+    clock = _Clock()
+    store.bind_clock(clock)
+    pairs = [("a", "a"), ("a", "a"), ("a", "b"), ("missing", "a"), ("b", "a")]
+    with _count_steps(store) as counts:
+        outcomes = store.create_links("bulkLink", pairs, refusals=_LINK_REFUSALS)
+    assert [outcome.status for outcome in outcomes] == [
+        "inserted",
+        "unchanged",
+        "refused",
+        "refused",
+        "inserted",
+    ]
+    assert [outcome.id for outcome in outcomes] == [f"{a}->{b}" for a, b in pairs]
+    assert all(outcome.error is None for outcome in outcomes if outcome.status != "refused")
+    assert isinstance(outcomes[2].error, ConflictError)
+    assert outcomes[2].error.code == "CARDINALITY_VIOLATION"
+    assert isinstance(outcomes[3].error, ValidationFailed)
+    assert outcomes[3].error.code == "LINK_ENDPOINT_NOT_FOUND"
+    assert counts["_insert_link_row"] == clock.reads == 2
+    assert counts["_last_row"] == 1
+    assert store.links_from("bulkLink", "a") == ["a"]
+    assert store.links_from("bulkLink", "b") == ["a"]
+    assert _link_history_rows(store, "bulkLink", "a", "a") == [None]
+    assert _link_history_rows(store, "bulkLink", "a", "b") == []
+    assert _link_history_rows(store, "bulkLink", "missing", "a") == []
+
+
+@pytest.mark.parametrize("across_chunks", [False, True])
+@pytest.mark.parametrize(
+    ("cardinality", "conflicting_pair", "side"),
+    [
+        (Cardinality.MANY_TO_ONE, ("a", "b"), "from_id"),
+        (Cardinality.ONE_TO_MANY, ("b", "a"), "to_id"),
+        (Cardinality.ONE_TO_ONE, ("a", "b"), "from_id"),
+        (Cardinality.ONE_TO_ONE, ("b", "a"), "to_id"),
+    ],
+)
+def test_bulk_link_maps_see_earlier_pairs_for_idempotence_and_cardinality(
+    store_factory, across_chunks, cardinality, conflicting_pair, side
+) -> None:
+    from ontary.store._core import INGEST_BATCH
+
+    store = store_factory(_bulk_link_registry(cardinality))
+    _seed_bulk_link_endpoints(store)
+    pairs = [("a", "a")] * (INGEST_BATCH if across_chunks else 1)
+    pairs.extend([("a", "a"), conflicting_pair, ("b", "b")])
+    with _count_steps(store) as counts:
+        outcomes = store.create_links("bulkLink", pairs, refusals=_LINK_REFUSALS)
+    assert outcomes[0].status == "inserted"
+    assert all(outcome.status == "unchanged" for outcome in outcomes[1:-2])
+    assert [outcome.status for outcome in outcomes[-2:]] == ["refused", "inserted"]
+    assert outcomes[-2].error.code == "CARDINALITY_VIOLATION"
+    assert str(outcomes[-2].error) == (
+        f"bulkLink: {side} 'a' already has an active link ({cardinality.value} forbids a second)"
+    )
+    assert counts["_insert_link_row"] == 2
+    assert _link_history_rows(store, "bulkLink", *conflicting_pair) == []
+    assert store.links_from("bulkLink", "a") == ["a"]
+    assert store.links_to("bulkLink", "b") == ["b"]
+
+
+@pytest.mark.parametrize("side", ["from", "to"])
+@pytest.mark.parametrize("state", ["missing", "retired", "wrong_type"])
+def test_bulk_link_missing_endpoint_reads_last_only_for_failing_side_and_keeps_wording(
+    store_factory, monkeypatch, side, state
+) -> None:
+    store = store_factory(_bulk_link_registry(Cardinality.MANY_TO_ONE))
+    _seed_bulk_link_endpoints(store)
+    endpoint_type = "Team" if side == "from" else "Department"
+    if state == "retired":
+        store.insert(endpoint_type, {"id": "bad", "name": "retired"}, _SOURCE)
+        store.retire_object(endpoint_type, "bad")
+    elif state == "wrong_type":
+        store.insert("Company", {"id": "bad", "name": "other type"}, _SOURCE)
+    last_calls = []
+    original = store._last_row
+
+    def last(obj_type, obj_id):
+        last_calls.append((obj_type, obj_id))
+        return original(obj_type, obj_id)
+
+    monkeypatch.setattr(store, "_last_row", last)
+    pair = ("bad", "a") if side == "from" else ("a", "bad")
+    outcomes = store.create_links("bulkLink", [pair, ("b", "b")], refusals=_LINK_REFUSALS)
+    assert [outcome.status for outcome in outcomes] == ["refused", "inserted"]
+    assert outcomes[0].error.code == "LINK_ENDPOINT_NOT_FOUND"
+    wording = "is retired" if state == "retired" else "does not exist"
+    assert str(outcomes[0].error) == (
+        f"bulkLink: {side}_id 'bad' {wording} as a live "
+        f"{endpoint_type} -- a link needs a live object at both ends"
+    )
+    assert last_calls == [(endpoint_type, "bad")]
+    assert _link_history_rows(store, "bulkLink", *pair) == []
+    assert store.links_from("bulkLink", "b") == ["b"]
+
+
+def test_bulk_link_endpoints_precede_identical_link_and_cardinality(store_factory) -> None:
+    store = store_factory(_bulk_link_registry(Cardinality.MANY_TO_ONE))
+    _seed_bulk_link_endpoints(store)
+    store.create_link("bulkLink", "a", "a")
+    # Retiring an endpoint leaves the original link live. The duplicate still
+    # must be refused for its retired endpoint rather than called unchanged.
+    store.retire_object("Department", "a")
+    outcomes = store.create_links(
+        "bulkLink",
+        [("a", "a"), ("a", "missing"), ("missing", "missing")],
+        refusals=_LINK_REFUSALS,
+    )
+    assert all(outcome.status == "refused" for outcome in outcomes)
+    assert all(outcome.error.code == "LINK_ENDPOINT_NOT_FOUND" for outcome in outcomes)
+    assert "to_id 'a' is retired" in str(outcomes[0].error)
+    assert "to_id 'missing' does not exist" in str(outcomes[1].error)
+    assert "from_id 'missing' does not exist" in str(outcomes[2].error)
+    assert _link_history_rows(store, "bulkLink", "a", "a") == [None]
+
+
+def test_bulk_link_endpoint_maps_keep_same_id_under_different_types_separate(
+    store_factory,
+) -> None:
+    store = store_factory(_bulk_link_registry(Cardinality.MANY_TO_ONE))
+    store.insert("Team", {"id": "a", "name": "team"}, _SOURCE)
+    store.insert("Department", {"id": "b", "name": "department"}, _SOURCE)
+    with _count_steps(store) as counts:
+        outcomes = store.create_links(
+            "bulkLink", [("a", "a"), ("b", "b"), ("a", "b")], refusals=_LINK_REFUSALS
+        )
+    assert [outcome.status for outcome in outcomes] == ["refused", "refused", "inserted"]
+    assert "to_id 'a' does not exist as a live Department" in str(outcomes[0].error)
+    assert "from_id 'b' does not exist as a live Team" in str(outcomes[1].error)
+    assert counts["_last_row"] == 2
+    assert _link_history_rows(store, "bulkLink", "a", "a") == []
+    assert _link_history_rows(store, "bulkLink", "b", "b") == []
+    assert store.links_from("bulkLink", "a") == ["b"]
+
+
+def test_bulk_link_prefetch_and_writes_use_the_same_canonical_endpoint_ids(
+    store_factory,
+    monkeypatch,
+) -> None:
+    class Id(str, Enum):
+        A = "a"
+        B = "b"
+
+    store = store_factory(_bulk_link_registry(Cardinality.ONE_TO_ONE))
+    _seed_bulk_link_endpoints(store)
+    original = store._insert_link_row
+    written_pairs = []
+    prefetches = []
+
+    def canonical_batch(original):
+        def read(type_name, ids):
+            assert all(type(obj_id) is str for obj_id in ids)
+            prefetches.append((type_name, ids.copy()))
+            return original(type_name, ids)
+
+        return read
+
+    def insert(link_type, from_id, to_id, valid_from):
+        assert type(from_id) is type(to_id) is str
+        written_pairs.append((from_id, to_id))
+        return original(link_type, from_id, to_id, valid_from)
+
+    monkeypatch.setattr(store, "_insert_link_row", insert)
+    for name in ("_current_rows_many", "_link_ids_from_many", "_link_ids_to_many"):
+        monkeypatch.setattr(store, name, canonical_batch(getattr(store, name)))
+    pairs = [(Id.A, Id.B), ("a", "b")]
+    with _count_steps(store) as counts:
+        outcomes = store.create_links("bulkLink", pairs, refusals=_LINK_REFUSALS)
+    assert [(outcome.status, outcome.id) for outcome in outcomes] == [
+        ("inserted", "a->b"),
+        ("unchanged", "a->b"),
+    ]
+    assert written_pairs == [("a", "b")]
+    assert prefetches == [
+        ("Team", ["a"]),
+        ("Department", ["b"]),
+        ("bulkLink", ["a"]),
+        ("bulkLink", ["b"]),
+    ]
+    assert counts["_current_rows_many"] == 2
+    assert counts["_last_row"] == counts["_current_row"] == 0
+    assert _link_history_rows(store, "bulkLink", "a", "b") == [None]
+    assert pairs[0] == (Id.A, Id.B)
+
+
+@pytest.mark.parametrize("cardinality", list(Cardinality))
+def test_thousand_new_and_identical_links_bound_reads_and_skip_rerun_writes(
+    store_factory, cardinality
+) -> None:
+    store = store_factory(_bulk_link_registry(cardinality))
+    ids = [str(i) for i in range(1000)]
+    _seed_bulk_link_endpoints(store, ids)
+    pairs = [(obj_id, obj_id) for obj_id in ids]
+    clock = _Clock()
+    store.bind_clock(clock)
+    limited_to = cardinality in (Cardinality.ONE_TO_ONE, Cardinality.ONE_TO_MANY)
+    for status in ("inserted", "unchanged"):
+        with _count_steps(store) as counts:
+            outcomes = store.create_links("bulkLink", pairs)
+        assert [(outcome.status, outcome.id) for outcome in outcomes] == [
+            (status, f"{obj_id}->{obj_id}") for obj_id in ids
+        ]
+        assert sum(counts[name] for name in _READ_STEPS) <= 8, counts
+        assert counts["_current_rows_many"] == 4
+        assert counts["_link_ids_from_many"] == 2
+        assert counts["_link_ids_to_many"] == (2 if limited_to else 0)
+        assert counts["_insert_link_row"] == (1000 if status == "inserted" else 0)
+        assert sum(counts[name] for name in _WRITE_STEPS) == counts["_insert_link_row"]
+        assert clock.reads == 1000
+
+
+def test_bulk_link_same_endpoint_type_merges_prefetch_and_remembers_anchors_across_chunks(
+    store_factory, monkeypatch
+) -> None:
+    from ontary.store._core import INGEST_BATCH
+
+    store = store_factory(_bulk_link_registry(Cardinality.ONE_TO_ONE, same_type=True))
+    _seed_bulk_link_endpoints(store)
+    batches = []
+    original = store._current_rows_many
+
+    def current(obj_type, ids):
+        batches.append((obj_type, ids))
+        return original(obj_type, ids)
+
+    monkeypatch.setattr(store, "_current_rows_many", current)
+    with _count_steps(store) as counts:
+        outcomes = store.create_links("bulkLink", [("a", "b")] * (INGEST_BATCH + 1))
+    assert outcomes[0].status == "inserted"
+    assert all(outcome.status == "unchanged" for outcome in outcomes[1:])
+    assert batches == [("Team", ["a", "b"])]
+    assert counts["_link_ids_from_many"] == counts["_link_ids_to_many"] == 1
+    assert counts["_insert_link_row"] == 1
+
+
+@pytest.mark.parametrize("cardinality", [Cardinality.MANY_TO_MANY, Cardinality.ONE_TO_ONE])
+def test_bulk_link_closed_pair_can_be_created_again(store_factory, cardinality) -> None:
+    store = store_factory(_bulk_link_registry(cardinality))
+    _seed_bulk_link_endpoints(store)
+    store.create_link("bulkLink", "a", "b")
+    store.close_link("bulkLink", "a", "b")
+    outcomes = store.create_links("bulkLink", [("a", "b"), ("a", "b")])
+    assert [outcome.status for outcome in outcomes] == ["inserted", "unchanged"]
+    assert sorted(row is None for row in _link_history_rows(store, "bulkLink", "a", "b")) == [
+        False,
+        True,
+    ]
+
+
+@pytest.mark.parametrize(
+    "error", [RuntimeError("sixth link failed"), KeyboardInterrupt("interrupted")]
+)
+def test_bulk_link_sixth_write_failure_rolls_back_and_propagates_original(
+    store_factory, monkeypatch, error
+) -> None:
+    store = store_factory(_bulk_link_registry(Cardinality.ONE_TO_ONE, owned=True))
+    _seed_bulk_link_endpoints(store, [str(i) for i in range(10)])
+    original = store._insert_link_row
+    attempts = 0
+
+    def fail_sixth(*args, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 6:
+            raise error
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(store, "_insert_link_row", fail_sixth)
+    with store.capture_action_writes() as writes, pytest.raises(type(error)) as caught:
+        store.create_links("bulkLink", [(str(i), str(i)) for i in range(10)])
+    assert caught.value is error
+    assert attempts == 6
+    assert not store.in_transaction
+    assert writes == []
+    for i in range(10):
+        assert store.links_from("bulkLink", str(i)) == []
+        assert _link_history_rows(store, "bulkLink", str(i), str(i)) == []
+
+
+@pytest.mark.parametrize("refusal", ["endpoint", "cardinality"])
+def test_bulk_link_unlisted_error_rolls_back_prior_insert(store_factory, refusal) -> None:
+    store = store_factory(_bulk_link_registry(Cardinality.MANY_TO_ONE))
+    _seed_bulk_link_endpoints(store)
+    pair = ("a", "missing") if refusal == "endpoint" else ("a", "b")
+    error_type = ValidationFailed if refusal == "endpoint" else ConflictError
+    code = "LINK_ENDPOINT_NOT_FOUND" if refusal == "endpoint" else "CARDINALITY_VIOLATION"
+    with raises_code(error_type, code):
+        store.create_links("bulkLink", [("a", "a"), pair])
+    assert store.links_from("bulkLink", "a") == []
+    assert _link_history_rows(store, "bulkLink", "a", "a") == []
+
+
+def test_bulk_link_opens_one_outer_transaction_and_runs_steps_and_clock_inside(
+    store_factory, monkeypatch
+) -> None:
+    store = store_factory(_bulk_link_registry(Cardinality.ONE_TO_ONE))
+    _seed_bulk_link_endpoints(store)
+    original_transaction = store.transaction
+    outer_entries = 0
+
+    @contextmanager
+    def transaction():
+        nonlocal outer_entries
+        if not store.in_transaction:
+            outer_entries += 1
+        with original_transaction() as value:
+            yield value
+
+    def inside(original):
+        @wraps(original)
+        def call(*args, **kwargs):
+            assert store.in_transaction
+            return original(*args, **kwargs)
+
+        return call
+
+    monkeypatch.setattr(store, "transaction", transaction)
+    for name in (*_READ_STEPS, *_WRITE_STEPS, "_now"):
+        monkeypatch.setattr(store, name, inside(getattr(store, name)))
+    outcomes = store.create_links(
+        "bulkLink", [("a", "a"), ("a", "missing"), ("b", "b")], refusals=_LINK_REFUSALS
+    )
+    assert [outcome.status for outcome in outcomes] == ["inserted", "refused", "inserted"]
+    assert outer_entries == 1
+
+
+def test_bulk_link_empty_input_skips_storage_and_clock_and_unknown_type_still_refuses(
+    store, monkeypatch
+) -> None:
+    def fail(*args, **kwargs):
+        pytest.fail("empty bulk links call touched storage or clock")
+
+    for name in (*_READ_STEPS, *_WRITE_STEPS, "_now"):
+        monkeypatch.setattr(store, name, fail)
+    assert store.create_links("belongsToDepartment", []) == []
+    with raises_code(ValidationFailed, "UNKNOWN_LINK_TYPE"):
+        store.create_links("unknown", [])
+
+
+def test_bulk_link_capture_checks_authority_and_records_only_inserted_pairs_after_commit(
+    store_factory, monkeypatch
+) -> None:
+    store = store_factory(_bulk_link_registry(Cardinality.MANY_TO_ONE, owned=True))
+    _seed_bulk_link_endpoints(store)
+    original = store._record_write
+
+    def after_transaction(record):
+        assert not store.in_transaction
+        original(record)
+
+    monkeypatch.setattr(store, "_record_write", after_transaction)
+    with store.capture_action_writes() as writes:
+        outcomes = store.create_links(
+            "bulkLink",
+            [("a", "a"), ("a", "a"), ("a", "b"), ("b", "b")],
+            refusals=_LINK_REFUSALS,
+        )
+        with raises_code(AuthorityError, "UNDECLARED_SOURCE_WRITE"):
+            store.create_links("belongsToDepartment", [("a", "a")])
+    assert [outcome.status for outcome in outcomes] == [
+        "inserted",
+        "unchanged",
+        "refused",
+        "inserted",
+    ]
+    assert writes == [
+        WriteRecord(op="link", link_type="bulkLink", from_id="a", to_id="a"),
+        WriteRecord(op="link", link_type="bulkLink", from_id="b", to_id="b"),
+    ]

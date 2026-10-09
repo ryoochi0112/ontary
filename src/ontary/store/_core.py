@@ -35,6 +35,13 @@ writes, with their clock reads inside the bulk transaction. Listed refusals
 leave that record unwritten; every other exception rolls back the whole call.
 Write records are captured only after the bulk transaction exits.
 
+The bulk link path also holds one transaction, prefetching endpoints and live
+links at most four times per chunk. Canonical ids key both the prefetch and the
+write. Call-wide maps remember earlier inserts for idempotence and cardinality;
+only a missing live endpoint needs a last-row read to distinguish retirement.
+The single and bulk paths share `_apply_link` and its check order. Listed
+refusals leave the pair unwritten; other errors roll back the whole call.
+
 Every public read canonicalizes ids, resolves a link type against the
 registry, and checks the page batch and cursor here; backends supply only the
 read storage steps.
@@ -53,7 +60,7 @@ from typing import Any
 
 from ontary.audit import AuditEntry, WriteRecord
 from ontary.errors import OntaryError
-from ontary.meta import Cardinality, OntologyRegistry, normalize_declared_payload
+from ontary.meta import Cardinality, LinkTypeDef, OntologyRegistry, normalize_declared_payload
 from ontary.store._filter import SQLITE_DOMAIN, BindDomain, RowFilter
 from ontary.store._shared import (
     AuditRowFields,
@@ -628,30 +635,144 @@ class StoreCore(abc.ABC):
             self._registry, link_type, capturing=self._write_capture.active
         )
         with self.transaction():
-            check_link_endpoints(
+            inserted = self._apply_link(
                 link_def,
                 link_type,
                 from_id,
                 to_id,
                 read_current=self.read_current,
-                read_last=self.read_last,
+                links_from=self.links_from,
+                links_to=self.links_to,
             )
-            existing_from = self.links_from(link_type, from_id)
-            if to_id in existing_from:
-                # An identical live link already exists: a no-op, checked
-                # before cardinality so a re-run never trips over itself.
-                # Nothing is written, so no write record is captured either.
-                return
-            cardinality = link_def.cardinality
-            if cardinality in _FROM_SIDE_CARDINALITIES and existing_from:
-                raise cardinality_violation(link_type, "from_id", from_id, cardinality)
-            if cardinality in _TO_SIDE_CARDINALITIES and self.links_to(link_type, to_id):
-                raise cardinality_violation(link_type, "to_id", to_id, cardinality)
-            now = self._now()
-            self._insert_link_row(link_type, from_id, to_id, now)
-        self._record_write(
-            WriteRecord(op="link", link_type=link_type, from_id=from_id, to_id=to_id)
+        if inserted:
+            self._record_write(
+                WriteRecord(op="link", link_type=link_type, from_id=from_id, to_id=to_id)
+            )
+
+    def _apply_link(
+        self,
+        link_def: LinkTypeDef,
+        link_type: str,
+        from_id: str,
+        to_id: str,
+        *,
+        read_current: Callable[[str, str], StoredObject | None],
+        links_from: Callable[[str, str], list[str]],
+        links_to: Callable[[str, str], list[str]],
+    ) -> bool:
+        """Check, stamp, and insert a pair inside the caller's transaction.
+
+        Bulk readers use prefetched maps; only failing endpoints read history.
+        Return whether a row was inserted, so identical links capture no write.
+        """
+        check_link_endpoints(
+            link_def,
+            link_type,
+            from_id,
+            to_id,
+            read_current=read_current,
+            read_last=self.read_last,
         )
+        existing_from = links_from(link_type, from_id)
+        if to_id in existing_from:
+            # Identical live links are checked before cardinality so a re-run
+            # never trips over itself and spends no clock tick or write record.
+            return False
+        cardinality = link_def.cardinality
+        if cardinality in _FROM_SIDE_CARDINALITIES and existing_from:
+            raise cardinality_violation(link_type, "from_id", from_id, cardinality)
+        if cardinality in _TO_SIDE_CARDINALITIES and links_to(link_type, to_id):
+            raise cardinality_violation(link_type, "to_id", to_id, cardinality)
+        now = self._now()
+        self._insert_link_row(link_type, from_id, to_id, now)
+        return True
+
+    def create_links(
+        self,
+        link_type: str,
+        pairs: Sequence[tuple[str, str]],
+        *,
+        refusals: frozenset[str] = frozenset(),
+    ) -> list[RowOutcome]:
+        """Trusted bulk link creation, in input order, with one transaction.
+
+        Listed refusals leave their pair unwritten; other errors propagate and
+        roll back the batch. Identical live links spend no clock tick or write.
+        """
+        link_def = check_link_write_authority(
+            self._registry, link_type, capturing=self._write_capture.active
+        )
+        known: dict[str, dict[str, StoredObject | None]] = {}
+        known_from: dict[str, list[str]] = {}
+        known_to: dict[str, list[str]] = {}
+        limited_to = link_def.cardinality in _TO_SIDE_CARDINALITIES
+        outcomes: list[RowOutcome] = []
+        written_pairs: list[tuple[str, str]] = []
+
+        def read_current(obj_type: str, obj_id: str) -> StoredObject | None:
+            return known[obj_type].get(obj_id)
+
+        def links_from(type_name: str, from_id: str) -> list[str]:
+            return known_from[from_id]
+
+        def links_to(type_name: str, to_id: str) -> list[str]:
+            return known_to[to_id]
+
+        with self.transaction():
+            for start in range(0, len(pairs), INGEST_BATCH):
+                chunk = [
+                    (canonical_id(from_id), canonical_id(to_id))
+                    for from_id, to_id in pairs[start : start + INGEST_BATCH]
+                ]
+                from_ids = list(dict.fromkeys(from_id for from_id, _ in chunk))
+                to_ids = list(dict.fromkeys(to_id for _, to_id in chunk))
+                endpoint_ids = {link_def.from_type: from_ids.copy()}
+                endpoint_ids.setdefault(link_def.to_type, []).extend(to_ids)
+                for obj_type, ids in endpoint_ids.items():
+                    current = known.setdefault(obj_type, {})
+                    new_ids = list(dict.fromkeys(obj_id for obj_id in ids if obj_id not in current))
+                    rows = self.read_current_many(obj_type, new_ids)
+                    current.update((obj_id, rows.get(obj_id)) for obj_id in new_ids)
+                known_from.update(
+                    self.links_from_many(
+                        link_type, (obj_id for obj_id in from_ids if obj_id not in known_from)
+                    )
+                )
+                if limited_to:
+                    known_to.update(
+                        self.links_to_many(
+                            link_type, (obj_id for obj_id in to_ids if obj_id not in known_to)
+                        )
+                    )
+                for from_id, to_id in chunk:
+                    pair_id = f"{from_id}->{to_id}"
+                    try:
+                        inserted = self._apply_link(
+                            link_def,
+                            link_type,
+                            from_id,
+                            to_id,
+                            read_current=read_current,
+                            links_from=links_from,
+                            links_to=links_to,
+                        )
+                        if inserted:
+                            known_from[from_id].append(to_id)
+                            if limited_to:
+                                known_to[to_id].append(from_id)
+                            written_pairs.append((from_id, to_id))
+                        outcomes.append(
+                            RowOutcome("inserted" if inserted else "unchanged", pair_id, None)
+                        )
+                    except OntaryError as error:
+                        if error.code not in refusals:
+                            raise
+                        outcomes.append(RowOutcome("refused", pair_id, error))
+        for from_id, to_id in written_pairs:
+            self._record_write(
+                WriteRecord(op="link", link_type=link_type, from_id=from_id, to_id=to_id)
+            )
+        return outcomes
 
     def close_link(self, link_type: str, from_id: str, to_id: str) -> bool:
         from_id, to_id = canonical_id(from_id), canonical_id(to_id)
