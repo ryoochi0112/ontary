@@ -432,3 +432,109 @@ def test_action_handler_hands_out_raw_independent_saveable_targets(
     assert client.execute("Walk", {"anchor_id": "a"}) == {"targets": 1}
     assert store.read_current("Target", "t").payload["secret"] == "saved"
     assert store.audit_entries()[-1].outcome == "ok"
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("typed", [False, True])
+def test_client_many_matches_single_traversals(graph, make_consumer, reverse, typed) -> None:
+    client = OntologyRuntime(graph.ontology, graph.store).for_consumer(make_consumer())
+    handle = graph.backward if reverse else graph.forward
+    link = "onBoard" if reverse else "pins"
+    anchors = [graph.anchors[10], graph.anchors[1], "missing", graph.anchors[0]]
+    inputs = [graph.board_cls(id=anchors[0]), *anchors[1:], anchors[0]] if typed else [*anchors, anchors[0]]
+    with count_reads(graph.store) as calls:
+        actual = (
+            client.traverse_many(handle, iter(inputs), reverse=reverse) if typed
+            else client.traverse_many("Board", link, iter(inputs), reverse=reverse)
+        )
+    assert sum(calls[name] for name in LINK_STEPS) + calls["_current_rows_many"] <= 2
+    assert list(actual) == anchors
+    assert actual == {
+        anchor: client.traverse(handle, anchor, reverse=reverse) if typed
+        else client.traverse("Board", link, anchor, reverse=reverse)
+        for anchor in anchors
+    }
+    assert actual["missing"] == actual[graph.anchors[0]] == []
+    assert any(actual.values())
+    with count_reads(graph.store) as calls:
+        assert (client.traverse_many(handle, iter(()), reverse=reverse) if typed
+                else client.traverse_many("Board", link, iter(()), reverse=reverse)) == {}
+    assert not calls
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("obj_type,link,code", [
+    ("unknown", "unknown", "UNKNOWN_OBJECT_TYPE"),
+    ("Board", "unknown", "UNKNOWN_NAME"),
+    ("Record", "pins", "UNKNOWN_NAME"),
+])
+def test_client_many_validates_like_single_before_reads(
+    graph, make_consumer, reverse, obj_type, link, code,
+) -> None:
+    client = OntologyRuntime(graph.ontology, graph.store).for_consumer(make_consumer())
+    if reverse and link == "pins":
+        obj_type = "Board"
+    with count_reads(graph.store) as calls:
+        with raises_code(ValidationFailed, code) as many:
+            client.traverse_many(obj_type, link, iter(()), reverse=reverse)
+        with raises_code(ValidationFailed, code) as single:
+            client.traverse(obj_type, link, "missing", reverse=reverse)
+    assert str(many.value) == str(single.value)
+    assert not calls
+
+
+class PlainAnchorId(Enum):
+    ONE = "one"
+    TWO = "two"
+
+
+@pytest.mark.parametrize("key_type,first,second", [
+    (int, 1, 2),
+    (str, PlainAnchorId.ONE, PlainAnchorId.TWO),
+])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_typed_model_anchors_use_canonical_written_ids(
+    store_factory, make_ontology, make_consumer, key_type, first, second, reverse,
+) -> None:
+    from ontary.functions import BoundQuery
+    from ontary.store._shared import canonical_id
+
+    ontology = make_ontology(name="canonical-client-many")
+
+    # Build a model with the actual key type, without a local forward reference.
+    from pydantic import create_model
+
+    Node = create_model("Node", __base__=OntologyObject, id=(key_type, prop(primary_key=True)))
+    Node = ontology.object(layer="L0", scope="unscoped")(Node)
+    link = ontology.link("next", Node, Node, "MANY_TO_MANY")
+    anchor_value = second if reverse else first
+    anchor_id = canonical_id(anchor_value)
+    inputs = [Node.model_construct(id=anchor_value), anchor_id, "missing"]
+
+    @ontology.function(api_name="walkCanonical")
+    def walk(query: BoundQuery) -> dict[str, Any]:
+        rows = query.traverse_many(link, iter(inputs), reverse=reverse)
+        assert list(rows) == [anchor_id, "missing"]
+        assert rows == {
+            anchor: query.traverse(link, anchor, reverse=reverse) for anchor in rows
+        }
+        assert len(rows[anchor_id]) == 1
+        return {anchor: len(group) for anchor, group in rows.items()}
+
+    ontology.validate()
+    store = store_factory(ontology.registry)
+    store.insert("Node", {"id": canonical_id(first) if key_type is str else first}, SRC)
+    store.insert("Node", {"id": canonical_id(second) if key_type is str else second}, SRC)
+    store.create_link("next", canonical_id(first), canonical_id(second))
+    client = OntologyRuntime(ontology, store).for_consumer(make_consumer())
+    rows = client.traverse_many(link, iter(inputs), reverse=reverse)
+    assert list(rows) == [anchor_id, "missing"]
+    assert rows == {anchor: client.traverse(link, anchor, reverse=reverse) for anchor in rows}
+    assert rows[anchor_id] and rows["missing"] == []
+    assert client.call_function("walkCanonical", {}) == {anchor_id: 1, "missing": 0}
+    wrong = OntologyObject()
+    with raises_code(ValidationFailed, "INVALID_PARAMS"):
+        client.traverse_many(link, [wrong], reverse=reverse)
+    missing_key = Node.model_construct()
+    with raises_code(ValidationFailed, "INVALID_PARAMS"):
+        client.traverse_many(link, [missing_key], reverse=reverse)

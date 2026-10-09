@@ -670,6 +670,7 @@ def test_function_cannot_write_by_construction() -> None:
         "get",
         "list",
         "traverse",
+        "traverse_many",
         "aggregate",
         "aggregate_by",
         # A READ of a number the engine already derives to enforce min-N.

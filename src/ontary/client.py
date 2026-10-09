@@ -53,7 +53,7 @@ coexist in one process without cross-talk.
 from __future__ import annotations
 
 import builtins
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from datetime import datetime
 from typing import Any, Literal, TypeVar, overload
 
@@ -618,25 +618,63 @@ class OntologyClient(_TypedReadMixin):
             self._consumer, link, from_id, reverse=reverse, limit=limit, after=after
         )
 
-    def _traverse_anchor_id(self, link_cls: LinkHandle[F, T], anchor_obj_or_id: F | T | str, *, reverse: bool = False) -> str:
-        if isinstance(anchor_obj_or_id, str):
-            return anchor_obj_or_id
-        anchor_cls = link_cls.to_cls if reverse else link_cls.from_cls
-        self._api_name_for(anchor_cls)
-        if not isinstance(anchor_obj_or_id, anchor_cls):
+    @overload
+    def traverse_many(
+        self, obj_type: str, link: str, anchor_ids: Iterable[str], *, reverse: bool = False,
+    ) -> dict[str, builtins.list[StoredObject]]: ...
+    @overload
+    def traverse_many(
+        self, link_cls: LinkHandle[F, T], anchors: Iterable[F | str], /,
+        *, reverse: Literal[False] = False,
+    ) -> dict[str, builtins.list[T]]: ...
+    @overload
+    def traverse_many(
+        self, link_cls: LinkHandle[F, T], anchors: Iterable[T | str], /,
+        *, reverse: Literal[True],
+    ) -> dict[str, builtins.list[F]]: ...
+    @overload
+    def traverse_many(
+        self, link_cls: LinkHandle[F, T], anchors: Iterable[F | T | str], /,
+        *, reverse: bool,
+    ) -> dict[str, builtins.list[T]] | dict[str, builtins.list[F]]: ...
+    def traverse_many(
+        self,
+        obj_type: str | LinkHandle[F, T],
+        link: str | Iterable[F | T | str],
+        anchor_ids: Iterable[str] | None = None,
+        *,
+        reverse: bool = False,
+    ) -> dict[str, builtins.list[StoredObject]] | dict[str, builtins.list[T]] | dict[str, builtins.list[F]]:
+        """Return guarded linked rows per distinct canonical anchor id.
+
+        Accepts `(obj_type, link, anchor_ids)` or `(link_cls, anchors)`.
+        Typed anchors may be models or ids; reverse traversal hydrates the
+        handle's source class. Missing anchors have empty lists.
+        """
+        if isinstance(obj_type, LinkHandle):
+            ids = [self._traverse_anchor_id(obj_type, anchor, reverse=reverse) for anchor in link]
+            return self._traverse_many_via(ids, obj_type, reverse=reverse)
+        if not isinstance(link, str) or anchor_ids is None:
             raise ValidationFailed(
-                f"typed traversal anchor must be {anchor_cls.__name__} or a string id",
+                "string-form traverse_many requires obj_type, link, and anchor_ids",
                 code="INVALID_PARAMS",
             )
-        object_def = self._ontology.registry.get_object_type(self._api_name_for(anchor_cls))
-        anchor_id = getattr(anchor_obj_or_id, object_def.primary_key, None)
-        if not isinstance(anchor_id, str):
+        # The anchor type resolves before the link: an undeclared anchor is
+        # `UNKNOWN_OBJECT_TYPE`, whatever the link name.
+        self._ontology.registry.get_object_type(obj_type)
+        try:
+            link_def = self._ontology.registry.get_link_type(link)
+        except ValidationFailed as exc:
+            raise ValidationFailed(str(exc), code="UNKNOWN_NAME") from exc
+        expected_anchor_type = link_def.to_type if reverse else link_def.from_type
+        if expected_anchor_type != obj_type:
+            direction = "to" if reverse else "from"
             raise ValidationFailed(
-                f"typed traversal anchor {anchor_cls.__name__} has no string id "
-                f"for {object_def.primary_key!r}",
-                code="INVALID_PARAMS",
+                f"link {link!r} runs {direction} {expected_anchor_type!r}, "
+                f"not {obj_type!r}",
+                code="UNKNOWN_NAME",
             )
-        return anchor_id
+        return self._query.traverse_many(self._consumer, link, anchor_ids, reverse=reverse)
 
     # Both directions share GuardedQuery's identity and visibility gates;
     # this façade only resolves the typed anchor and hydrates the resulting

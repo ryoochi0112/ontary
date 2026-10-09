@@ -13,7 +13,7 @@ nothing here is exported from the `ontary` front door.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from typing import Any, Literal, TypeVar, cast, overload
 
 from ontary.audit import CapabilityAccessRecord
@@ -40,6 +40,7 @@ from ontary.query._paging import _UNSET_LIMIT
 from ontary.query._where import _normalize_where, _require_where_mapping
 from ontary.security import Consumer
 from ontary.store import StoredObject
+from ontary.store._shared import canonical_id
 from ontary.typesys import struct_value
 
 T = TypeVar("T", bound=OntologyObject)
@@ -314,6 +315,90 @@ def traverse_via(
     return [hydrate(via.to_cls, so, consumer.kind) for so in stored_list]
 
 
+@overload
+def traverse_many_via(
+    query: GuardedQuery,
+    consumer: Consumer,
+    registry: OntologyRegistry | None,
+    anchor_ids: Iterable[str],
+    via: LinkHandle[F, T],
+    *,
+    api_name_for: Callable[[type[OntologyObject]], str],
+    owner: str,
+    reverse: Literal[False] = False,
+) -> dict[str, list[T]]: ...
+
+
+@overload
+def traverse_many_via(
+    query: GuardedQuery,
+    consumer: Consumer,
+    registry: OntologyRegistry | None,
+    anchor_ids: Iterable[str],
+    via: LinkHandle[F, T],
+    *,
+    api_name_for: Callable[[type[OntologyObject]], str],
+    owner: str,
+    reverse: Literal[True],
+) -> dict[str, list[F]]: ...
+
+
+@overload
+def traverse_many_via(
+    query: GuardedQuery,
+    consumer: Consumer,
+    registry: OntologyRegistry | None,
+    anchor_ids: Iterable[str],
+    via: LinkHandle[F, T],
+    *,
+    api_name_for: Callable[[type[OntologyObject]], str],
+    owner: str,
+    reverse: bool,
+) -> dict[str, list[T]] | dict[str, list[F]]: ...
+
+
+def traverse_many_via(
+    query: GuardedQuery,
+    consumer: Consumer,
+    registry: OntologyRegistry | None,
+    anchor_ids: Iterable[str],
+    via: LinkHandle[F, T],
+    *,
+    api_name_for: Callable[[type[OntologyObject]], str],
+    owner: str,
+    reverse: bool = False,
+) -> dict[str, list[T]] | dict[str, list[F]]:
+    """Shared typed traversal branch for both typed façades."""
+    api_name_for(via.from_cls)
+    api_name_for(via.to_cls)
+    # `api_name_for` above fails closed when a directly-constructed
+    # `BoundQuery` has no registry. Keep the invariant explicit so optimized
+    # Python cannot remove it.
+    if registry is None:
+        raise InternalError(
+            f"typed traversal on {owner} reached link lookup without a registry",
+            code="INTERNAL_ERROR",
+        )
+    try:
+        registry.get_link_type(via.api_name)
+    except ValidationFailed as exc:
+        raise ValidationFailed(
+            f"link {via.api_name!r} is not registered on this "
+            f"{owner}'s ontology",
+            code="UNKNOWN_NAME",
+        ) from exc
+    stored = query.traverse_many(consumer, via.api_name, anchor_ids, reverse=reverse)
+    if reverse:
+        return {
+            anchor: [hydrate(via.from_cls, row, consumer.kind) for row in rows]
+            for anchor, rows in stored.items()
+        }
+    return {
+        anchor: [hydrate(via.to_cls, row, consumer.kind) for row in rows]
+        for anchor, rows in stored.items()
+    }
+
+
 class _TypedReadMixin:
     """Shared typed-read façade operations.
 
@@ -449,6 +534,73 @@ class _TypedReadMixin:
             self._consumer,
             self._registry,
             from_id,
+            via,
+            api_name_for=self._api_name_for,
+            owner=self._typed_owner,
+            reverse=reverse,
+        )
+
+    def _traverse_anchor_id(self, link_cls: LinkHandle[F, T], anchor_obj_or_id: F | T | str, *, reverse: bool = False) -> str:
+        if isinstance(anchor_obj_or_id, str):
+            return anchor_obj_or_id
+        anchor_cls = link_cls.to_cls if reverse else link_cls.from_cls
+        self._api_name_for(anchor_cls)
+        if not isinstance(anchor_obj_or_id, anchor_cls):
+            raise ValidationFailed(
+                f"typed traversal anchor must be {anchor_cls.__name__} or a string id",
+                code="INVALID_PARAMS",
+            )
+        if self._registry is None:
+            raise InternalError("typed traversal requires a registry", code="INTERNAL_ERROR")
+        object_def = self._registry.get_object_type(self._api_name_for(anchor_cls))
+        anchor_id = getattr(anchor_obj_or_id, object_def.primary_key, None)
+        if anchor_id is None:
+            raise ValidationFailed(
+                f"typed traversal anchor {anchor_cls.__name__} has no id "
+                f"for {object_def.primary_key!r}",
+                code="INVALID_PARAMS",
+            )
+        return canonical_id(anchor_id)
+
+    @overload
+    def _traverse_many_via(
+        self,
+        anchor_ids: Iterable[str],
+        via: LinkHandle[F, T],
+        *,
+        reverse: Literal[False] = False,
+    ) -> dict[str, list[T]]: ...
+
+    @overload
+    def _traverse_many_via(
+        self,
+        anchor_ids: Iterable[str],
+        via: LinkHandle[F, T],
+        *,
+        reverse: Literal[True],
+    ) -> dict[str, list[F]]: ...
+
+    @overload
+    def _traverse_many_via(
+        self,
+        anchor_ids: Iterable[str],
+        via: LinkHandle[F, T],
+        *,
+        reverse: bool,
+    ) -> dict[str, list[T]] | dict[str, list[F]]: ...
+
+    def _traverse_many_via(
+        self,
+        anchor_ids: Iterable[str],
+        via: LinkHandle[F, T],
+        *,
+        reverse: bool = False,
+    ) -> dict[str, list[T]] | dict[str, list[F]]:
+        return traverse_many_via(
+            self._query,
+            self._consumer,
+            self._registry,
+            anchor_ids,
             via,
             api_name_for=self._api_name_for,
             owner=self._typed_owner,

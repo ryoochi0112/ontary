@@ -48,7 +48,7 @@ from __future__ import annotations
 
 import builtins
 import inspect
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from datetime import datetime
 from typing import Any, Literal, TypeVar, cast, overload
 
@@ -381,6 +381,45 @@ class BoundQuery(_TypedReadMixin):
             )
         return self._query.traverse(
             self._consumer, link_type, from_id, reverse=reverse
+        )
+
+    @overload
+    def traverse_many(
+        self, link_type: str, anchor_ids: Iterable[str], *, reverse: bool = False,
+    ) -> dict[str, builtins.list[StoredObject]]: ...
+    @overload
+    def traverse_many(
+        self, link_cls: LinkHandle[F, T], anchors: Iterable[F | str], /,
+        *, reverse: Literal[False] = False,
+    ) -> dict[str, builtins.list[T]]: ...
+    @overload
+    def traverse_many(
+        self, link_cls: LinkHandle[F, T], anchors: Iterable[T | str], /,
+        *, reverse: Literal[True],
+    ) -> dict[str, builtins.list[F]]: ...
+    @overload
+    def traverse_many(
+        self, link_cls: LinkHandle[F, T], anchors: Iterable[F | T | str], /,
+        *, reverse: bool,
+    ) -> dict[str, builtins.list[T]] | dict[str, builtins.list[F]]: ...
+    def traverse_many(
+        self,
+        link_type: str | LinkHandle[F, T],
+        anchor_ids: Iterable[F | T | str] | None = None,
+        *,
+        reverse: bool = False,
+    ) -> dict[str, builtins.list[StoredObject]] | dict[str, builtins.list[T]] | dict[str, builtins.list[F]]:
+        """Return guarded linked rows per anchor, accepting a link name or handle."""
+        if anchor_ids is None:
+            raise ValidationFailed(
+                "traverse_many requires anchor_ids",
+                code="INVALID_PARAMS",
+            )
+        if isinstance(link_type, LinkHandle):
+            ids = [self._traverse_anchor_id(link_type, anchor, reverse=reverse) for anchor in anchor_ids]
+            return self._traverse_many_via(ids, link_type, reverse=reverse)
+        return self._query.traverse_many(
+            self._consumer, link_type, cast(Iterable[str], anchor_ids), reverse=reverse
         )
 
 # Public handler alias for a `(query)` or `(query, params)` function handler.
