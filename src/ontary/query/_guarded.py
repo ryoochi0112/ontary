@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from datetime import datetime
 from typing import Any, Literal, overload
 
@@ -358,19 +359,14 @@ class GuardedQuery:
             )
         )
 
-    def _traverse_targets(
+    def _traverse_target_type(
         self,
         consumer: Consumer,
         link_type: str,
-        from_id: str,
         *,
         reverse: bool,
-    ) -> tuple[str, list[str]]:
-        """The one gate every link traversal passes before it reads a row:
-        the identity-revealing denial, the target type, the scope-coherence
-        check, and the link's id list in the store's link order. Returns
-        `(target_type, target_ids)`; ids are raw (unchecked for visibility).
-        """
+    ) -> str:
+        """Check identity disclosure and scope coherence before any read."""
         link_def = self._registry.get_link_type(link_type)
         if link_def.identity_revealing and consumer.kind == "human":
             # e.g. an anonymized-survey-response -> authoring-person link:
@@ -387,6 +383,18 @@ class GuardedQuery:
             )
         target_type = link_def.from_type if reverse else link_def.to_type
         self._require_coherent_scope(target_type)
+        return target_type
+
+    def _traverse_targets(
+        self,
+        consumer: Consumer,
+        link_type: str,
+        from_id: str,
+        *,
+        reverse: bool,
+    ) -> tuple[str, list[str]]:
+        """Gate traversal, then return raw target ids in the store's link order."""
+        target_type = self._traverse_target_type(consumer, link_type, reverse=reverse)
         target_ids = (
             self._store.links_to(link_type, from_id)
             if reverse
@@ -405,15 +413,51 @@ class GuardedQuery:
         target_type, target_ids = self._traverse_targets(
             consumer, link_type, from_id, reverse=reverse
         )
+        rows = self._store.read_current_many(target_type, target_ids)
         scope_cache = _ScopeReadCache()
         results = []
         for tid in target_ids:
-            row = self._store.read_current(target_type, tid)
+            row = rows.get(tid)
             if row is None or not self._visible(
                 consumer, row, scope_cache=scope_cache
             ):
                 continue
             results.append(self._redact(consumer, target_type, row))
+        return results
+
+    def traverse_many(
+        self,
+        consumer: Consumer,
+        link_type: str,
+        anchor_ids: Iterable[str],
+        *,
+        reverse: bool = False,
+    ) -> dict[str, list[StoredObject]]:
+        """Return each anchor's visible targets with shared batched reads.
+
+        Keys are canonical, distinct anchor ids in first-seen order. Each
+        list keeps the same link order, scope filtering, and redaction as
+        `traverse`; anchors without links map to empty lists.
+        """
+        target_type = self._traverse_target_type(consumer, link_type, reverse=reverse)
+        targets = (
+            self._store.links_to_many(link_type, anchor_ids)
+            if reverse
+            else self._store.links_from_many(link_type, anchor_ids)
+        )
+        target_ids = list(dict.fromkeys(tid for ids in targets.values() for tid in ids))
+        rows = self._store.read_current_many(target_type, target_ids) if target_ids else {}
+        scope_cache = _ScopeReadCache()
+        results: dict[str, list[StoredObject]] = {}
+        for anchor_id, ids in targets.items():
+            results[anchor_id] = []
+            for tid in ids:
+                row = rows.get(tid)
+                if row is None or not self._visible(
+                    consumer, row, scope_cache=scope_cache
+                ):
+                    continue
+                results[anchor_id].append(self._redact(consumer, target_type, row))
         return results
 
     def traverse_page(
