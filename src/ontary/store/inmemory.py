@@ -286,6 +286,24 @@ class InMemoryStore(StoreCore):
                     return self._row_to_stored(row)
             return None
 
+    def _current_rows_many(
+        self, obj_type: str, ids: list[str]
+    ) -> dict[str, StoredObject]:
+        with self._transaction_lock:
+            requested = set(ids)
+            current: dict[str, StoredObject] = {}
+            for row in self._objects:
+                obj_id = row["id"]
+                if (
+                    row["tenant"] == self._tenant
+                    and row["object_type"] == obj_type
+                    and obj_id in requested
+                    and row["valid_to"] is None
+                    and obj_id not in current
+                ):
+                    current[obj_id] = self._row_to_stored(row)
+            return {obj_id: current[obj_id] for obj_id in ids if obj_id in current}
+
     def _last_row(self, obj_type: str, obj_id: str) -> StoredObject | None:
         """Raw (unredacted, unscoped) read of one object's newest row, live
         or retired. `self._objects` is append-ordered and `update` appends
@@ -458,6 +476,42 @@ class InMemoryStore(StoreCore):
                 ),
                 "from_id",
             )
+
+    def _link_ids_from_many(
+        self, link_type: str, ids: list[str]
+    ) -> dict[str, list[str]]:
+        with self._transaction_lock:
+            grouped: dict[str, list[_LinkRow]] = {obj_id: [] for obj_id in ids}
+            for row in self._links:
+                if (
+                    row["tenant"] == self._tenant
+                    and row["link_type"] == link_type
+                    and row["from_id"] in grouped
+                    and row["valid_to"] is None
+                ):
+                    grouped[row["from_id"]].append(row)
+            return {
+                obj_id: _ordered_link_ids(rows, "to_id")
+                for obj_id, rows in grouped.items()
+            }
+
+    def _link_ids_to_many(
+        self, link_type: str, ids: list[str]
+    ) -> dict[str, list[str]]:
+        with self._transaction_lock:
+            grouped: dict[str, list[_LinkRow]] = {obj_id: [] for obj_id in ids}
+            for row in self._links:
+                if (
+                    row["tenant"] == self._tenant
+                    and row["link_type"] == link_type
+                    and row["to_id"] in grouped
+                    and row["valid_to"] is None
+                ):
+                    grouped[row["to_id"]].append(row)
+            return {
+                obj_id: _ordered_link_ids(rows, "from_id")
+                for obj_id, rows in grouped.items()
+            }
 
     def _link_ids_from_asof(
         self, link_type: str, from_id: str, asof: str

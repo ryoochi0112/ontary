@@ -37,7 +37,7 @@ from __future__ import annotations
 
 import abc
 import json
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import AbstractContextManager, contextmanager
 from datetime import datetime
 from typing import Any
@@ -161,6 +161,16 @@ class StoreCore(abc.ABC):
     def _current_row(self, obj_type: str, obj_id: str) -> StoredObject | None:
         """The live row of one object in this tenant, or `None`."""
 
+    def _current_rows_many(
+        self, obj_type: str, ids: list[str]
+    ) -> dict[str, StoredObject]:
+        """Looping default for backends without batch object reads."""
+        return {
+            obj_id: row
+            for obj_id in ids
+            if (row := self._current_row(obj_type, obj_id)) is not None
+        }
+
     @abc.abstractmethod
     def _last_row(self, obj_type: str, obj_id: str) -> StoredObject | None:
         """The newest row of one object in this tenant, live or retired. A
@@ -207,6 +217,18 @@ class StoreCore(abc.ABC):
     @abc.abstractmethod
     def _link_ids_to(self, link_type: str, to_id: str) -> list[str]:
         """`from_id` of every live link into `to_id`, in link order."""
+
+    def _link_ids_from_many(
+        self, link_type: str, ids: list[str]
+    ) -> dict[str, list[str]]:
+        """Looping default for backends without batch outgoing link reads."""
+        return {obj_id: self._link_ids_from(link_type, obj_id) for obj_id in ids}
+
+    def _link_ids_to_many(
+        self, link_type: str, ids: list[str]
+    ) -> dict[str, list[str]]:
+        """Looping default for backends without batch incoming link reads."""
+        return {obj_id: self._link_ids_to(link_type, obj_id) for obj_id in ids}
 
     @abc.abstractmethod
     def _link_ids_from_asof(
@@ -266,6 +288,16 @@ class StoreCore(abc.ABC):
         """Raw (unredacted, unscoped) read of one object's current row, or `None`
         if it does not exist. Trusted-caller-only."""
         return self._current_row(obj_type, canonical_id(obj_id))
+
+    def read_current_many(
+        self, obj_type: str, ids: Iterable[str]
+    ) -> dict[str, StoredObject]:
+        """Raw, trusted-caller-only current rows, omitting missing or retired ids.
+        Canonical ids are de-duplicated in first-seen order."""
+        canonical_ids = list(dict.fromkeys(canonical_id(obj_id) for obj_id in ids))
+        if not canonical_ids:
+            return {}
+        return self._current_rows_many(obj_type, canonical_ids)
 
     def read_last(self, obj_type: str, obj_id: str) -> StoredObject | None:
         """Raw read of one object's newest row -- live or retired -- or `None` if
@@ -334,6 +366,28 @@ class StoreCore(abc.ABC):
         to_id = canonical_id(to_id)
         resolve_link_type(self._registry, link_type)
         return self._link_ids_to(link_type, to_id)
+
+    def links_from_many(
+        self, link_type: str, from_ids: Iterable[str]
+    ) -> dict[str, list[str]]:
+        """Raw, trusted-caller-only targets per canonical, distinct anchor.
+        Includes empty anchors and preserves each `links_from` list's order."""
+        ids = list(dict.fromkeys(canonical_id(obj_id) for obj_id in from_ids))
+        resolve_link_type(self._registry, link_type)
+        if not ids:
+            return {}
+        return self._link_ids_from_many(link_type, ids)
+
+    def links_to_many(
+        self, link_type: str, to_ids: Iterable[str]
+    ) -> dict[str, list[str]]:
+        """Raw, trusted-caller-only sources per canonical, distinct anchor.
+        Includes empty anchors and preserves each `links_to` list's order."""
+        ids = list(dict.fromkeys(canonical_id(obj_id) for obj_id in to_ids))
+        resolve_link_type(self._registry, link_type)
+        if not ids:
+            return {}
+        return self._link_ids_to_many(link_type, ids)
 
     def links_from_asof(
         self, link_type: str, from_id: str, asof: str

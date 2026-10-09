@@ -6,7 +6,7 @@ seam the engine is written against.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from contextlib import AbstractContextManager
 from datetime import datetime
 from typing import Any, Protocol, runtime_checkable
@@ -72,6 +72,24 @@ class Store(Protocol):
         `link_type`, in the order every link read declares below."""
         ...
 
+    def links_from_many(
+        self, link_type: str, from_ids: Iterable[str]
+    ) -> dict[str, list[str]]:
+        """Raw, trusted-caller-only targets per canonical, distinct anchor.
+        Every requested anchor is included, with `[]` when it has no links.
+        Lists equal `links_from`, including order and duplicates.
+        Raises `UNKNOWN_LINK_TYPE` for an undeclared link type."""
+        ...
+
+    def links_to_many(
+        self, link_type: str, to_ids: Iterable[str]
+    ) -> dict[str, list[str]]:
+        """Raw, trusted-caller-only sources per canonical, distinct anchor.
+        Every requested anchor is included, with `[]` when it has no links.
+        Lists equal `links_to`, including order and duplicates.
+        Raises `UNKNOWN_LINK_TYPE` for an undeclared link type."""
+        ...
+
     def links_to(self, link_type: str, to_id: str) -> list[str]:
         """Ids of every current source reaching `to_id` via `link_type`, in
         the order every link read declares below.
@@ -134,6 +152,14 @@ class Store(Protocol):
         """Raw (unredacted, unscoped) read of one object's current row, or
         `None` if it does not exist. Engine-internal / trusted-caller-only
         -- see the protocol docstring's layering rule."""
+        ...
+
+    def read_current_many(
+        self, obj_type: str, ids: Iterable[str]
+    ) -> dict[str, StoredObject]:
+        """Raw, trusted-caller-only current rows, omitting missing or retired ids.
+        Canonical ids are de-duplicated in first-seen order. Empty input
+        returns `{}` without reading storage."""
         ...
 
     def read_last(self, obj_type: str, obj_id: str) -> StoredObject | None:
