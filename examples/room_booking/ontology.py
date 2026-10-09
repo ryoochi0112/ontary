@@ -127,9 +127,6 @@ def book_session(ctx: ActionContext, p: BookSession) -> dict[str, str]:
     room = ctx.get(Room, p.room_id)
     if session is None or room is None:
         raise ActionError("session and room must exist", code="PRECONDITION_FAILED")
-    # ref() params are not scope-checked by the engine; enforce the same building here.
-    if ctx.traverse(room_building, room)[0].id != ctx.traverse(session_building, session)[0].id:
-        raise ActionError("room must be in the session's building", code="PRECONDITION_FAILED")
     if ctx.traverse(booking_session, session, reverse=True):
         raise ActionError(
             "session already booked; use reschedule_session", code="PRECONDITION_FAILED"
@@ -163,9 +160,6 @@ def reschedule_session(ctx: ActionContext, p: RescheduleSession) -> dict[str, st
     room = ctx.get(Room, p.room_id)
     if room is None:
         raise ActionError("room must exist", code="PRECONDITION_FAILED")
-    # ref() params are not scope-checked by the engine; enforce the same building here.
-    if ctx.traverse(room_building, room)[0].id != ctx.traverse(session_building, session)[0].id:
-        raise ActionError("room must be in the session's building", code="PRECONDITION_FAILED")
     if session.expected_attendees > room.capacity:
         raise ActionError("session exceeds room capacity", code="PRECONDITION_FAILED")
     if p.starts_at < ctx.now():

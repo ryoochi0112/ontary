@@ -278,7 +278,8 @@ ERROR_CODES: dict[str, ErrorCodeInfo] = {
         kind="permission",
         description=(
             "The consumer's scope does not cover the action's declared "
-            "target/scope parameter (code `SCOPE_DENIED`). Role refusals use "
+            "target, scope or reference (`ref()`) parameter (code "
+            "`SCOPE_DENIED`). Role refusals use "
             "`PERMISSION_DENIED`; both are kind permission and each raise site "
             "supplies the specific code."
         ),

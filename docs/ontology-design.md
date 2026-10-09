@@ -393,15 +393,14 @@ def session_placement(
 If the room is unknown, ctx.link refuses it and the whole action rolls back.
 Moving a session is its own business action that retires the old Assignment.
 
-The engine scope-checks a `target()` parameter, but not a `ref()` parameter.
-This sketch is unscoped, so that is safe here. Once Session and Room are
-scoped, a caller could pass a room from another scope. Check in the handler that
-the room shares the session's scope, and refuse with `PRECONDITION_FAILED`
-otherwise. [examples/room_booking](../examples/room_booking/README.md) shows the
-same-building check. Declaring the room with `scope_ref()` instead makes the
-engine check that the caller's scope covers the room. That check does not
-compare the room with the session, so a caller whose scope covers both can
-still pair them across scopes. Keep the handler check either way.
+The engine scope-checks `target()`, `scope_ref()`, and `ref()` parameters. This
+sketch is unscoped, so no check applies here. Once Session and Room are scoped,
+the engine refuses a room outside the caller's scope with `SCOPE_DENIED`.
+[examples/room_booking](../examples/room_booking/README.md) shows a cross-building
+room refused this way. The check covers the caller's scope only. It does not
+compare the room with the session. A caller whose scope covers both objects can
+still pair them across sub-scopes. In a multi-level hierarchy, keep a handler
+check for same-scope pairing.
 
 Do not encode the same association independently as an unconstrained foreign-key
 property and a link unless the property is required for scope or contributor

@@ -19,7 +19,7 @@ from collections.abc import Callable, Iterable, Mapping
 from datetime import datetime
 from typing import Any, Literal, NoReturn, TypeVar, cast, overload
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from ontary._result_json import encode_result
 from ontary._runtime import default_clock, default_id_factory
@@ -818,6 +818,11 @@ class ActionExecutor:
 
         action_def, fn, params_cls = self._resolve_handler(action_name)
 
+        defaults_error = None
+        if isinstance(params, dict) and params_cls is not None:
+            params = params.copy()
+            defaults_error = self._merge_param_defaults(action_def, params, params_cls)
+
         params_dict = self._params_to_dict(action_def, params)
 
         if consumer.role not in action_def.executable_by_roles:
@@ -838,6 +843,11 @@ class ActionExecutor:
         self._validate_params(
             consumer, action_name, action_def, params_dict, invocation_id, instant
         )
+        if defaults_error is not None:
+            self._error(
+                consumer, action_name, action_def, params_dict,
+                f"{action_name!r}: {defaults_error}", invocation_id, instant,
+            )
         self._validate_params_json_safe(
             consumer, action_name, action_def, params_dict, invocation_id, instant
         )
@@ -914,6 +924,55 @@ class ActionExecutor:
             raise
 
         return result
+
+    @staticmethod
+    def _merge_param_defaults(
+        action_def: ActionTypeDef, params: dict[str, Any], params_cls: type[BaseModel]
+    ) -> str | None:
+        """Merge into a caller copy; keep Python values for dependent factories.
+
+        Return any failure for the normal audited refusal after the role and
+        declared-shape checks, without moving model validation ahead of them.
+        """
+        declared = {param.name: param for param in action_def.parameters}
+        needs_validated_data = any(
+            field.default_factory_takes_validated_data for field in params_cls.model_fields.values()
+        )
+        validated_data: dict[str, Any] = {}
+        adapter: TypeAdapter[Any]
+        error = None
+        datetime_error = None
+        for name, field in params_cls.model_fields.items():
+            alias = field.validation_alias or field.alias
+            key = name
+            if name not in params and isinstance(alias, str) and alias in params:
+                key = alias
+            try:
+                if key in params:
+                    if needs_validated_data:
+                        adapter = TypeAdapter(field.rebuild_annotation())
+                        validated_data[name] = adapter.validate_python(params[key])
+                elif not declared[name].required and not field.is_required():
+                    # Like pydantic, skip dependent factories after an earlier validation failure.
+                    if error is not None and field.default_factory_takes_validated_data:
+                        continue
+                    value = field.get_default(
+                        call_default_factory=True, validated_data=validated_data
+                    )
+                    validated_data[name] = value
+                    params[name] = value
+                    # Structs use the typed path's storage normalization in `_params_to_dict`.
+                    if declared[name].type != "struct":
+                        adapter = TypeAdapter(field.annotation)
+                        params[name] = adapter.dump_python(value, mode="json")
+                    # JSON dumping must not hide a naive default datetime (#38).
+                    if declared[name].type == "datetime" and isinstance(value, datetime):
+                        mismatch = validate_scalar(value, "datetime")
+                        if mismatch is not None:
+                            datetime_error = datetime_error or f"parameter {name!r} {mismatch}"
+            except Exception as exc:
+                error = error or f"params failed validation: {exc}"
+        return error or datetime_error
 
     def _run_transaction(
         self,
@@ -1321,16 +1380,19 @@ class ActionExecutor:
         """Deny-by-default scope enforcement, driven by each declared
         `ActionParameterDef.scope_semantics` / `.refers_to` rather than any
         hardcoded parameter or object-type name (see module docstring).
-        Returns the names of the `target` parameters that skipped the gate
+        Every parameter with `refers_to` is gated, including `ref()` parameters
+        whose `scope_semantics` is `None`. A `None` value names no object and
+        is skipped for all three markers.
+        Returns the names of the `target` and `ref` parameters that skipped the gate
         because they refer to an unscoped type, for the audit trail.
 
-        - `scope_semantics="target"`: only enforced if the named object
+        - `target()` and `ref()`: only enforced if the named object
           actually EXISTS -- has ever been stored, retired rows included (a
           target that never existed is left to the handler's own
           precondition check, audited "error", never a scope denial).
         - `scope_semantics="scope"`: always enforced when the param is
           present -- it names a scope object directly, existence aside.
-        - A `target` that refers to a `scope="unscoped"` type (#35) has no
+        - A `target` or `ref` that refers to a `scope="unscoped"` type (#35) has no
           owning scope to cover, so the action's `roles=` is its only gate.
           It is skipped here and named in the returned list. The gate's own
           denials and every audit entry written after the gate carry it. A `scope`
@@ -1341,17 +1403,20 @@ class ActionExecutor:
         # Decided up front from the declaration, not in loop order, so an
         # entry denied on an EARLIER scoped parameter still names every
         # parameter that is exempt from the gate.
+        param_rules = self._param_rules(action_def)
         unscoped_params = [
             param.name
-            for param in self._param_rules(action_def)
+            for param in param_rules
             if param.name in params
-            and param.scope_semantics == "target"
+            and param.scope_semantics in ("target", None)
             and param.refers_to in self._policy.unscoped_types
         ]
-        for param in self._param_rules(action_def):
+        for param in param_rules:
             if param.name not in params or param.name in unscoped_params:
                 continue
             obj_id = params[param.name]
+            if obj_id is None:
+                continue
             if not isinstance(obj_id, str):
                 # `_validate_params` runs before `_enforce_scope` and rejects
                 # (audited "error") any declared param whose value doesn't
@@ -1377,7 +1442,8 @@ class ActionExecutor:
                     code="INTERNAL_ERROR",
                 )
 
-            if param.scope_semantics == "target":
+            uses_target_rules = param.scope_semantics in ("target", None)
+            if uses_target_rules:
                 # Asked of the NEWEST row, not the live one. `read_current`
                 # answers `None` for a RETIRED object too, so skipping the
                 # gate on that answer handed a consumer outside the object's
@@ -1385,9 +1451,9 @@ class ActionExecutor:
                 # validates no endpoint, so the writes went through. "Never
                 # stored" is the only case precondition handling owns.
                 if self._store.read_last(param.refers_to, obj_id) is None:
-                    continue  # nonexistent target: precondition handling applies
+                    continue  # never-stored target/ref: precondition handling applies
 
-            # ...and having gated on the retired target, resolve the scope it
+            # ...and having gated on the retired target/ref, resolve the scope it
             # owned, not the one it has: a retired object holds no live links,
             # so a `ViaLink` rule would resolve `None` and deny the very
             # consumer the object belongs to. THIS GATE ONLY. `scope`
@@ -1398,7 +1464,7 @@ class ActionExecutor:
                 self._store,
                 param.refers_to,
                 obj_id,
-                include_retired=param.scope_semantics == "target",
+                include_retired=uses_target_rules,
             )
             if not covers_scope(self._policy, consumer, resolved):
                 self._deny(
@@ -1418,4 +1484,9 @@ class ActionExecutor:
 
     @staticmethod
     def _param_rules(action_def: ActionTypeDef) -> list[ActionParameterDef]:
-        return [p for p in action_def.parameters if p.scope_semantics is not None]
+        # Keep malformed scope markers in the gate so the missing-refers_to
+        # defense still refuses them.
+        return [
+            p for p in action_def.parameters
+            if p.refers_to is not None or p.scope_semantics is not None
+        ]

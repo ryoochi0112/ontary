@@ -13,6 +13,19 @@ you**.
 
 ### Changed
 
+- **`ref()` action parameters are now scope-checked (breaking, #179).**
+  The engine refuses a stored `ref()` object outside the caller's scope with
+  `SCOPE_DENIED`, before the handler runs, as it does for `target()`. Retired objects
+  count as stored. A never-stored id is left to the handler. A `ref()` to an unscoped
+  type, or a `None` value, is skipped. There is no opt-out. To migrate, point the ref
+  at an unscoped type, or give the caller a role whose scope covers both objects.
+- **Dynamic and MCP calls now apply Python defaults before the scope gate (breaking, #181).**
+  `execute(name, dict)` and MCP `execute_action` fill in the params class's defaults
+  for non-required parameters before the role gate, validation, scope gate, and
+  audit. A defaulted `ref()` or `target(required=False)` that the caller omits is now
+  scope-checked. The audit `params` and `target_id` record the defaults-applied view,
+  so omitted optional params now appear (for example `None` for `x: str | None = None`).
+  Typed and dict calls now record the same view.
 - **A primary key can no longer have a restricted `sensitivity` (breaking, #200).**
   Defining one now raises `ValidationFailed` (`ONTOLOGY_INVALID`) at definition time,
   on the decorator path and on a direct `ObjectTypeDef`. The primary key addresses
