@@ -275,13 +275,21 @@ def _datetime_comparison(
         f"pg_input_is_valid(o, CASE WHEN {aware_o} THEN 'timestamp with time zone' "
         "ELSE 'timestamp without time zone' END)"
     )
+    match = re.fullmatch(_ISO_INSTANT, operand, flags=re.ASCII)
+    exact = match is not None
+    if match is not None:
+        offset = match.group(2)
+        if offset is not None and offset != "Z":
+            # PostgreSQL rejects UTC offsets of 16 hours or more, causing
+            # valid_o to pass rows through even for Python-valid operands.
+            exact = int(offset[1:3]) * 60 + int(offset[4:6]) < 16 * 60
     return (
         "CASE WHEN NOT (v ~ {p} AND o ~ {p}) THEN TRUE "
         f"WHEN NOT ({valid_v} AND {valid_o}) THEN TRUE "
         f"WHEN ({aware_v}) <> ({aware_o}) THEN FALSE "
         f"WHEN {aware_v} THEN v::timestamptz {operator} o::timestamptz "
         f"ELSE v::timestamp {operator} o::timestamp END",
-        [_ISO_INSTANT] * 2, re.fullmatch(_ISO_INSTANT, operand, flags=re.ASCII) is not None,
+        [_ISO_INSTANT] * 2, exact,
     )
 
 

@@ -742,3 +742,22 @@ def test_compiler_errors_propagate_before_prefilter_guard(dialect, path, compile
         assert fallbacks.total() == 0
     assert caught.value is error
     assert compiled_filters == [(row_filter, dialect, SQLITE_DOMAIN)]
+
+
+@pytest.mark.parametrize("dialect", ["sqlite", "postgres"])
+@pytest.mark.parametrize("op", ["gt", "gte", "lt", "lte"])
+@pytest.mark.parametrize("offset,pg_exact", [
+    pytest.param("+16:00", False, id="offset-plus-16"),
+    pytest.param("-16:00", False, id="offset-minus-16"),
+    pytest.param("+23:59", False, id="offset-plus-23-59"),
+    pytest.param("+15:59", True, id="offset-plus-15-59-control"),
+    pytest.param("-15:59", True, id="offset-minus-15-59-control"),
+    pytest.param("Z", True, id="utc-control"),
+    pytest.param("", True, id="naive-control"),
+])
+def test_compiled_datetime_offset_exactness(dialect, op, offset, pg_exact) -> None:
+    row_filter = RowFilter(where=(WhereTerm(
+        "at", "datetime", op, "2026-01-01T00:00:00" + offset,
+    ),))
+    compiled = compile_row_filter(row_filter, dialect, SQLITE_DOMAIN)
+    assert compiled.exact is (dialect == "sqlite" or pg_exact)

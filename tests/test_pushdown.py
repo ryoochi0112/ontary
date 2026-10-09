@@ -9,7 +9,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 
 import pytest
-from _fetch_counter import count_fetched
+from _fetch_counter import count_fallbacks, count_fetched
 
 from ontary.errors import ValidationFailed
 from ontary.meta import Cardinality, LinkTypeDef, ObjectTypeDef, OntologyRegistry, PropertyDef
@@ -25,6 +25,17 @@ MATCHES = tuple(50 + 90 * i for i in range(10))
 OWNED = frozenset((*MATCHES[:7], 30, 31, 32))
 TYPES = ("WhereRows", "ScopeRows", "BothRows", "ViaRows", "InjectionRows", "Team")
 SRC = Source(source_system="pushdown-test")
+
+
+@pytest.fixture(autouse=True)
+def no_prefilter_fallbacks(request: pytest.FixtureRequest) -> Iterator[None]:
+    # Select the fixture already used by the test, including the LATIN1 store,
+    # without introducing extra backend parametrization.
+    fixture = "latin1_store" if "latin1_store" in request.fixturenames else "seeded"
+    data = request.getfixturevalue(fixture)
+    with count_fallbacks(data.store) as counter:
+        yield
+    assert counter.total() == 0, dict(counter)
 
 
 def _registry() -> OntologyRegistry:

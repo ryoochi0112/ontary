@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import pytest
+from _fetch_counter import count_fallbacks
 from _filter_cases import FAMILIES, FILTER_CASES, INJECTION, MISSING, SURROGATES, FilterCase
 
 from ontary.meta import ObjectTypeDef, OntologyRegistry, PropertyDef
@@ -26,6 +27,13 @@ class PopulatedStore:
     backend: str
     store: StoreCore
     payloads: dict[str, dict[str, dict[str, Any]]]
+
+
+@pytest.fixture(autouse=True)
+def no_prefilter_fallbacks(populated_store: PopulatedStore) -> Iterator[None]:
+    with count_fallbacks(populated_store.store) as counter:
+        yield
+    assert counter.total() == 0, dict(counter)
 
 
 def _registry() -> OntologyRegistry:
