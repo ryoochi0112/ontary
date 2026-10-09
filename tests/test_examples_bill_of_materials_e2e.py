@@ -1,5 +1,8 @@
 """Structural guarantees and the initial BOM golden sample through OntologyClient."""
 
+from collections import Counter
+from functools import wraps
+
 import pytest
 
 from examples.bill_of_materials.fixtures import (
@@ -96,6 +99,129 @@ def test_given_source_v1_when_exploding_bike_then_rows_match_the_golden_sample()
         ],
         "cycles": [],
     }
+
+
+def test_three_level_explosion_uses_at_most_twelve_reads(monkeypatch: pytest.MonkeyPatch) -> None:
+    world = load_world(
+        {
+            "suppliers": [],
+            "parts": [
+                {"id": "root", "name": "Root"},
+                {"id": "alpha", "name": "Alpha"},
+                {"id": "beta", "name": "Beta"},
+                {"id": "common", "name": "Common"},
+                {"id": "left-leaf", "name": "Left leaf"},
+                {"id": "right-leaf", "name": "Right leaf"},
+            ],
+            "lines": [
+                {"id": "root-beta", "quantity": 3},
+                {"id": "root-alpha", "quantity": 2},
+                {"id": "alpha-left-leaf", "quantity": 7},
+                {"id": "alpha-common", "quantity": 5},
+                {"id": "beta-right-leaf", "quantity": 13},
+                {"id": "beta-common", "quantity": 11},
+            ],
+            "bom_parent": [
+                ("root-beta", "root"),
+                ("root-alpha", "root"),
+                ("alpha-left-leaf", "alpha"),
+                ("alpha-common", "alpha"),
+                ("beta-right-leaf", "beta"),
+                ("beta-common", "beta"),
+            ],
+            "bom_child": [
+                ("root-beta", "beta"),
+                ("root-alpha", "alpha"),
+                ("alpha-left-leaf", "left-leaf"),
+                ("alpha-common", "common"),
+                ("beta-right-leaf", "right-leaf"),
+                ("beta-common", "common"),
+            ],
+            "part_supplier": [],
+        }
+    )
+    calls: Counter[str] = Counter()
+    read_steps = (
+        "_current_row",
+        "_last_row",
+        "_live_object_rows",
+        "_current_rows_many",
+        "_link_ids_from",
+        "_link_ids_to",
+        "_link_ids_from_many",
+        "_link_ids_to_many",
+    )
+    for name in read_steps:
+        original = getattr(world.store, name)
+
+        @wraps(original)
+        def counted(*args, _name=name, _original=original, **kwargs):
+            calls[_name] += 1
+            return _original(*args, **kwargs)
+
+        monkeypatch.setattr(world.store, name, counted)
+
+    result = world.client.call_function(ExplodeBom(part_id="root"))
+
+    assert result == {
+        "rows": [
+            {
+                "level": 1,
+                "part_id": "alpha",
+                "part_name": "Alpha",
+                "quantity_per_parent": 2,
+                "total_quantity": 2,
+            },
+            {
+                "level": 2,
+                "part_id": "common",
+                "part_name": "Common",
+                "quantity_per_parent": 5,
+                "total_quantity": 10,
+            },
+            {
+                "level": 2,
+                "part_id": "left-leaf",
+                "part_name": "Left leaf",
+                "quantity_per_parent": 7,
+                "total_quantity": 14,
+            },
+            {
+                "level": 1,
+                "part_id": "beta",
+                "part_name": "Beta",
+                "quantity_per_parent": 3,
+                "total_quantity": 3,
+            },
+            {
+                "level": 2,
+                "part_id": "common",
+                "part_name": "Common",
+                "quantity_per_parent": 11,
+                "total_quantity": 33,
+            },
+            {
+                "level": 2,
+                "part_id": "right-leaf",
+                "part_name": "Right leaf",
+                "quantity_per_parent": 13,
+                "total_quantity": 39,
+            },
+        ],
+        "cycles": [],
+    }
+    traversed_reads = sum(
+        calls[name]
+        for name in (
+            "_current_rows_many",
+            "_link_ids_from",
+            "_link_ids_to",
+            "_link_ids_from_many",
+            "_link_ids_to_many",
+        )
+    )
+    assert traversed_reads <= 12
+    assert calls["_current_row"] <= 1
 
 
 def test_given_parts_when_inspecting_properties_then_quantities_belong_only_to_lines() -> None:

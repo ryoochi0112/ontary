@@ -77,10 +77,30 @@ def explode_bom(query: BoundQuery, p: ExplodeBom) -> WalkResult:
     root = _require_part(query, p.part_id)
     result: WalkResult = {"rows": [], "cycles": []}
 
+    lines_by_part: dict[str, list[BomLine]] = {}
+    children_by_line: dict[str, list[Part]] = {}
+    frontier = [root.id]
+    seen_part_ids = {root.id}
+    while frontier:
+        level_lines = query.traverse_many(bom_parent, frontier, reverse=True)
+        lines_by_part.update(level_lines)
+
+        line_ids = [line.id for lines in level_lines.values() for line in lines]
+        level_children = query.traverse_many(bom_child, line_ids)
+        children_by_line.update(level_children)
+
+        next_frontier: list[str] = []
+        for children in level_children.values():
+            for child in children:
+                if child.id not in seen_part_ids:
+                    seen_part_ids.add(child.id)
+                    next_frontier.append(child.id)
+        frontier = next_frontier
+
     def walk(part: Part, path: list[str], level: int, total: int) -> None:
         children: list[tuple[Part, BomLine]] = []
-        for line in query.traverse(bom_parent, part.id, reverse=True):
-            for child in query.traverse(bom_child, line.id):
+        for line in lines_by_part.get(part.id, []):
+            for child in children_by_line.get(line.id, []):
                 children.append((child, line))
         for child, line in sorted(children, key=lambda pair: pair[0].id):
             child_path = [*path, child.id]

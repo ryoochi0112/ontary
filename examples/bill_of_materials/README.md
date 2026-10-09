@@ -274,12 +274,10 @@ for params in (ExplodeBom(part_id="nope"), PartsFromSupplier(supplier_id="nobody
 
 ## Traversal cost
 
-`traverse` follows one hop.
-It makes one read for each row it returns.
-`explode_bom` takes two hops per level, from a part to its lines and from a line to its child.
-So one explosion makes a number of reads in proportion to the number of lines under the part: O(lines).
-That is fine for a small hierarchy.
-Batched traversal is tracked in [#69](https://github.com/ryoochi0112/ontary/issues/69).
+`explode_bom` walks the BOM one level at a time.
+Each level makes two `traverse_many` calls.
+Each call makes a constant two reads: one link read and one object read, regardless of the number of parts or lines.
+So a three-level explosion costs at most 12 reads.
 
 ## Run the tests
 
