@@ -19,7 +19,7 @@ from collections.abc import Callable, Iterable, Mapping
 from datetime import datetime
 from typing import Any, Literal, NoReturn, TypeVar, cast, overload
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from ontary._result_json import encode_result
 from ontary._runtime import default_clock, default_id_factory
@@ -818,15 +818,10 @@ class ActionExecutor:
 
         action_def, fn, params_cls = self._resolve_handler(action_name)
 
+        defaults_error = None
         if isinstance(params, dict) and params_cls is not None:
-            # Match the declared field names used by validation and audit.
-            # Materialize factories once so the gate and handler see the same value.
-            # Required markers retain the engine's missing-parameter refusal.
-            required_params = {param.name for param in action_def.parameters if param.required}
             params = params.copy()
-            for name, field in params_cls.model_fields.items():
-                if name not in params and name not in required_params and not field.is_required():
-                    params[name] = field.get_default(call_default_factory=True)
+            defaults_error = self._merge_param_defaults(action_def, params, params_cls)
 
         params_dict = self._params_to_dict(action_def, params)
 
@@ -848,6 +843,11 @@ class ActionExecutor:
         self._validate_params(
             consumer, action_name, action_def, params_dict, invocation_id, instant
         )
+        if defaults_error is not None:
+            self._error(
+                consumer, action_name, action_def, params_dict,
+                f"{action_name!r}: {defaults_error}", invocation_id, instant,
+            )
         self._validate_params_json_safe(
             consumer, action_name, action_def, params_dict, invocation_id, instant
         )
@@ -924,6 +924,55 @@ class ActionExecutor:
             raise
 
         return result
+
+    @staticmethod
+    def _merge_param_defaults(
+        action_def: ActionTypeDef, params: dict[str, Any], params_cls: type[BaseModel]
+    ) -> str | None:
+        """Merge into a caller copy; keep Python values for dependent factories.
+
+        Return any failure for the normal audited refusal after the role and
+        declared-shape checks, without moving model validation ahead of them.
+        """
+        declared = {param.name: param for param in action_def.parameters}
+        needs_validated_data = any(
+            field.default_factory_takes_validated_data for field in params_cls.model_fields.values()
+        )
+        validated_data: dict[str, Any] = {}
+        adapter: TypeAdapter[Any]
+        error = None
+        datetime_error = None
+        for name, field in params_cls.model_fields.items():
+            alias = field.validation_alias or field.alias
+            key = name
+            if name not in params and isinstance(alias, str) and alias in params:
+                key = alias
+            try:
+                if key in params:
+                    if needs_validated_data:
+                        adapter = TypeAdapter(field.rebuild_annotation())
+                        validated_data[name] = adapter.validate_python(params[key])
+                elif not declared[name].required and not field.is_required():
+                    # Like pydantic, skip dependent factories after an earlier validation failure.
+                    if error is not None and field.default_factory_takes_validated_data:
+                        continue
+                    value = field.get_default(
+                        call_default_factory=True, validated_data=validated_data
+                    )
+                    validated_data[name] = value
+                    params[name] = value
+                    # Structs use the typed path's storage normalization in `_params_to_dict`.
+                    if declared[name].type != "struct":
+                        adapter = TypeAdapter(field.annotation)
+                        params[name] = adapter.dump_python(value, mode="json")
+                    # JSON dumping must not hide a naive default datetime (#38).
+                    if declared[name].type == "datetime" and isinstance(value, datetime):
+                        mismatch = validate_scalar(value, "datetime")
+                        if mismatch is not None:
+                            datetime_error = datetime_error or f"parameter {name!r} {mismatch}"
+            except Exception as exc:
+                error = error or f"params failed validation: {exc}"
+        return error or datetime_error
 
     def _run_transaction(
         self,

@@ -12,7 +12,7 @@ from typing import Any, cast
 
 import pytest
 from conftest import ConsumerFactory, StoreFactory, raises_code
-from pydantic import ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from ontary import (
     ActionContext,
@@ -88,6 +88,137 @@ class _World:
     params_classes: dict[str, type[ActionParams]]
     received: list[str | None]
     factory_calls: list[str]
+
+
+def _register_pydantic_defaults(
+    ontology: Ontology,
+    session_type: type[OntologyObject],
+    room_type: type[OntologyObject],
+    factory_calls: list[str],
+) -> dict[str, type[ActionParams]]:
+    def dependent_request_default(data: dict[str, Any]) -> str:
+        value = f"{data['session_id']}:{data['room_id']}"
+        factory_calls.append(value)
+        return value
+
+    class AuditDependentDefaultsParams(ActionParams):
+        session_id: str = target(session_type)
+        room_id: str = ref(room_type, default="r-a")
+        request_id: str = Field(default_factory=dependent_request_default)
+        confirmation: str = Field(default_factory=lambda data: f"{data['request_id']}:confirmed")
+
+    @ontology.action(
+        AuditDependentDefaultsParams, target=session_type, roles=["Coordinator"],
+        api_name="audit_dependent_defaults",
+    )
+    def audit_dependent_defaults(
+        ctx: ActionContext, params: AuditDependentDefaultsParams
+    ) -> dict[str, Any]:
+        return params.model_dump(mode="json")
+
+    class AuditTupleDefaultsParams(ActionParams):
+        session_id: str = target(session_type)
+        tags: list[str] = Field(default=("a",))
+
+    @ontology.action(
+        AuditTupleDefaultsParams, target=session_type, roles=["Coordinator"],
+        api_name="audit_tuple_defaults",
+    )
+    def audit_tuple_defaults(ctx: ActionContext, params: AuditTupleDefaultsParams) -> dict[str, Any]:
+        return params.model_dump(mode="json")
+
+    default_at = datetime(2026, 10, 9, 12, 30, tzinfo=UTC)
+
+    class AuditDatetimeDefaultsParams(ActionParams):
+        session_id: str = target(session_type)
+        at: datetime = default_at
+
+    @ontology.action(
+        AuditDatetimeDefaultsParams, target=session_type, roles=["Coordinator"],
+        api_name="audit_datetime_defaults",
+    )
+    def audit_datetime_defaults(
+        ctx: ActionContext, params: AuditDatetimeDefaultsParams
+    ) -> dict[str, Any]:
+        return params.model_dump(mode="json")
+
+    class Observation(BaseModel):
+        at: datetime
+
+    class AuditStructDefaultsParams(ActionParams):
+        session_id: str = target(session_type)
+        observation: Observation = Field(default_factory=lambda: Observation(at=default_at))
+
+    @ontology.action(
+        AuditStructDefaultsParams, target=session_type, roles=["Coordinator"],
+        api_name="audit_struct_defaults",
+    )
+    def audit_struct_defaults(ctx: ActionContext, params: AuditStructDefaultsParams) -> dict[str, Any]:
+        return {
+            "session_id": params.session_id, "observation": {"at": params.observation.at.isoformat()},
+        }
+
+    class AuditNaiveDatetimeDefaultsParams(ActionParams):
+        session_id: str = target(session_type)
+        at: datetime = datetime(2026, 10, 9, 12)
+
+    @ontology.action(
+        AuditNaiveDatetimeDefaultsParams, target=session_type, roles=["Coordinator"],
+        api_name="audit_naive_datetime_defaults",
+    )
+    def audit_naive_datetime_defaults(
+        ctx: ActionContext, params: AuditNaiveDatetimeDefaultsParams
+    ) -> dict[str, Any]:
+        factory_calls.append("naive-handler")
+        return params.model_dump(mode="json")
+
+    def caller_day_default(data: dict[str, Any]) -> str:
+        value = data["at"].date().isoformat()
+        factory_calls.append(value)
+        return value
+
+    class AuditCallerDatetimeDefaultsParams(ActionParams):
+        model_config = ConfigDict(populate_by_name=True)
+
+        session_id: str = target(session_type)
+        at: datetime = Field(alias="when", ge=datetime(2026, 1, 1, tzinfo=UTC))
+        day: str = Field(default_factory=caller_day_default)
+
+    @ontology.action(
+        AuditCallerDatetimeDefaultsParams, target=session_type, roles=["Coordinator"],
+        api_name="audit_caller_datetime_defaults",
+    )
+    def audit_caller_datetime_defaults(
+        ctx: ActionContext, params: AuditCallerDatetimeDefaultsParams
+    ) -> dict[str, Any]:
+        return params.model_dump(mode="json")
+
+    def raising_default() -> str:
+        factory_calls.append("raising-default")
+        raise ValueError("factory boom")
+
+    class AuditRaisingDefaultsParams(ActionParams):
+        session_id: str = target(session_type)
+        room_id: str = ref(room_type, default="r-a")
+        request_id: str = Field(default_factory=raising_default)
+
+    @ontology.action(
+        AuditRaisingDefaultsParams, target=session_type, roles=["Coordinator"],
+        api_name="audit_raising_defaults",
+    )
+    def audit_raising_defaults(ctx: ActionContext, params: AuditRaisingDefaultsParams) -> dict[str, Any]:
+        factory_calls.append("raising-handler")
+        return params.model_dump(mode="json")
+
+    return {
+        "audit_dependent_defaults": AuditDependentDefaultsParams,
+        "audit_tuple_defaults": AuditTupleDefaultsParams,
+        "audit_datetime_defaults": AuditDatetimeDefaultsParams,
+        "audit_struct_defaults": AuditStructDefaultsParams,
+        "audit_naive_datetime_defaults": AuditNaiveDatetimeDefaultsParams,
+        "audit_caller_datetime_defaults": AuditCallerDatetimeDefaultsParams,
+        "audit_raising_defaults": AuditRaisingDefaultsParams,
+    }
 
 
 @pytest.fixture
@@ -253,6 +384,7 @@ def world(
         return params.model_dump()
 
     params_classes["audit_defaults"] = AuditDefaultsParams
+    params_classes.update(_register_pydantic_defaults(ontology, Session, Room, factory_calls))
     ontology.validate()
 
     if backend == "in_memory":
@@ -612,3 +744,172 @@ def test_given_explicit_params_when_defaults_exist_then_the_caller_values_are_pr
     assert entry.params == before
     assert entry.outcome == "ok"
     assert entry.error_code is None
+
+
+@pytest.mark.parametrize("path", ["dynamic", "mcp"])
+@pytest.mark.parametrize(
+    ("api_name", "defaults"),
+    [
+        ("audit_dependent_defaults", {
+            "room_id": "r-a", "request_id": "s-a:r-a", "confirmation": "s-a:r-a:confirmed",
+        }),
+        ("audit_tuple_defaults", {"tags": ["a"]}),
+        ("audit_datetime_defaults", {"at": "2026-10-09T12:30:00Z"}),
+        ("audit_struct_defaults", {"observation": {"at": "2026-10-09T12:30:00+00:00"}}),
+    ],
+)
+def test_given_pydantic_defaults_when_omitted_then_typed_and_dict_audits_are_equal(
+    world: _World, path: str, api_name: str, defaults: dict[str, Any]
+) -> None:
+    params = {"session_id": "s-a"}
+    expected = {**params, **defaults}
+
+    typed_result = _execute(world, "typed", params, api_name=api_name)
+    typed_entry = world.store.audit_entries()[-1]
+    assert typed_result == typed_entry.params == expected
+    if api_name == "audit_dependent_defaults":
+        assert world.factory_calls == ["s-a:r-a"]
+
+    dict_result = _execute(world, path, params, api_name=api_name)
+
+    assert params == {"session_id": "s-a"}
+    typed_entry, dict_entry = world.store.audit_entries()
+    assert typed_entry.outcome == dict_entry.outcome == "ok"
+    assert typed_entry.params == dict_entry.params == expected
+    assert json.dumps(typed_entry.params, sort_keys=True).encode() == json.dumps(
+        dict_entry.params, sort_keys=True
+    ).encode()
+    assert typed_entry.target_id == dict_entry.target_id == "s-a"
+    assert (dict_result["result"] if path == "mcp" else dict_result) == dict_entry.params
+    if api_name == "audit_dependent_defaults":
+        assert world.factory_calls == ["s-a:r-a", "s-a:r-a"]
+
+
+@pytest.mark.parametrize("path", ["dynamic", "mcp"])
+def test_given_a_naive_datetime_default_when_omitted_then_typed_and_dict_refusals_match(
+    world: _World, path: str
+) -> None:
+    params = {"session_id": "s-a"}
+    api_name = "audit_naive_datetime_defaults"
+    with raises_code(ActionError, "INVALID_PARAMS") as typed_error:
+        _execute(world, "typed", params, api_name=api_name)
+    assert "expected an offset-aware datetime" in str(typed_error.value)
+    assert "got a naive one" in str(typed_error.value)
+
+    if path == "mcp":
+        result = _execute(world, path, params, api_name=api_name)
+        assert result["error"]["code"] == "INVALID_PARAMS"
+        assert result["error"]["message"] == str(typed_error.value)
+    else:
+        with raises_code(ActionError, "INVALID_PARAMS") as dict_error:
+            _execute(world, path, params, api_name=api_name)
+        assert str(dict_error.value) == str(typed_error.value)
+
+    typed_entry, dict_entry = world.store.audit_entries()
+    assert typed_entry.params == dict_entry.params == {
+        "session_id": "s-a", "at": "2026-10-09T12:00:00",
+    }
+    assert typed_entry.outcome == dict_entry.outcome == "error"
+    assert typed_entry.error_code == dict_entry.error_code == "INVALID_PARAMS"
+    assert typed_entry.target_id == dict_entry.target_id == "s-a"
+    assert typed_entry.writes == dict_entry.writes == []
+    assert params == {"session_id": "s-a"}
+    assert world.factory_calls == []
+
+
+@pytest.mark.parametrize("path", ["dynamic", "mcp"])
+def test_given_a_factory_depending_on_caller_datetime_when_dict_then_audit_equals_typed(
+    world: _World, path: str
+) -> None:
+    api_name = "audit_caller_datetime_defaults"
+    params = {"session_id": "s-a", "at": "2026-01-01T00:00:00Z"}
+    before = params.copy()
+    typed_result = _execute(world, "typed", params, api_name=api_name)
+
+    dict_result = _execute(world, path, params, api_name=api_name)
+
+    typed_entry, dict_entry = world.store.audit_entries()
+    assert typed_entry.params == dict_entry.params == {
+        "session_id": "s-a", "at": "2026-01-01T00:00:00Z", "day": "2026-01-01",
+    }
+    assert json.dumps(typed_entry.params, sort_keys=True).encode() == json.dumps(
+        dict_entry.params, sort_keys=True
+    ).encode()
+    assert typed_entry.outcome == dict_entry.outcome == "ok"
+    assert typed_entry.target_id == dict_entry.target_id == "s-a"
+    assert typed_result == dict_entry.params
+    assert (dict_result["result"] if path == "mcp" else dict_result) == dict_entry.params
+    assert world.factory_calls == ["2026-01-01", "2026-01-01"]
+    assert params == before
+
+
+@pytest.mark.parametrize("path", ["dynamic", "mcp"])
+def test_given_a_caller_alias_when_dict_then_unknown_parameter_is_audited(
+    world: _World, path: str
+) -> None:
+    api_name = "audit_caller_datetime_defaults"
+    params = {"session_id": "s-a", "when": "2026-01-01T00:00:00Z"}
+    before = params.copy()
+    message = f"{api_name!r}: unknown parameter 'when'"
+
+    if path == "mcp":
+        result = _execute(world, path, params, api_name=api_name)
+        assert result["error"]["code"] == "INVALID_PARAMS"
+        assert result["error"]["message"] == message
+    else:
+        with raises_code(ActionError, "INVALID_PARAMS") as error:
+            _execute(world, path, params, api_name=api_name)
+        assert str(error.value) == message
+
+    entry, = world.store.audit_entries()
+    assert entry.params == {**before, "day": "2026-01-01"}
+    assert entry.outcome == "error"
+    assert entry.error_code == "INVALID_PARAMS"
+    assert entry.target_id == "s-a"
+    assert entry.writes == []
+    assert world.factory_calls == ["2026-01-01"]
+    assert params == before
+
+
+@pytest.mark.parametrize("path", ["dynamic", "mcp"])
+@pytest.mark.parametrize("at", ["invalid", "2025-12-31T00:00:00Z"])
+def test_given_an_invalid_factory_dependency_when_dict_then_invalid_params_is_audited(
+    world: _World, path: str, at: str
+) -> None:
+    params = {"session_id": "s-a", "at": at}
+    if path == "mcp":
+        result = _execute(world, path, params, api_name="audit_caller_datetime_defaults")
+        assert result["error"]["code"] == "INVALID_PARAMS"
+    else:
+        with raises_code(ActionError, "INVALID_PARAMS"):
+            _execute(world, path, params, api_name="audit_caller_datetime_defaults")
+
+    entry, = world.store.audit_entries()
+    assert entry.params == params
+    assert entry.target_id == "s-a"
+    assert entry.outcome == "error"
+    assert entry.error_code == "INVALID_PARAMS"
+    assert entry.writes == []
+    assert world.factory_calls == []
+
+
+@pytest.mark.parametrize("path", ["dynamic", "mcp"])
+def test_given_a_raising_default_factory_when_dict_then_invalid_params_is_audited(
+    world: _World, path: str
+) -> None:
+    params = {"session_id": "s-a"}
+    if path == "mcp":
+        result = _execute(world, path, params, api_name="audit_raising_defaults")
+        assert result["error"]["code"] == "INVALID_PARAMS"
+    else:
+        with raises_code(ActionError, "INVALID_PARAMS"):
+            _execute(world, path, params, api_name="audit_raising_defaults")
+
+    entry, = world.store.audit_entries()
+    assert entry.params == {"session_id": "s-a", "room_id": "r-a"}
+    assert entry.target_id == "s-a"
+    assert entry.outcome == "error"
+    assert entry.error_code == "INVALID_PARAMS"
+    assert entry.writes == []
+    assert world.factory_calls == ["raising-default"]
+    assert params == {"session_id": "s-a"}
