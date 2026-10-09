@@ -231,6 +231,8 @@ def test_directed_exactness(exact_store: ExactStore, where: dict[str, Any]) -> N
     pytest.param("+16:00", id="offset-plus-16"),
     pytest.param("-16:00", id="offset-minus-16"),
     pytest.param("+23:59", id="offset-plus-23-59"),
+    pytest.param("+05:60", id="offset-plus-05-60"),
+    pytest.param("+00:99", id="offset-plus-00-99"),
     pytest.param("+15:59", id="offset-plus-15-59-control"),
 ])
 def test_datetime_offset_exactness(exact_store: ExactStore, offset: str) -> None:

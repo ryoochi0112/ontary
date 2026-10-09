@@ -280,9 +280,13 @@ def _datetime_comparison(
     if match is not None:
         offset = match.group(2)
         if offset is not None and offset != "Z":
-            # PostgreSQL rejects UTC offsets of 16 hours or more, causing
+            # PostgreSQL rejects UTC offsets of 16 hours or more, or with
+            # minutes of 60 or more (fromisoformat accepts +05:60), causing
             # valid_o to pass rows through even for Python-valid operands.
-            exact = int(offset[1:3]) * 60 + int(offset[4:6]) < 16 * 60
+            exact = (
+                int(offset[4:6]) < 60
+                and int(offset[1:3]) * 60 + int(offset[4:6]) < 16 * 60
+            )
     return (
         "CASE WHEN NOT (v ~ {p} AND o ~ {p}) THEN TRUE "
         f"WHEN NOT ({valid_v} AND {valid_o}) THEN TRUE "
