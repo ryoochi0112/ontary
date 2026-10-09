@@ -95,7 +95,8 @@ the underlying `INVALID_LIMIT` validation.
 
 `traverse_links` is paged the same way: it accepts an optional `limit` (default
 100, maximum 1000) and an `after` cursor, and its envelope carries `has_more` and
-`next_cursor`. A cursor that no longer names a current, visible linked row returns
+`next_cursor`. Its `next_cursor` is the object id of the last kept linked row. A
+cursor that no longer names a current, visible linked row returns
 `STALE_CURSOR`; restart from the first page.
 
 ## Serve many proven identities
