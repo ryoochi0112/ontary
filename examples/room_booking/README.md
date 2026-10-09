@@ -124,8 +124,7 @@ error = refusal(
         ends_at=at(14),
     )
 )
-assert error.code == "PRECONDITION_FAILED"
-assert "room must be in the session's building" in str(error)
+assert error.code == "SCOPE_DENIED"
 
 # The rule refuses a range that ends before it starts.
 error = refusal(BookSession(session_id=workshop, room_id=hall, starts_at=at(14), ends_at=at(13)))

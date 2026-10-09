@@ -471,7 +471,7 @@ def test_given_bookings_created_out_of_time_order_when_scheduled_then_only_that_
     ("session_key", "room_key", "code"),
     [
         ("session_b_checkin_id", "room_b_hall_id", "SCOPE_DENIED"),
-        ("session_a_workshop_id", "room_b_hall_id", "PRECONDITION_FAILED"),
+        ("session_a_workshop_id", "room_b_hall_id", "SCOPE_DENIED"),
     ],
     ids=["b-session", "a-session-b-room"],
 )

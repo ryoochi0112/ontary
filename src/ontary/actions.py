@@ -1321,16 +1321,19 @@ class ActionExecutor:
         """Deny-by-default scope enforcement, driven by each declared
         `ActionParameterDef.scope_semantics` / `.refers_to` rather than any
         hardcoded parameter or object-type name (see module docstring).
-        Returns the names of the `target` parameters that skipped the gate
+        Every parameter with `refers_to` is gated, including `ref()` parameters
+        whose `scope_semantics` is `None`. A `None` value names no object and
+        is skipped for all three markers.
+        Returns the names of the `target` and `ref` parameters that skipped the gate
         because they refer to an unscoped type, for the audit trail.
 
-        - `scope_semantics="target"`: only enforced if the named object
+        - `target()` and `ref()`: only enforced if the named object
           actually EXISTS -- has ever been stored, retired rows included (a
           target that never existed is left to the handler's own
           precondition check, audited "error", never a scope denial).
         - `scope_semantics="scope"`: always enforced when the param is
           present -- it names a scope object directly, existence aside.
-        - A `target` that refers to a `scope="unscoped"` type (#35) has no
+        - A `target` or `ref` that refers to a `scope="unscoped"` type (#35) has no
           owning scope to cover, so the action's `roles=` is its only gate.
           It is skipped here and named in the returned list. The gate's own
           denials and every audit entry written after the gate carry it. A `scope`
@@ -1341,17 +1344,20 @@ class ActionExecutor:
         # Decided up front from the declaration, not in loop order, so an
         # entry denied on an EARLIER scoped parameter still names every
         # parameter that is exempt from the gate.
+        param_rules = self._param_rules(action_def)
         unscoped_params = [
             param.name
-            for param in self._param_rules(action_def)
+            for param in param_rules
             if param.name in params
-            and param.scope_semantics == "target"
+            and param.scope_semantics in ("target", None)
             and param.refers_to in self._policy.unscoped_types
         ]
-        for param in self._param_rules(action_def):
+        for param in param_rules:
             if param.name not in params or param.name in unscoped_params:
                 continue
             obj_id = params[param.name]
+            if obj_id is None:
+                continue
             if not isinstance(obj_id, str):
                 # `_validate_params` runs before `_enforce_scope` and rejects
                 # (audited "error") any declared param whose value doesn't
@@ -1377,7 +1383,8 @@ class ActionExecutor:
                     code="INTERNAL_ERROR",
                 )
 
-            if param.scope_semantics == "target":
+            uses_target_rules = param.scope_semantics in ("target", None)
+            if uses_target_rules:
                 # Asked of the NEWEST row, not the live one. `read_current`
                 # answers `None` for a RETIRED object too, so skipping the
                 # gate on that answer handed a consumer outside the object's
@@ -1385,9 +1392,9 @@ class ActionExecutor:
                 # validates no endpoint, so the writes went through. "Never
                 # stored" is the only case precondition handling owns.
                 if self._store.read_last(param.refers_to, obj_id) is None:
-                    continue  # nonexistent target: precondition handling applies
+                    continue  # never-stored target/ref: precondition handling applies
 
-            # ...and having gated on the retired target, resolve the scope it
+            # ...and having gated on the retired target/ref, resolve the scope it
             # owned, not the one it has: a retired object holds no live links,
             # so a `ViaLink` rule would resolve `None` and deny the very
             # consumer the object belongs to. THIS GATE ONLY. `scope`
@@ -1398,7 +1405,7 @@ class ActionExecutor:
                 self._store,
                 param.refers_to,
                 obj_id,
-                include_retired=param.scope_semantics == "target",
+                include_retired=uses_target_rules,
             )
             if not covers_scope(self._policy, consumer, resolved):
                 self._deny(
@@ -1418,4 +1425,9 @@ class ActionExecutor:
 
     @staticmethod
     def _param_rules(action_def: ActionTypeDef) -> list[ActionParameterDef]:
-        return [p for p in action_def.parameters if p.scope_semantics is not None]
+        # Keep malformed scope markers in the gate so the missing-refers_to
+        # defense still refuses them.
+        return [
+            p for p in action_def.parameters
+            if p.refers_to is not None or p.scope_semantics is not None
+        ]
