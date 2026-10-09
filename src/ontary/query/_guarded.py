@@ -55,6 +55,7 @@ from ontary.scope import (
 )
 from ontary.security import Consumer
 from ontary.store import Store, StoredObject
+from ontary.store._shared import refuse_bare_anchors
 
 
 class GuardedQuery:
@@ -439,6 +440,7 @@ class GuardedQuery:
         list keeps the same link order, scope filtering, and redaction as
         `traverse`; anchors without links map to empty lists.
         """
+        refuse_bare_anchors(anchor_ids)
         target_type = self._traverse_target_type(consumer, link_type, reverse=reverse)
         targets = (
             self._store.links_to_many(link_type, anchor_ids)

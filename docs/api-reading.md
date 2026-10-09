@@ -167,6 +167,9 @@ maps to `[]`. Each list has the same scope filtering, redaction, and row order a
 `traverse` for that anchor, and the same identity-revealing refusal applies.
 `reverse=True` traverses from the link's target side.
 
+A bare `str` or `bytes` as the anchors is refused with `INVALID_PARAMS`. To traverse
+from one anchor, pass it in a list, such as `["comment-a"]`.
+
 The call makes a constant number of reads, whatever the anchor count: one link read
 and one object read. It has no paging, so it does not accept `limit` or `after`.
 `traverse_many` is not available on MCP yet.

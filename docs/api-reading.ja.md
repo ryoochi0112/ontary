@@ -164,6 +164,9 @@ by_comment = client.traverse_many("Comment", "commentOnTicket", [comment_a, comm
 `traverse` と同じで、identity-revealing なリンクの拒否も同じように適用されます。
 `reverse=True` はリンクの対象側から辿ります。
 
+アンカーに `str` や `bytes` をそのまま渡すと、`INVALID_PARAMS` で拒否されます。1 つの
+アンカーから辿るときは、`["comment-a"]` のようにリストに入れて渡してください。
+
 アンカーの数によらず、読み取りの回数は一定です（リンクの読み取り 1 回とオブジェクトの
 読み取り 1 回）。ページングはなく、`limit` と `after` は受け付けません。
 `traverse_many` はまだ MCP では使えません。

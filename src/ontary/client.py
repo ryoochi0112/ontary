@@ -88,6 +88,7 @@ from ontary.query import (
 from ontary.query._paging import _UNSET_LIMIT
 from ontary.security import Consumer
 from ontary.store import Source, Store, StoredObject
+from ontary.store._shared import refuse_bare_anchors
 
 __all__ = [
     "OntologyClient",
@@ -652,6 +653,7 @@ class OntologyClient(_TypedReadMixin):
         handle's source class. Missing anchors have empty lists.
         """
         if isinstance(obj_type, LinkHandle):
+            refuse_bare_anchors(link)
             ids = [self._traverse_anchor_id(obj_type, anchor, reverse=reverse) for anchor in link]
             return self._traverse_many_via(ids, obj_type, reverse=reverse)
         if not isinstance(link, str) or anchor_ids is None:

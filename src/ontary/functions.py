@@ -75,7 +75,7 @@ from ontary.query import (
 from ontary.query._aggregate import _AUTHOR_DISPATCH
 from ontary.security import Consumer
 from ontary.store import StoredObject
-from ontary.store._shared import iso_instant
+from ontary.store._shared import iso_instant, refuse_bare_anchors
 from ontary.typesys import choice_value, validate_scalar
 
 T = TypeVar("T", bound="OntologyObject")
@@ -416,6 +416,7 @@ class BoundQuery(_TypedReadMixin):
                 code="INVALID_PARAMS",
             )
         if isinstance(link_type, LinkHandle):
+            refuse_bare_anchors(anchor_ids)
             ids = [self._traverse_anchor_id(link_type, anchor, reverse=reverse) for anchor in anchor_ids]
             return self._traverse_many_via(ids, link_type, reverse=reverse)
         return self._query.traverse_many(

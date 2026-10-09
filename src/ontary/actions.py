@@ -38,7 +38,7 @@ from ontary.model import CapabilityHandle, Event, LinkHandle, OntologyObject, _c
 from ontary.scope import ScopePolicy, resolve_owning_scope
 from ontary.security import Consumer, covers_scope
 from ontary.store import AuditEntry, Source, Store, StoredObject
-from ontary.store._shared import iso_instant
+from ontary.store._shared import iso_instant, refuse_bare_anchors
 from ontary.typesys import _to_storage_scalar, choice_value, struct_value, validate_scalar
 
 TypedHandler = Callable[["ActionContext", BaseModel], dict[str, Any]]
@@ -469,6 +469,7 @@ class ActionContext:
         when a target is shared by multiple anchors.
         """
         operation = "traverse_many"
+        refuse_bare_anchors(anchors)
         link_api_name = self._link_type(link, operation)
         anchor_ids = (self._endpoint_id(anchor, operation) for anchor in anchors)
         if reverse:
