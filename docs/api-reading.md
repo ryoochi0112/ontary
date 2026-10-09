@@ -101,8 +101,9 @@ The contract:
 - **Exact-size pages.** A page holds exactly `limit` items whenever that many visible
   rows remain — filtering downstream of the store read can never shorten a page. A
   short page always means "no more rows", never "some were hidden from you".
-- **The cursor is opaque.** A random per-row token. Not a row id, not a count, not an
-  order. Never parse it; store it and pass it back to `after=`.
+- **The cursor is opaque.** Never parse it; store it and pass it back to `after=`.
+  A `get_objects` cursor is a random per-row page token.
+  A traversal cursor is the object id of the last kept row.
 - **`next_cursor` is `None` exactly when `has_more` is `False`.** When `has_more` is
   `True`, `next_cursor` is the opaque key of the last returned row. A last page that
   fills exactly no longer yields a cursor that leads to an empty page. The loop

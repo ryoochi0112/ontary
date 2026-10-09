@@ -11,6 +11,18 @@ you**.
 
 ## [Unreleased]
 
+### Changed
+
+- **A primary key can no longer have a restricted `sensitivity` (breaking, #200).**
+  Defining one now raises `ValidationFailed` (`ONTOLOGY_INVALID`) at definition time,
+  on the decorator path and on a direct `ObjectTypeDef`. The primary key addresses
+  the row, so every caller who reads or links the row can see it. To migrate, remove
+  `sensitivity` from the key and keep the secret in a separate restricted property
+  behind a non-secret key.
+- **The `Page`, `TypedPage`, and `Lineage` cursor docs are now accurate (#204).**
+  They say the traversal cursor is the object id of the last kept row. This is a
+  documentation change only; behavior is unchanged.
+
 ## [0.26.0] — 2026-10-09
 
 ```bash

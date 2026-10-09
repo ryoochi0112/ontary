@@ -218,6 +218,18 @@ def _fields_declaration_violation(
     return None
 
 
+def primary_key_sensitivity_violation(sensitivity: Sensitivity) -> str | None:
+    restricted = not sensitivity.human_visible or not sensitivity.ai_usable
+    if not restricted:
+        return None
+    return (
+        "a primary key cannot have a restricted sensitivity. The key addresses the row, "
+        "so it is always visible to every caller who reads or links the row. "
+        "To fix: remove sensitivity from the key, and keep the secret in a separate "
+        "restricted property behind a non-secret key."
+    )
+
+
 class PropertyDef(BaseModel):
     accept: tuple[str, ...] = ()
     name: str
@@ -321,6 +333,17 @@ class ObjectTypeDef(BaseModel):
             raise ValueError(
                 f"ObjectTypeDef {self.api_name!r}: primary_key "
                 f"{self.primary_key!r} not found in properties {sorted(names)}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _primary_key_not_restricted(self) -> ObjectTypeDef:
+        prop = next(prop for prop in self.properties if prop.name == self.primary_key)
+        body = primary_key_sensitivity_violation(prop.sensitivity)
+        if body is not None:
+            raise ValidationFailed(
+                f"ObjectTypeDef {self.api_name!r}.{self.primary_key}: {body}",
+                code="ONTOLOGY_INVALID",
             )
         return self
 

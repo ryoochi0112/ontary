@@ -132,6 +132,13 @@ keep working on the same class.
 > decorator raises a coded validation error at class-registration time otherwise —
 > because a redacted read has to be able to return `None` for it.
 
+> **A primary key cannot have a restricted `sensitivity`.** Both the decorator and a
+> direct `ObjectTypeDef` raise `ValidationFailed` with code `ONTOLOGY_INVALID` at
+> definition time. This check runs before the `X | None` rule. The primary key
+> addresses the row, so every caller who reads or links the row can see it. Remove
+> `sensitivity` from the key. Keep the secret in a separate restricted property
+> behind a non-secret key.
+
 `choices=["open", "closed"]` limits a `str` property to those values. Every write
 path refuses any other value.
 
