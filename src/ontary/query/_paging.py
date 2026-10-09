@@ -82,12 +82,13 @@ class Page(BaseModel):
 
     `has_more` is true exactly when at least one more VISIBLE row follows
     this page (the read peeks one visible row past `limit`; rows hidden by
-    scope, `row_visibility`, or `where` never count). `next_cursor` is the
-    opaque key of the last row actually KEPT when `has_more` is true --
-    never a payload primary key, never read off a row
-    (`StoredObject`/`Lineage` carry no row identity) -- and `None` exactly
-    when `has_more` is false, so an exactly-full last page carries no
-    cursor. Frozen, like every other read-model value this layer returns."""
+    scope, `row_visibility`, or `where` never count). `next_cursor` is
+    `None` exactly when `has_more` is false, so an exactly-full last page
+    carries no cursor. A cursor is opaque to callers: store it, pass it back
+    to `after=`, and never parse it. Its content depends on the read:
+    `get_objects`/`list` pages use an opaque random per-row page token, while
+    a traversal page uses the object id of the last kept linked row. Frozen,
+    like every other read-model value this layer returns."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -137,10 +138,12 @@ class Page(BaseModel):
 
 class TypedPage(BaseModel, Generic[_T]):
     """The typed-client counterpart to `Page`: `items` holds hydrated `T`
-    instances instead of raw `StoredObject`s. `has_more` and `next_cursor`
-    have the exact same contract as on `Page`: `next_cursor` is the opaque
-    key of the last kept row when `has_more` is true, and `None` exactly
-    when `has_more` is false."""
+    instances instead of raw `StoredObject`s. `has_more` is true exactly
+    when another visible row follows, and `next_cursor` is `None` exactly
+    when `has_more` is false. A cursor is opaque to callers: store it, pass
+    it back to `after=`, and never parse it. Its content depends on the read:
+    `get_objects`/`list` pages use an opaque random per-row page token, while
+    a traversal page uses the object id of the last kept linked row."""
 
     model_config = ConfigDict(frozen=True)
 

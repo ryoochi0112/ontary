@@ -91,7 +91,9 @@ class Lineage(BaseModel):
     no arithmetic relationship to row identity at all, so it is safe even
     off the model, and safe for a consumer to hold. `Lineage` therefore
     carries nothing sensitivity-classified; it is never redacted (see
-    `GuardedQuery._redact`).
+    `GuardedQuery._redact`). `object_id` is the row's primary key and needs
+    no redaction because a primary key with restricted sensitivity cannot be declared;
+    authoring refuses it.
     """
 
     model_config = ConfigDict(frozen=True)
