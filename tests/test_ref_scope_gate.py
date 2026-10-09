@@ -12,6 +12,7 @@ from typing import Any, cast
 
 import pytest
 from conftest import ConsumerFactory, StoreFactory, raises_code
+from pydantic import ConfigDict, Field
 
 from ontary import (
     ActionContext,
@@ -86,6 +87,7 @@ class _World:
     client: OntologyClient
     params_classes: dict[str, type[ActionParams]]
     received: list[str | None]
+    factory_calls: list[str]
 
 
 @pytest.fixture
@@ -123,6 +125,7 @@ def world(
     ontology.link("session_building", Session, Building, Cardinality.MANY_TO_ONE)
 
     received: list[str | None] = []
+    factory_calls: list[str] = []
     params_classes: dict[str, type[ActionParams]] = {}
     room_options: dict[str, Any] = {
         "plain": {},
@@ -194,6 +197,62 @@ def world(
         return params.model_dump()
 
     params_classes["nullable_markers"] = NullableMarkersParams
+
+    class DefaultRefParams(ActionParams):
+        session_id: str = target(Session)
+        room_id: str = ref(Room, default="r-b")
+
+    @ontology.action(
+        DefaultRefParams, target=Session, roles=["Coordinator"], api_name="default_ref"
+    )
+    def default_ref(ctx: ActionContext, params: DefaultRefParams) -> dict[str, Any]:
+        return _book(ctx, params.room_id)
+
+    params_classes["default_ref"] = DefaultRefParams
+
+    class DefaultTargetParams(ActionParams):
+        session_id: str = target(Session, required=False, default="s-b")
+        room_id: str = ref(Room)
+
+    @ontology.action(
+        DefaultTargetParams, target=Session, roles=["Coordinator"], api_name="default_target"
+    )
+    def default_target(ctx: ActionContext, params: DefaultTargetParams) -> dict[str, Any]:
+        return _book(ctx, params.room_id)
+
+    params_classes["default_target"] = DefaultTargetParams
+
+    class RequiredDefaultTargetParams(DefaultTargetParams):
+        session_id: str = target(Session, default="s-b")
+
+    ontology.action(
+        RequiredDefaultTargetParams,
+        target=Session,
+        roles=["Coordinator"],
+        api_name="required_default_target",
+    )(default_target)
+
+    params_classes["required_default_target"] = RequiredDefaultTargetParams
+
+    def request_default() -> str:
+        factory_calls.append("request-value")
+        return factory_calls[-1]
+
+    class AuditDefaultsParams(ActionParams):
+        model_config = ConfigDict(populate_by_name=True)
+
+        session_id: str = target(Session, required=False, default="s-a", alias="session")
+        room_id: str = ref(Room, default="r-a")
+        request_id: str = Field(default_factory=request_default, alias="request")
+
+    @ontology.action(
+        AuditDefaultsParams, target=Session, roles=["Coordinator"], api_name="audit_defaults"
+    )
+    def audit_defaults(ctx: ActionContext, params: AuditDefaultsParams) -> dict[str, Any]:
+        received.append(params.room_id)
+        return params.model_dump()
+
+    params_classes["audit_defaults"] = AuditDefaultsParams
     ontology.validate()
 
     if backend == "in_memory":
@@ -215,7 +274,8 @@ def world(
         actor_id="ca", role="Coordinator", scope_level="building", scope_id="b-a"
     )
     return _World(
-        ontology, store, consumer, OntologyClient(ontology, store, consumer), params_classes, received
+        ontology, store, consumer, OntologyClient(ontology, store, consumer), params_classes,
+        received, factory_calls,
     )
 
 
@@ -433,3 +493,122 @@ def test_given_a_ref_with_metadata_or_a_null_default_when_out_of_scope_then_ther
     entry = world.store.audit_entries()[-1]
     assert entry.outcome == "denied"
     assert entry.error_code == "SCOPE_DENIED"
+
+
+@pytest.mark.parametrize("path", ["dynamic", "mcp"])
+def test_given_an_out_of_scope_default_ref_when_omitted_then_the_engine_denies(
+    world: _World, path: str
+) -> None:
+    assert world.store.read_current("Room", "r-b") is not None
+    assert world.store.links_from("room_building", "r-b") == ["b-b"]
+    before = _snapshot(world)
+    params = {"session_id": "s-a"}
+
+    _assert_denied(world, path, params, api_name="default_ref")
+
+    assert params == {"session_id": "s-a"}
+    assert world.received == []
+    assert _snapshot(world) == before
+    entries = world.store.audit_entries()
+    assert len(entries) == 1
+    assert entries[0].outcome == "denied"
+    assert entries[0].error_code == "SCOPE_DENIED"
+    assert entries[0].params == {"session_id": "s-a", "room_id": "r-b"}
+    assert entries[0].target_id == "s-a"
+    assert entries[0].writes == []
+
+
+@pytest.mark.parametrize("path", ["dynamic", "mcp"])
+def test_given_an_out_of_scope_default_target_when_omitted_then_the_engine_denies(
+    world: _World, path: str
+) -> None:
+    assert world.store.read_current("Session", "s-b") is not None
+    assert world.store.links_from("session_building", "s-b") == ["b-b"]
+    before = _snapshot(world)
+    params = {"room_id": "r-a"}
+
+    _assert_denied(world, path, params, api_name="default_target")
+
+    assert params == {"room_id": "r-a"}
+    assert world.received == []
+    assert _snapshot(world) == before
+    entries = world.store.audit_entries()
+    assert len(entries) == 1
+    assert entries[0].outcome == "denied"
+    assert entries[0].error_code == "SCOPE_DENIED"
+    assert entries[0].params == {"session_id": "s-b", "room_id": "r-a"}
+    assert entries[0].target_id == "s-b"
+    assert entries[0].writes == []
+
+
+def test_given_a_default_target_left_required_when_omitted_then_params_are_invalid(
+    world: _World,
+) -> None:
+    action_def = world.ontology.registry.get_action_type("required_default_target")
+    declared = {param.name: param for param in action_def.parameters}
+    assert declared["session_id"].required is True
+    assert not world.params_classes["required_default_target"].model_fields["session_id"].is_required()
+    assert world.store.read_current("Session", "s-b") is not None
+    assert world.store.links_from("session_building", "s-b") == ["b-b"]
+    before = _snapshot(world)
+    params = {"room_id": "r-a"}
+
+    with raises_code(ActionError, "INVALID_PARAMS"):
+        _execute(world, "dynamic", params, api_name="required_default_target")
+
+    assert params == {"room_id": "r-a"}
+    assert world.received == []
+    assert _snapshot(world) == before
+    entries = world.store.audit_entries()
+    assert len(entries) == 1
+    assert entries[0].outcome == "error"
+    assert entries[0].error_code == "INVALID_PARAMS"
+    assert entries[0].params == params
+    assert entries[0].target_id is None
+    assert entries[0].writes == []
+
+
+@pytest.mark.parametrize("path", ["dynamic", "mcp"])
+def test_given_omitted_defaults_when_typed_and_dict_calls_then_audits_and_handlers_agree(
+    world: _World, path: str
+) -> None:
+    assert world.store.read_current("Session", "s-a") is not None
+    assert world.store.links_from("session_building", "s-a") == ["b-a"]
+    assert world.store.read_current("Room", "r-a") is not None
+    assert world.store.links_from("room_building", "r-a") == ["b-a"]
+    assert world.factory_calls == []
+    expected = {"session_id": "s-a", "room_id": "r-a", "request_id": "request-value"}
+
+    typed_result = _execute(world, "typed", {}, api_name="audit_defaults")
+    assert world.factory_calls == ["request-value"]
+    params: dict[str, Any] = {}
+    dict_result = _execute(world, path, params, api_name="audit_defaults")
+
+    assert params == {}
+    assert world.factory_calls == ["request-value", "request-value"]
+    assert world.received == ["r-a", "r-a"]
+    typed_entry, dict_entry = world.store.audit_entries()
+    assert typed_entry.outcome == dict_entry.outcome == "ok"
+    assert typed_entry.params == dict_entry.params == expected
+    assert typed_entry.target_id == dict_entry.target_id == "s-a"
+    assert typed_result == typed_entry.params
+    assert (dict_result["result"] if path == "mcp" else dict_result) == dict_entry.params
+
+
+@pytest.mark.parametrize("path", ["dynamic", "mcp"])
+def test_given_explicit_params_when_defaults_exist_then_the_caller_values_are_preserved(
+    world: _World, path: str
+) -> None:
+    params = {"session_id": "s-a", "room_id": "r-a", "request_id": "explicit"}
+    before = params.copy()
+
+    result = _execute(world, path, params, api_name="audit_defaults")
+
+    assert (result["result"] if path == "mcp" else result) == before
+    assert params == before
+    assert world.factory_calls == []
+    assert world.received == ["r-a"]
+    entry = world.store.audit_entries()[-1]
+    assert entry.params == before
+    assert entry.outcome == "ok"
+    assert entry.error_code is None

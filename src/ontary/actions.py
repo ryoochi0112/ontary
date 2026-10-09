@@ -818,6 +818,16 @@ class ActionExecutor:
 
         action_def, fn, params_cls = self._resolve_handler(action_name)
 
+        if isinstance(params, dict) and params_cls is not None:
+            # Match the declared field names used by validation and audit.
+            # Materialize factories once so the gate and handler see the same value.
+            # Required markers retain the engine's missing-parameter refusal.
+            required_params = {param.name for param in action_def.parameters if param.required}
+            params = params.copy()
+            for name, field in params_cls.model_fields.items():
+                if name not in params and name not in required_params and not field.is_required():
+                    params[name] = field.get_default(call_default_factory=True)
+
         params_dict = self._params_to_dict(action_def, params)
 
         if consumer.role not in action_def.executable_by_roles:

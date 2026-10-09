@@ -70,6 +70,14 @@ def _ontology() -> Ontology:
         ctx.save(team)
         return {"team_id": params.team_id}
 
+    class DefaultFocusParams(FocusParams):
+        team_id: str = target(Team, required=False, default="team-a")
+        focus: str = "refuse"
+
+    @ontology.action(DefaultFocusParams, target=Team, roles=["Operator"], api_name="DefaultFocus")
+    def _default_focus(ctx: ActionContext, params: DefaultFocusParams) -> dict[str, str]:
+        return _focus(ctx, params)
+
     class StampParams(ActionParams):
         team_id: str = target(Team)
 
@@ -241,6 +249,45 @@ def test_ok_entry_has_no_error_code(
     assert entry.outcome == "ok"
     assert entry.target_id == "team-a"
     assert entry.error_code is None
+
+
+@pytest.mark.parametrize(
+    ("role", "scope_id", "params", "exc_type", "code", "outcome"),
+    [
+        ("Viewer", "team-a", {}, PermissionDenied, "PERMISSION_DENIED", "denied"),
+        ("Operator", "team-a", {"focus": 42}, ActionError, "INVALID_PARAMS", "error"),
+        ("Operator", "team-z", {}, PermissionDenied, "SCOPE_DENIED", "denied"),
+        ("Operator", "team-a", {}, ActionError, "PRECONDITION_FAILED", "error"),
+    ],
+)
+def test_defaults_are_recorded_on_role_validation_scope_and_handler_refusals(
+    ontology: Ontology,
+    make_consumer: ConsumerFactory,
+    make_store: StoreFactory,
+    role: str,
+    scope_id: str,
+    params: dict[str, object],
+    exc_type: type[Exception],
+    code: str,
+    outcome: str,
+) -> None:
+    store = _store(ontology, make_store)
+    assert store.read_current("Team", "team-a") is not None
+    before = params.copy()
+
+    with pytest.raises(exc_type) as exc:
+        _client(ontology, store, make_consumer, role=role, scope_id=scope_id).execute(
+            "DefaultFocus", params
+        )
+
+    assert exc.value.code == code
+    assert params == before
+    entry = store.audit_entries()[-1]
+    assert entry.outcome == outcome
+    assert entry.params == {"team_id": "team-a", "focus": "refuse", **before}
+    assert entry.target_id == "team-a"
+    assert entry.error_code == code
+    assert entry.writes == []
 
 
 # -- function entries: error_code only (a function has no target) ------------
