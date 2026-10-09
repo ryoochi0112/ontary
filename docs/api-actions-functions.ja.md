@@ -35,6 +35,7 @@ Action は、型付きパラメータクラスと、
 | `.link(handle, from_, to)` | リンク作成。各端はオブジェクトかその id で、型は handle が決める。両端はリンク型が宣言する端点型の有効なオブジェクトである必要があり、そうでなければ `LINK_ENDPOINT_NOT_FOUND` で拒否。有効なリンクと同一なら no-op |
 | `.unlink(handle, from_, to)` | 1 本の live link を閉じる。端の渡し方は `link` と同じ |
 | `.traverse(handle, anchor) -> list[To]` | `anchor` からリンクされた `To` オブジェクト。`reverse=True` ならそこへリンクしている `From` オブジェクト |
+| `.traverse_many(handle, anchors) -> dict[str, list[To]]` | 多数のアンカーに対する `.traverse`。重複を除いたアンカー id をキーにする。`.traverse` と同じく trusted・unscoped。`reverse=True` なら `From` オブジェクトを返す。アンカーごとに別々のオブジェクトを渡し、どれも保存できる |
 | `.retire(obj)` / `.retire(cls, obj_id)` | オブジェクトをリタイアし、接続するすべての有効なリンクを閉じる |
 
 `create` に渡す値や `save` 前に代入する値が `date` / `datetime` の場合は
@@ -219,7 +220,7 @@ Function は、スカラー、リスト、`str` キーの `dict`、`None` など
 
 ### `BoundQuery`
 
-コンシューマーを固定した `GuardedQuery`: `.get`、`.list`、`.count`、`.exists`、`.traverse`、
+コンシューマーを固定した `GuardedQuery`: `.get`、`.list`、`.count`、`.exists`、`.traverse`、`.traverse_many`、
 `.aggregate`、`.aggregate_by`、`.count_contributors`、`.capability(handle)`、`.now()`。型付きオーバーロードは
 `OntologyClient` と同様に機能します（`query.get(Ticket, id) -> Ticket | None`）。
 

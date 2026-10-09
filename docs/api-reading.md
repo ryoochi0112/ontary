@@ -148,6 +148,29 @@ consumers still receive normal scope and sensitivity enforcement on the target
 rows. `reverse=True` traverses from the link's target side, and the
 identity-revealing denial is symmetric in both directions.
 
+### `traverse_many`
+
+`traverse_many` traverses one link from many anchors in a single call. It has the
+same two forms as `traverse`. The typed form is
+`client.traverse_many(LinkHandle, anchors, reverse=False)`, where each anchor is an
+object or its id. The string form is
+`client.traverse_many(obj_type, link, anchor_ids, reverse=False)`.
+
+```python
+by_comment = client.traverse_many("Comment", "commentOnTicket", [comment_a, comment_b])
+# {"comment-a": [<ticket row>], "comment-b": []}
+```
+
+The result is a `dict` of `{anchor_id: [rows]}`. The keys are the distinct anchor ids
+in first-seen order, so a duplicate anchor collapses into one key. An unknown anchor
+maps to `[]`. Each list has the same scope filtering, redaction, and row order as
+`traverse` for that anchor, and the same identity-revealing refusal applies.
+`reverse=True` traverses from the link's target side.
+
+The call makes a constant number of reads, whatever the anchor count: one link read
+and one object read. It has no paging, so it does not accept `limit` or `after`.
+`traverse_many` is not available on MCP yet.
+
 ### Visible-row counting
 
 `count(obj_type, where=None)` returns the number of matching rows after the

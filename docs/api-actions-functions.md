@@ -35,6 +35,7 @@ runtime only.
 | `.link(handle, from_, to)` | Link. Each end is an object or its id, typed by the handle. Both ends must be live objects of the link's declared endpoint types, or the call is refused with `LINK_ENDPOINT_NOT_FOUND`. A link identical to a live one is a no-op |
 | `.unlink(handle, from_, to)` | Close one live link, ends as for `link` |
 | `.traverse(handle, anchor) -> list[To]` | The `To` objects linked from `anchor`; `reverse=True` returns the `From` objects linked to it |
+| `.traverse_many(handle, anchors) -> dict[str, list[To]]` | `.traverse` for many anchors, keyed by distinct anchor id. Trusted and unscoped, like `.traverse`; `reverse=True` returns the `From` objects. Each anchor gets its own objects, and any of them can be saved |
 | `.retire(obj)` / `.retire(cls, obj_id)` | Retire the object and close every live link that touches it |
 
 A `date` or `datetime` value passed to `create` or assigned before `save` follows
@@ -224,7 +225,7 @@ JSON boundary as an Action result, with the same encoding and the same `RESULT_N
 
 ### `BoundQuery`
 
-A `GuardedQuery` with the consumer fixed: `.get`, `.list`, `.count`, `.exists`, `.traverse`,
+A `GuardedQuery` with the consumer fixed: `.get`, `.list`, `.count`, `.exists`, `.traverse`, `.traverse_many`,
 `.aggregate`, `.aggregate_by`, `.count_contributors`,
 `.capability(handle)`, `.now()`. Typed overloads
 work the same as on `OntologyClient` (`query.get(Ticket, id) -> Ticket | None`).
