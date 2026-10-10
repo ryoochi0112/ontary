@@ -11,6 +11,20 @@ you**.
 
 ## [Unreleased]
 
+## [0.28.0] — 2026-10-10
+
+```bash
+uv add "ontary @ git+https://github.com/ryoochi0112/ontary@v0.28.0"
+```
+
+A minor release that closes the M5 engine-hardening milestone. Typed-handle
+`client.traverse` now pages with `limit` and `after` (#203). Typed `BoundQuery.traverse`
+accepts a model-instance anchor (#237). An ingest batch with no valid record no longer
+opens a transaction or takes the write lock (#238). `dir(ontary)` lists the lazy
+`MCPServer` export (#140). One change can break you: typed `client.traverse` called with
+`limit` now returns a `TypedPage` instead of the full list. The store schema stays at v14,
+so a 0.27.0 store needs no re-ingest.
+
 ### Fixed
 
 - **`dir(ontary)` now lists the lazy `MCPServer` export (#140).** The module now
