@@ -11,6 +11,24 @@ you**.
 
 ## [Unreleased]
 
+## [0.27.0] — 2026-10-10
+
+```bash
+uv add "ontary @ git+https://github.com/ryoochi0112/ontary@v0.27.0"
+```
+
+A minor release that hardens the engine (M5), with breaking changes for some callers.
+`ref()` action parameters are now scope-checked like `target()` (#179). Dynamic and MCP
+calls apply Python defaults before the scope gate, and the gate checks the id the handler
+receives (#181, #250). A primary key can no longer have a restricted `sensitivity` (#200).
+`ActionContext` keys objects by their canonical id (#242). Event payloads refuse naive
+datetimes, and a drifted typed read raises `INVALID_RECORD` (#111, #113). `list_events`
+refuses out-of-range windows and over-long cursors with the right codes (#217, #218). The
+MCP builders accept any `SupportsDefinition` (#222). Three changes can break you: the
+`ref()` scope gate, defaults applied before the gate (audit `params` now include omitted
+optional params), and the primary-key `sensitivity` refusal. The store schema stays at
+v14, so a 0.26.0 store needs no re-ingest.
+
 ### Changed
 
 - **`ref()` action parameters are now scope-checked (breaking, #179).**
