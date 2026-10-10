@@ -66,7 +66,8 @@ class Store(Protocol):
 
         Outcomes follow input order. Listed refusals leave their row unwritten;
         other errors roll back the whole call. Identical merged payloads write
-        nothing and preserve lineage. See the protocol's layering rule.
+        nothing and preserve lineage. An empty batch opens no transaction.
+        See the protocol's layering rule.
         """
         ...
 
@@ -90,7 +91,8 @@ class Store(Protocol):
 
         Outcomes follow input order with canonical ``from->to`` ids. Listed
         refusals leave their pair unwritten; other errors roll back the call.
-        Identical live pairs write nothing. See the protocol's layering rule.
+        Identical live pairs write nothing. An empty batch opens no
+        transaction. See the protocol's layering rule.
         """
         ...
 

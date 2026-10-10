@@ -220,7 +220,8 @@ def bulk_upsert(
     (record index + reason) in the returned report; valid records are
     written with the given lineage `Source`. Expected per-record refusals
     leave valid records committed. Unexpected errors propagate and roll back
-    the whole call, making those failures all-or-nothing.
+    the whole call, making those failures all-or-nothing. A call with no
+    valid record opens no transaction and takes no backend lock.
 
     A record whose primary key already has a current row is merged over that
     row. An identical merged payload writes nothing and keeps the existing

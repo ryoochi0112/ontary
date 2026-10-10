@@ -13,7 +13,13 @@ import pytest
 from _history import history_rows
 from conftest import raises_code
 from test_ingest import build_registry
-from test_store_conformance import STORE_FACTORIES, StoreFactory, _link_history_rows
+from test_store_conformance import (
+    POSTGRES_DSN,
+    STORE_FACTORIES,
+    StoreFactory,
+    _link_history_rows,
+    _make_postgres_store,
+)
 
 from ontary.client import OntologyClient
 from ontary.errors import ConflictError
@@ -525,3 +531,50 @@ def test_unchanged_ids_default_is_independent_and_report_serializes_it() -> None
     first.unchanged_ids.append("a")
     assert second.unchanged_ids == []
     assert IngestReport.model_validate(first.model_dump()).unchanged_ids == ["a"]
+
+
+_ALL_INVALID_TEAMS = [{"id": "a"}, {"id": "b", "name": "b", "size": "big"}]
+
+
+def test_batch_with_no_valid_row_opens_no_transaction(store, ingester, monkeypatch) -> None:
+    """#238: an all-invalid or empty batch returns before any transaction."""
+    upsert, link = ingester
+
+    def fail():
+        pytest.fail("a batch with no valid row opened a transaction")
+
+    monkeypatch.setattr(store, "transaction", fail)
+    report = upsert("Team", _ALL_INVALID_TEAMS, _SOURCE)
+    assert report.inserted_ids == report.unchanged_ids == []
+    assert [error.index for error in report.errors] == [0, 1]
+    assert upsert("Team", [], _SOURCE) == IngestReport()
+    assert link("belongsToDepartment", [], _SOURCE) == IngestReport()
+    assert not store.in_transaction
+
+
+@pytest.mark.skipif(POSTGRES_DSN is None, reason="needs ONTARY_TEST_POSTGRES_DSN")
+def test_batch_with_no_valid_row_takes_no_postgres_advisory_lock(registry) -> None:
+    """#238: another session holding the store lock cannot block an all-invalid batch."""
+    import psycopg
+
+    store = _make_postgres_store(registry)
+    client = _client(store, registry)
+    database, schema = store._conn.execute(
+        "SELECT current_database(), current_schema()"
+    ).fetchone()
+    store._conn.execute("SET lock_timeout = '200ms'")
+    store._conn.commit()
+    assert POSTGRES_DSN is not None
+    with psycopg.connect(POSTGRES_DSN, autocommit=True) as holder:
+        holder.execute(
+            "SELECT pg_advisory_lock(hashtext(%s), hashtext(%s))",
+            (f"{database}:{schema}", store._tenant),
+        )
+        report = client.ingest("Team", _ALL_INVALID_TEAMS, _SOURCE, on_error="report")
+        assert [error.index for error in report.errors] == [0, 1]
+        assert client.ingest_links("belongsToDepartment", [], _SOURCE).ok
+        # The held lock is the store's: a batch with a valid row waits on it.
+        with pytest.raises(psycopg.errors.LockNotAvailable):
+            client.ingest("Team", [{"id": "c", "name": "c"}], _SOURCE)
+    assert not store.in_transaction
+    assert store.read_current("Team", "c") is None

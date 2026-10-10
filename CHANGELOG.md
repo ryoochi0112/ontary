@@ -24,6 +24,11 @@ you**.
   `query.traverse(link_cls, ticket)` now resolves the anchor's primary key, and
   `reverse=True` takes a target-side instance. The overloads type-check under
   `mypy --strict`. An instance of the wrong side raises `INVALID_PARAMS`.
+- **An ingest batch with no valid record no longer opens a transaction (#238).**
+  When every record failed validation, `client.ingest` and `bulk_upsert` still opened
+  a transaction and took the store's write lock (the Postgres advisory lock, or
+  `BEGIN IMMEDIATE` on SQLite). They now return the error report without either. An empty `ingest` or `ingest_links` call
+  also returns before any transaction.
 
 ## [0.27.0] — 2026-10-10
 

@@ -522,9 +522,12 @@ class StoreCore(abc.ABC):
 
         Listed validation refusals leave their record unwritten. Other errors
         propagate and roll back the batch. Identical merged payloads keep their
-        existing version and lineage without reading the clock.
+        existing version and lineage without reading the clock. An empty batch
+        returns before opening a transaction, so it takes no backend lock.
         """
         obj_def = resolve_object_type(self._registry, obj_type)
+        if not records:
+            return []
         capturing = self._write_capture.active
         outcomes: list[RowOutcome] = []
         known: dict[str, StoredObject | None] = {}
@@ -698,10 +701,14 @@ class StoreCore(abc.ABC):
 
         Listed refusals leave their pair unwritten; other errors propagate and
         roll back the batch. Identical live links spend no clock tick or write.
+        An empty batch returns before opening a transaction, so it takes no
+        backend lock.
         """
         link_def = check_link_write_authority(
             self._registry, link_type, capturing=self._write_capture.active
         )
+        if not pairs:
+            return []
         known: dict[str, dict[str, StoredObject | None]] = {}
         known_from: dict[str, list[str]] = {}
         known_to: dict[str, list[str]] = {}
