@@ -131,7 +131,8 @@ walk.
 `client.traverse(link_cls, from_obj_or_id)` is the typed form;
 `client.traverse("Comment", "commentOnTicket", comment_id)` names the source type,
 link API name, and source id in that order. `BoundQuery` accepts the same
-handle-first typed form inside Functions.
+handle-first typed form inside Functions, with a model instance or a string id as the
+anchor.
 
 Both client forms can page.
 `client.traverse("Team", "inTeam", "a", reverse=True, limit=100, after=cursor)`

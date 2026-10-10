@@ -129,7 +129,8 @@ list を返し、正の `limit` を渡すとページを返します。
 型付き形式は `client.traverse(link_cls, from_obj_or_id)` です。文字列形式は
 `client.traverse("Comment", "commentOnTicket", comment_id)` のように、ソース型・
 リンク API 名・ソース id をこの順で渡します。Function 内の `BoundQuery` も同じ
-ハンドル先頭の型付き形式を受け付けます。
+ハンドル先頭の型付き形式を受け付けます。アンカーにはモデルのインスタンスと文字列 id の
+どちらも渡せます。
 
 クライアントの両形式はページングできます。
 `client.traverse("Team", "inTeam", "a", reverse=True, limit=100, after=cursor)` は

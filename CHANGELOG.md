@@ -19,6 +19,11 @@ you**.
   `TypedPage` of the linked class (the source class with `reverse=True`), using the
   same guarded paging as the string form. `after` without `limit` raises
   `AFTER_WITHOUT_LIMIT`. Without `limit` the typed form still returns the full list.
+- **Typed `BoundQuery.traverse` now accepts a model-instance anchor (#237).** It used
+  to accept only a string id, unlike `traverse_many` and `client.traverse`.
+  `query.traverse(link_cls, ticket)` now resolves the anchor's primary key, and
+  `reverse=True` takes a target-side instance. The overloads type-check under
+  `mypy --strict`. An instance of the wrong side raises `INVALID_PARAMS`.
 
 ## [0.27.0] — 2026-10-10
 

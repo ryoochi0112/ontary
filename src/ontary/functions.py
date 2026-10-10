@@ -330,7 +330,7 @@ class BoundQuery(_TypedReadMixin):
     def traverse(
         self,
         link_cls: LinkHandle[F, T],
-        from_obj_or_id: str,
+        from_obj_or_id: F | str,
         /,
         *,
         reverse: Literal[False] = False,
@@ -339,7 +339,7 @@ class BoundQuery(_TypedReadMixin):
     def traverse(
         self,
         link_cls: LinkHandle[F, T],
-        to_obj_or_id: str,
+        to_obj_or_id: T | str,
         /,
         *,
         reverse: Literal[True],
@@ -348,7 +348,7 @@ class BoundQuery(_TypedReadMixin):
     def traverse(
         self,
         link_cls: LinkHandle[F, T],
-        anchor_id: str,
+        anchor_obj_or_id: F | T | str,
         /,
         *,
         reverse: bool,
@@ -356,22 +356,25 @@ class BoundQuery(_TypedReadMixin):
     def traverse(
         self,
         link_type: str | LinkHandle[F, T],
-        from_id: str | None = None,
+        from_id: F | T | str | None = None,
         *,
         reverse: bool = False,
     ) -> "builtins.list[StoredObject] | builtins.list[T] | builtins.list[F]":
         """String form: `traverse(link_type, from_id)`. Typed form accepts
         the handle-first `traverse(link_cls, from_obj_or_id)` shape used by
-        `OntologyClient`. Pass `reverse=True` to traverse from the handle's
-        target side and hydrate the linked source-side objects."""
+        `OntologyClient`; a typed anchor may be the source object's model
+        instance or its string id. Pass `reverse=True` to traverse from the
+        handle's target side (a target instance or id) and hydrate the linked
+        source-side objects."""
         if isinstance(link_type, LinkHandle):
             if from_id is None:
                 raise ValidationFailed(
                     "typed traversal requires a source object or id",
                     code="INVALID_PARAMS",
                 )
+            anchor_id = self._traverse_anchor_id(link_type, from_id, reverse=reverse)
             return self._traverse_via(
-                from_id, link_type, reverse=reverse
+                anchor_id, link_type, reverse=reverse
             )
 
         if from_id is None:
@@ -380,7 +383,7 @@ class BoundQuery(_TypedReadMixin):
                 code="INVALID_PARAMS",
             )
         return self._query.traverse(
-            self._consumer, link_type, from_id, reverse=reverse
+            self._consumer, link_type, cast(str, from_id), reverse=reverse
         )
 
     @overload
