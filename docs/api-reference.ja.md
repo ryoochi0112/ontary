@@ -61,6 +61,9 @@
 extra がなくても `import ontary` は動きます。`MCPServer` に触れたときだけ、
 インストールコマンドを示す `ImportError` になります。core のみの環境では
 `from ontary import *` も同じ `ImportError` になります。`__all__` の全名前を取得するためです。
+`hasattr(ontary, "MCPServer")` も `False` を返さず、同じ `ImportError` になります。
+`hasattr` が捕捉するのは `AttributeError` だけだからです。
+`dir(ontary)` は extra を読み込まずに `MCPServer` を一覧に含めます。
 
 ### Error classes / 例外クラス
 

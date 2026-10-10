@@ -172,3 +172,10 @@ def __getattr__(name: str) -> object:
 
         return _load_mcp_server()
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__() -> list[str]:
+    """List the lazy `MCPServer` beside the module's real names, without
+    importing the `mcp` extra (pinned by
+    tests/test_mcp.py::test_root_dir_lists_every_all_name_including_the_lazy_mcp_server)."""
+    return sorted({*globals(), "MCPServer"})
