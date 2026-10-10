@@ -614,6 +614,56 @@ def test_bound_query_typed_reverse_dynamic_flag_returns_union() -> None:
     assert len(rows) == 9
 
 
+def _bound_query_for_queue_a() -> tuple[BoundQuery, dict[str, str]]:
+    ontology, store = build_ontology()
+    ids = load_fixtures(store)
+    consumer = Consumer(
+        actor_id="agent-1",
+        role="Agent",
+        scope_level="queue",
+        scope_id=ids["queue_a_id"],
+        kind="human",
+    )
+    runtime = ontology.bind(store)
+    return BoundQuery(runtime.query, consumer, ontology.registry), ids
+
+
+def test_bound_query_typed_traverse_accepts_model_anchor() -> None:
+    # #237: `BoundQuery.traverse` takes a model anchor, like `traverse_many`
+    # and `OntologyClient.traverse`.
+    bound, ids = _bound_query_for_queue_a()
+    ticket = bound.get(Ticket, ids["ticket_1_id"])
+    assert ticket is not None
+
+    queues = bound.traverse(ticketInQueue, ticket)
+    assert_type(queues, list[Queue])
+    assert [q.id for q in queues] == [ids["queue_a_id"]]
+
+
+def test_bound_query_typed_reverse_traverse_accepts_target_model_anchor() -> None:
+    bound, ids = _bound_query_for_queue_a()
+    queue = bound.get(Queue, ids["queue_a_id"])
+    assert queue is not None
+
+    tickets = bound.traverse(ticketInQueue, queue, reverse=True)
+    assert_type(tickets, list[Ticket])
+    assert len(tickets) == 9
+
+    reverse: bool = True
+    rows = bound.traverse(ticketInQueue, queue, reverse=reverse)
+    assert_type(rows, list[Ticket] | list[Queue])
+    assert len(rows) == 9
+
+
+def test_bound_query_typed_traverse_refuses_wrong_side_model_anchor() -> None:
+    bound, ids = _bound_query_for_queue_a()
+    queue = bound.get(Queue, ids["queue_a_id"])
+    assert queue is not None
+
+    with raises_code(ValidationFailed, "INVALID_PARAMS"):
+        bound.traverse(ticketInQueue, queue)  # type: ignore[misc]
+
+
 def test_capability_access_narrows_provider_protocol() -> None:
     class LLMClient:
         def complete(self, prompt: str) -> str:
