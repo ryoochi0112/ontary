@@ -603,6 +603,8 @@ def test_empty_bulk_input_returns_no_outcomes_without_storage_or_clock_calls(
     for name in (*_READ_STEPS, *_WRITE_STEPS, "_now"):
         monkeypatch.setattr(store, name, fail)
     assert store.upsert_objects("Team", [], _SOURCE) == []
+    with raises_code(ValidationFailed, "UNKNOWN_OBJECT_TYPE"):
+        store.upsert_objects("unknown", [], _SOURCE)
 
 
 def test_bulk_capture_records_only_writes_after_outer_transaction_exits(

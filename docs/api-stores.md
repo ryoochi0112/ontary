@@ -315,7 +315,8 @@ counts as a change, even when it names the same instant.
 
 One call holds the tenant's write lock for its whole duration: a Postgres
 advisory lock, or `BEGIN IMMEDIATE` on SQLite. Split very large loads into
-several calls.
+several calls. A call with no valid record or pair returns its report without
+taking the lock.
 
 A `date` or `datetime` value is written as an ISO-8601 string or a `date` /
 offset-aware `datetime` object; a naive `datetime` object is refused with
