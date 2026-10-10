@@ -177,7 +177,7 @@ lineage フィールドは対象外で、未知のキーは `UNKNOWN_FIELD` に�
 | --- | --- |
 | `UNKNOWN_EVENT_TYPE` | `event_type` が宣言済みのイベント型ではない。 |
 | `UNKNOWN_OBJECT_TYPE` | `about_type` が宣言済みのオブジェクト型ではない。 |
-| `INVALID_PARAMS` | `about_type` なしで `about_id` を渡した、または `since` / `until` が UTC オフセットなし、もしくは解析できない。 |
+| `INVALID_PARAMS` | `about_type` なしで `about_id` を渡した、または `since` / `until` が UTC オフセットなし、解析できない、もしくは UTC に変換すると 0001〜9999 年の範囲を外れる。 |
 | `AFTER_WITHOUT_LIMIT` | `limit` なしで `after` を渡した。 |
 | `INVALID_LIMIT` | `limit` が 1000 超または 1 未満、もしくは件数のみのモードで `after` を渡した。 |
 | `INVALID_CURSOR` | `after` が `list_events` の返した `next_cursor` ではない。 |

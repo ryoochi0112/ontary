@@ -456,6 +456,35 @@ def test_naive_or_unparseable_window_refuses_invalid_params(window: dict[str, An
     assert _error_code(_list(fixture, **window)) == "INVALID_PARAMS"
 
 
+@pytest.mark.parametrize(
+    "window",
+    [
+        {"since": "0001-01-01T00:00:00+01:00"},
+        {"until": "9999-12-31T23:59:59-01:00"},
+        {"since": "0001-01-01T00:00:00+01:00", "until": "9999-12-31T23:59:59-01:00"},
+    ],
+)
+def test_out_of_range_window_refuses_invalid_params_not_internal_error(
+    window: dict[str, Any],
+) -> None:
+    """#217: the value parses and has an offset, but converting it to UTC
+    leaves the datetime range. That is the caller's mistake, not ours."""
+    fixture = build_fixture()
+    error = _list(fixture, **window)["error"]
+    assert error["code"] == "INVALID_PARAMS"
+    name = next(iter(window))
+    assert f"list_events {name}" in error["message"]
+    assert "UTC" in error["message"]
+    assert repr(window[name]) in error["message"]
+
+
+def test_window_at_the_edge_of_the_range_is_accepted() -> None:
+    fixture = build_fixture()
+    _escalate(fixture, "T-1", team="a")
+    window = {"since": "0001-01-01T00:00:00+00:00", "until": "9999-12-31T23:59:59+00:00"}
+    assert _ids(_list(fixture, **window)) == ["T-1"]
+
+
 def test_unknown_names_refuse_with_exact_codes() -> None:
     fixture = build_fixture()
     assert _error_code(_list(fixture, event_type="Nope")) == "UNKNOWN_EVENT_TYPE"
@@ -581,6 +610,30 @@ def test_malformed_cursor_refuses_invalid_cursor(after: str) -> None:
     fixture = build_fixture()
     _escalate(fixture, "T-1", team="a")
     assert _error_code(_list(fixture, limit=2, after=after)) == "INVALID_CURSOR"
+
+
+@pytest.mark.parametrize(
+    "after",
+    ["ev1." + "9" * 5000 + ".0", "ev1.0." + "9" * 5000, "ev1." + "1" * 5000 + "." + "1" * 5000],
+    ids=["first-group", "second-group", "both-groups"],
+)
+def test_over_long_cursor_digits_refuse_invalid_cursor_not_invalid_params(after: str) -> None:
+    """#218: the shape matches, but the digit groups exceed Python's int
+    conversion limit. A malformed cursor is INVALID_CURSOR, whatever the
+    cause, and the interpreter's message must not reach the consumer."""
+    fixture = build_fixture()
+    _escalate(fixture, "T-1", team="a")
+    error = _list(fixture, limit=2, after=after)["error"]
+    assert error["code"] == "INVALID_CURSOR"
+    assert error["message"] == "list_events after must be a next_cursor returned by list_events"
+
+
+def test_long_but_convertible_cursor_is_past_the_log_end() -> None:
+    fixture = build_fixture()
+    _escalate(fixture, "T-1", team="a")
+    assert _list(fixture, limit=2, after="ev1." + "9" * 100 + ".0") == {
+        "result": [], "next_cursor": None, "has_more": False, "scope_limited": True,
+    }
 
 
 def test_list_events_is_read_only_annotated() -> None:
