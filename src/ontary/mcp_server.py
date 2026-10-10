@@ -64,7 +64,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Callable, Mapping
-from datetime import datetime
+from datetime import datetime, timezone
 from functools import partial
 from typing import TYPE_CHECKING, Annotated, Any, NamedTuple, cast
 
@@ -553,7 +553,8 @@ the last row on the previous page. Resuming keeps rows strictly after it."""
 
 
 def _event_instant(name: str, value: str | None) -> datetime | None:
-    """Parse a `since`/`until` boundary; refuse a naive or unparseable one."""
+    """Parse a `since`/`until` boundary as a UTC instant; refuse a naive,
+    unparseable, or out-of-range one (#217)."""
     if value is None:
         return None
     try:
@@ -566,7 +567,17 @@ def _event_instant(name: str, value: str | None) -> datetime | None:
             f"offset, such as 2026-10-07T09:00:00+00:00; got {value!r}",
             code="INVALID_PARAMS",
         )
-    return instant
+    try:
+        return instant.astimezone(timezone.utc)
+    except OverflowError:
+        # The value parses, but shifting it to UTC leaves years 0001-9999
+        # (for example 0001-01-01T00:00:00+01:00). Refuse it here, before
+        # the store's conversion turns it into a generic INTERNAL_ERROR.
+        raise ValidationFailed(
+            f"list_events {name} must stay within years 0001-9999 once "
+            f"converted to UTC; got {value!r}",
+            code="INVALID_PARAMS",
+        ) from None
 
 
 def _event_paging(
@@ -598,11 +609,21 @@ def _event_paging(
         return page_limit, None
     match = _EVENT_CURSOR.fullmatch(after)
     if match is None:
-        raise ValidationFailed(
-            "list_events after must be a next_cursor returned by list_events",
-            code="INVALID_CURSOR",
-        )
-    return page_limit, (int(match[1]), int(match[2]))
+        raise _invalid_event_cursor()
+    try:
+        return page_limit, (int(match[1]), int(match[2]))
+    except ValueError:
+        # The shape matches but a digit group exceeds the interpreter's
+        # int-conversion limit (#218). Still a malformed cursor, and the
+        # interpreter's message is not for the consumer.
+        raise _invalid_event_cursor() from None
+
+
+def _invalid_event_cursor() -> ValidationFailed:
+    return ValidationFailed(
+        "list_events after must be a next_cursor returned by list_events",
+        code="INVALID_CURSOR",
+    )
 
 
 def _event_row(

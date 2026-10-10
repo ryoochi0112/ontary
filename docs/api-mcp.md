@@ -186,7 +186,7 @@ where `customer_email` is declared `ai_usable=False`:
 | --- | --- |
 | `UNKNOWN_EVENT_TYPE` | `event_type` is not a declared event type. |
 | `UNKNOWN_OBJECT_TYPE` | `about_type` is not a declared object type. |
-| `INVALID_PARAMS` | `about_id` is given without `about_type`, or `since` or `until` is naive (no UTC offset) or not parseable. |
+| `INVALID_PARAMS` | `about_id` is given without `about_type`, or `since` or `until` is naive (no UTC offset), not parseable, or outside years 0001–9999 once converted to UTC. |
 | `AFTER_WITHOUT_LIMIT` | `after` is given without `limit`. |
 | `INVALID_LIMIT` | `limit` is above 1000 or below 1, or `after` is combined with count-only mode. |
 | `INVALID_CURSOR` | `after` is not a `next_cursor` returned by `list_events`. |

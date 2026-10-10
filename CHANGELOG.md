@@ -68,6 +68,14 @@ you**.
   mismatched field. It also says to make the field optional or to read without an
   event class. A removed field can only be read without an event class, because
   `Event` forbids extra fields.
+- **`list_events` now refuses an out-of-range `since` or `until` as `INVALID_PARAMS` (#217).**
+  A value that parses and has a UTC offset, but leaves years 0001–9999 once converted
+  to UTC (for example `0001-01-01T00:00:00+01:00`), returned the generic
+  `INTERNAL_ERROR` envelope. The refusal now names the parameter and the range.
+- **`list_events` now refuses an over-long cursor as `INVALID_CURSOR` (#218).** An
+  `after` value of the right shape whose digit groups exceed Python's int-conversion
+  limit was refused as `INVALID_PARAMS`, with the interpreter's message. It is now the
+  same `INVALID_CURSOR` refusal as any other malformed cursor.
 
 ## [0.26.0] — 2026-10-09
 
