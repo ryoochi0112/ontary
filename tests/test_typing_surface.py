@@ -265,6 +265,37 @@ def test_typed_traverse_comment_on_ticket_returns_list_of_ticket() -> None:
     assert [t.id for t in tickets] == [ids["ticket_1_id"]]
 
 
+def test_typed_traverse_with_limit_returns_typed_page() -> None:
+    client, ids = _client()
+    page = client.traverse(commentOnTicket, ids["comment_id"], limit=100)
+    assert_type(page, TypedPage[Ticket])
+    assert [t.id for t in page.items] == [ids["ticket_1_id"]]
+    assert page.has_more is False
+
+
+def test_typed_reverse_traverse_with_limit_returns_typed_page_of_source() -> None:
+    client, ids = _client()
+    first = client.traverse(ticketInQueue, ids["queue_a_id"], reverse=True, limit=5)
+    assert_type(first, TypedPage[Ticket])
+    assert len(first.items) == 5
+    assert first.has_more is True
+    assert first.next_cursor is not None
+    rest = client.traverse(
+        ticketInQueue, ids["queue_a_id"], reverse=True, limit=5, after=first.next_cursor
+    )
+    assert_type(rest, TypedPage[Ticket])
+    assert len(rest.items) == 4
+    assert rest.has_more is False
+
+
+def test_typed_traverse_dynamic_flag_with_limit_returns_page_union() -> None:
+    client, ids = _client()
+    reverse: bool = True
+    page = client.traverse(ticketInQueue, ids["queue_a_id"], reverse=reverse, limit=100)
+    assert_type(page, TypedPage[Ticket] | TypedPage[Queue])
+    assert len(page.items) == 9
+
+
 def test_string_traverse_pins_page_with_limit_and_list_without() -> None:
     client, ids = _client()
     page = client.traverse("Comment", "commentOnTicket", ids["comment_id"], limit=100)

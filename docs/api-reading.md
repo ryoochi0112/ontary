@@ -131,11 +131,14 @@ walk.
 `client.traverse(link_cls, from_obj_or_id)` is the typed form;
 `client.traverse("Comment", "commentOnTicket", comment_id)` names the source type,
 link API name, and source id in that order. `BoundQuery` accepts the same
-handle-first typed form inside Functions. The typed-handle form has no paging.
+handle-first typed form inside Functions.
 
-The string form can page.
+Both client forms can page.
 `client.traverse("Team", "inTeam", "a", reverse=True, limit=100, after=cursor)`
-returns a `Page`. Without `limit` it returns the full list as before. `after`
+returns a `Page`. The typed form `client.traverse(link_cls, anchor, limit=100, after=cursor)`
+returns a `TypedPage` of the linked class (the source class with `reverse=True`).
+Without `limit` both return the full list as before. `BoundQuery.traverse` has no
+paging. `after`
 without `limit` raises `AFTER_WITHOUT_LIMIT`, and `limit < 1` raises
 `INVALID_LIMIT`. A traversal cursor that no longer names a current, visible linked
 row (the link was closed, or the row was retired or hidden) raises `STALE_CURSOR`;

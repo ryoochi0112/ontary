@@ -129,11 +129,14 @@ list を返し、正の `limit` を渡すとページを返します。
 型付き形式は `client.traverse(link_cls, from_obj_or_id)` です。文字列形式は
 `client.traverse("Comment", "commentOnTicket", comment_id)` のように、ソース型・
 リンク API 名・ソース id をこの順で渡します。Function 内の `BoundQuery` も同じ
-ハンドル先頭の型付き形式を受け付けます。型付きハンドル形式にページネーションはありません。
+ハンドル先頭の型付き形式を受け付けます。
 
-文字列形式はページングできます。
+クライアントの両形式はページングできます。
 `client.traverse("Team", "inTeam", "a", reverse=True, limit=100, after=cursor)` は
-`Page` を返します。`limit` を省略すると、従来どおり全件のリストを返します。
+`Page` を返します。型付き形式 `client.traverse(link_cls, anchor, limit=100, after=cursor)`
+は、リンク先クラスの `TypedPage` を返します（`reverse=True` ではソース側のクラス）。
+`limit` を省略すると、両形式とも従来どおり全件のリストを返します。
+`BoundQuery.traverse` にページネーションはありません。
 `limit` なしの `after` は `AFTER_WITHOUT_LIMIT`、`limit < 1` は `INVALID_LIMIT` に
 なります。現在の可視なリンク先の行を指さなくなった traverse カーソル（リンクが
 閉じられた、または行が retire された、もしくは見えなくなった場合）は

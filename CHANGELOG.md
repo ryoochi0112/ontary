@@ -11,6 +11,15 @@ you**.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Typed-handle `client.traverse` now pages with `limit` and `after` (#203).**
+  It used to accept both and ignore them, returning every linked row.
+  `client.traverse(link_cls, anchor, limit=n, after=cursor)` now returns a
+  `TypedPage` of the linked class (the source class with `reverse=True`), using the
+  same guarded paging as the string form. `after` without `limit` raises
+  `AFTER_WITHOUT_LIMIT`. Without `limit` the typed form still returns the full list.
+
 ## [0.27.0] — 2026-10-10
 
 ```bash

@@ -102,6 +102,16 @@ F = TypeVar("F", bound=OntologyObject)
 E = TypeVar("E", bound=Event)
 
 
+def _refuse_after_without_limit(after: str | None) -> None:
+    """Both `traverse` forms: an unpaginated traversal has no page to resume."""
+    if after is not None:
+        raise ValidationFailed(
+            "traverse: after= was given without limit= -- the "
+            "unpaginated path has no page to resume",
+            code="AFTER_WITHOUT_LIMIT",
+        )
+
+
 def _checked_provider_map(
     provided: Mapping[Any, Any] | None,
     registry: OntologyRegistry,
@@ -554,14 +564,70 @@ class OntologyClient(_TypedReadMixin):
     ) -> Page: ...
     @overload
     def traverse(
-        self, link_cls: LinkHandle[F, T], from_obj_or_id: F | str, /, *, reverse: Literal[False] = False
+        self,
+        link_cls: LinkHandle[F, T],
+        from_obj_or_id: F | str,
+        /,
+        *,
+        reverse: Literal[False] = False,
+        limit: None = None,
+        after: str | None = None,
     ) -> builtins.list[T]: ...
     @overload
     def traverse(
-        self, link_cls: LinkHandle[F, T], to_obj_or_id: T | str, /, *, reverse: Literal[True]
+        self,
+        link_cls: LinkHandle[F, T],
+        to_obj_or_id: T | str,
+        /,
+        *,
+        reverse: Literal[True],
+        limit: None = None,
+        after: str | None = None,
     ) -> builtins.list[F]: ...
     @overload
-    def traverse(self, link_cls: LinkHandle[F, T], anchor_obj_or_id: F | T | str, /, *, reverse: bool) -> builtins.list[T] | builtins.list[F]: ...
+    def traverse(
+        self,
+        link_cls: LinkHandle[F, T],
+        anchor_obj_or_id: F | T | str,
+        /,
+        *,
+        reverse: bool,
+        limit: None = None,
+        after: str | None = None,
+    ) -> builtins.list[T] | builtins.list[F]: ...
+    @overload
+    def traverse(
+        self,
+        link_cls: LinkHandle[F, T],
+        from_obj_or_id: F | str,
+        /,
+        *,
+        reverse: Literal[False] = False,
+        limit: int,
+        after: str | None = None,
+    ) -> TypedPage[T]: ...
+    @overload
+    def traverse(
+        self,
+        link_cls: LinkHandle[F, T],
+        to_obj_or_id: T | str,
+        /,
+        *,
+        reverse: Literal[True],
+        limit: int,
+        after: str | None = None,
+    ) -> TypedPage[F]: ...
+    @overload
+    def traverse(
+        self,
+        link_cls: LinkHandle[F, T],
+        anchor_obj_or_id: F | T | str,
+        /,
+        *,
+        reverse: bool,
+        limit: int,
+        after: str | None = None,
+    ) -> TypedPage[T] | TypedPage[F]: ...
     def traverse(
         self,
         obj_type: str | LinkHandle[F, T],
@@ -571,7 +637,14 @@ class OntologyClient(_TypedReadMixin):
         reverse: bool = False,
         limit: int | None = None,
         after: str | None = None,
-    ) -> builtins.list[StoredObject] | builtins.list[T] | builtins.list[F] | Page:
+    ) -> (
+        builtins.list[StoredObject]
+        | builtins.list[T]
+        | builtins.list[F]
+        | Page
+        | TypedPage[T]
+        | TypedPage[F]
+    ):
         """Traverse a declared link.
 
         The string form is ``traverse(obj_type, link, from_id)``. The typed
@@ -583,14 +656,19 @@ class OntologyClient(_TypedReadMixin):
         validates the handle's ontology and hydrates the linked class;
         `reverse=True` uses the target as anchor and the source as result.
 
-        The string form also takes keyword-only `limit` and `after`: with
-        `limit` it returns a `Page` (`items`, `has_more`, `next_cursor`);
-        without it, the full list. `after` without `limit` is
-        `AFTER_WITHOUT_LIMIT`. The typed form takes neither.
+        Both forms take keyword-only `limit` and `after`: with `limit` the
+        string form returns a `Page` and the typed form a `TypedPage` of the
+        linked class (`items`, `has_more`, `next_cursor`); without it, the
+        full list. `after` without `limit` is `AFTER_WITHOUT_LIMIT`.
         """
         if isinstance(obj_type, LinkHandle):
             anchor_id = self._traverse_anchor_id(obj_type, link, reverse=reverse)
-            return self._traverse_via(anchor_id, obj_type, reverse=reverse)
+            if limit is None:
+                _refuse_after_without_limit(after)
+                return self._traverse_via(anchor_id, obj_type, reverse=reverse)
+            return self._traverse_page_via(
+                anchor_id, obj_type, reverse=reverse, limit=limit, after=after
+            )
 
         if not isinstance(link, str) or from_id is None:
             raise ValidationFailed(
@@ -613,12 +691,7 @@ class OntologyClient(_TypedReadMixin):
                 code="UNKNOWN_NAME",
             )
         if limit is None:
-            if after is not None:
-                raise ValidationFailed(
-                    "traverse: after= was given without limit= -- the "
-                    "unpaginated path has no page to resume",
-                    code="AFTER_WITHOUT_LIMIT",
-                )
+            _refuse_after_without_limit(after)
             return self._query.traverse(self._consumer, link, from_id, reverse=reverse)
         return self._query.traverse_page(
             self._consumer, link, from_id, reverse=reverse, limit=limit, after=after

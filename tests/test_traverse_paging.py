@@ -15,14 +15,16 @@ from __future__ import annotations
 import os
 import uuid
 from collections.abc import Callable
+from typing import Any
 
 import pytest
 from conftest import raises_code
 
-from ontary.authoring import Ontology, OntologyObject, prop
+from ontary.authoring import LinkHandle, Ontology, OntologyObject, prop
+from ontary.client import OntologyClient
 from ontary.errors import ValidationFailed, VisibilityError
 from ontary.meta import Sensitivity
-from ontary.query import GuardedQuery, Page
+from ontary.query import GuardedQuery, Page, TypedPage
 from ontary.scope import DirectProperty
 from ontary.security import Consumer
 from ontary.store import Source, Store
@@ -58,8 +60,8 @@ class Author(OntologyObject):
 
 # Reverse from a Board walks its tickets; forward from a Board walks the
 # tickets it pins. Both directions therefore have many targets.
-ontology.link("onBoard", Ticket, Board, "MANY_TO_ONE")
-ontology.link("pins", Board, Ticket, "MANY_TO_MANY")
+onBoard = ontology.link("onBoard", Ticket, Board, "MANY_TO_ONE")
+pins = ontology.link("pins", Board, Ticket, "MANY_TO_MANY")
 ontology.link("authoredBy", Ticket, Author, "MANY_TO_ONE", identity_revealing=True)
 ontology.validate()
 
@@ -294,3 +296,97 @@ def test_limit_below_one_is_invalid_limit(store: Store, limit: int) -> None:
 
     with raises_code(ValidationFailed, "INVALID_LIMIT"):
         _page(seed, limit=limit)
+
+
+# -- typed-handle `client.traverse(link_cls, anchor, limit=, after=)` (#203) --
+#
+# The typed form pages through the same `traverse_page` as the string form
+# and hydrates each item, so a typed page walk must equal the string walk.
+
+TYPED_DIRECTIONS = [(onBoard, True), (pins, False)]
+
+
+def _client(store: Store) -> OntologyClient:
+    return OntologyClient(ontology, store, _human())
+
+
+@pytest.mark.parametrize(("handle", "reverse"), TYPED_DIRECTIONS)
+def test_typed_traverse_pages_like_the_string_form(
+    store: Store, handle: LinkHandle[Any, Any], reverse: bool
+) -> None:
+    seed = _Seed(store, handle.api_name, reverse)
+    seed.tickets(5, team="a")
+    seed.tickets(2, team="b")
+    client = _client(store)
+
+    typed_ids: list[str] = []
+    cursors: list[str | None] = []
+    after: str | None = None
+    while True:
+        page = client.traverse(handle, BOARD, reverse=reverse, limit=2, after=after)
+        assert isinstance(page, TypedPage)
+        for item in page.items:
+            assert isinstance(item, Ticket)
+            assert item.secret is None
+        typed_ids += [item.id for item in page.items]
+        cursors.append(page.next_cursor)
+        if not page.has_more:
+            break
+        after = page.next_cursor
+
+    assert len(cursors) == 3
+    assert cursors[-1] is None
+    assert typed_ids == _traverse_ids(seed)
+    string_page = client.traverse("Board", handle.api_name, BOARD, reverse=reverse, limit=2)
+    assert isinstance(string_page, Page)
+    assert [row.payload["id"] for row in string_page.items] == typed_ids[:2]
+    assert string_page.next_cursor == cursors[0]
+
+
+def test_typed_traverse_accepts_a_model_anchor_with_limit(store: Store) -> None:
+    seed = _Seed(store, "pins", False)
+    seed.tickets(3, team="a")
+    client = _client(store)
+    board = client.get(Board, BOARD)
+    assert board is not None
+
+    page = client.traverse(pins, board, limit=2)
+
+    assert [ticket.id for ticket in page.items] == _traverse_ids(seed)[:2]
+    assert page.has_more is True
+
+
+def test_typed_traverse_without_limit_still_returns_the_full_list(store: Store) -> None:
+    seed = _Seed(store, "onBoard", True)
+    seed.tickets(3, team="a")
+
+    rows = _client(store).traverse(onBoard, BOARD, reverse=True)
+
+    assert isinstance(rows, list)
+    assert [ticket.id for ticket in rows] == _traverse_ids(seed)
+
+
+def test_typed_traverse_after_without_limit_is_refused(store: Store) -> None:
+    seed = _Seed(store, "onBoard", True)
+    first = seed.tickets(2, team="a")[0]
+
+    with raises_code(ValidationFailed, "AFTER_WITHOUT_LIMIT"):
+        _client(store).traverse(onBoard, BOARD, reverse=True, after=first)
+
+
+def test_typed_traverse_unresumable_cursor_is_stale_cursor(store: Store) -> None:
+    seed = _Seed(store, "onBoard", True)
+    seed.tickets(2, team="a")
+    hidden = seed.tickets(1, team="b")[0]
+
+    with raises_code(ValidationFailed, "STALE_CURSOR"):
+        _client(store).traverse(onBoard, BOARD, reverse=True, limit=1, after=hidden)
+
+
+@pytest.mark.parametrize("limit", [0, -1])
+def test_typed_traverse_limit_below_one_is_invalid_limit(store: Store, limit: int) -> None:
+    seed = _Seed(store, "onBoard", True)
+    seed.tickets(1, team="a")
+
+    with raises_code(ValidationFailed, "INVALID_LIMIT"):
+        _client(store).traverse(onBoard, BOARD, reverse=True, limit=limit)
