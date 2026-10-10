@@ -354,13 +354,17 @@ def ship(ctx: ActionContext, p: ShipOrder) -> dict[str, Any]:
 | イベントクラスがこの `Ontology` に登録されていない | `UNKNOWN_NAME` |
 | イベントが Action の `emits` にない | `UNDECLARED_EVENT` |
 | 対象を解決できない、対象型ではない、このコンテキストが渡していない、またはまだ行がない | `EVENT_SUBJECT_INVALID` |
+| ペイロードの値が宣言された型に合わない（タイムゾーンのない `datetime` など） | `INVALID_RECORD` |
 
 `client.events(event_type=None, /, *, about=None, since=None, until=None)` は、クライアントの
 コンシューマーが見られるイベントを、送出順の `list[EventRecord[E]]` で返します。`about` は
 オブジェクトか `(cls, id)` のタプルです。`since` は含み、`until` は含みません。どちらも
 タイムゾーン付きでなければなりません。ページングはありません。イベントクラスを渡すと
 各ペイロードがそのクラスになり、渡さない場合は保存されたフィールドを保持する素の `Event`
-になります。
+になります。保存後にクラスが変わり、古いペイロードが合わなくなった場合、型付きの読み取りは
+`INVALID_RECORD` を送出します。メッセージには、イベント型と合わないフィールドが入ります。
+新しいフィールドや変えたフィールドを省略可能にするか、イベントクラスなしで読み取ってください。
+フィールドを削除した場合は、イベントクラスなしでのみ読み取れます。
 
 ```python
 records = client.events(OrderShipped, about=(Order, "o-1"))

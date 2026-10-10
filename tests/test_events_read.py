@@ -791,3 +791,31 @@ def test_event_scope_limited_is_false_for_an_unscoped_subject_without_row_policy
 def test_event_scope_limited_is_false_for_an_event_no_action_emits(domain: ReadDomain) -> None:
     domain.ontology.registry.get_action_type("ShipOrder").emits = ["OrderShipped"]
     assert domain.client()._event_scope_limited("Packed", None) is False
+
+
+def test_typed_read_of_a_drifted_payload_raises_an_ontary_error(domain: ReadDomain) -> None:
+    # An event stored before `carrier` became required, as if the class changed.
+    domain.store.append_audit(AuditEntry(
+        ts=INSTANT, kind="action", invocation_id="inv-1", actor="operator",
+        role="Operator", action="ShipOrder", target_type="Order", outcome="ok",
+        events=[EmittedEvent(
+            event_type="OrderShipped", about_type="Order", about_id="order-1", payload={},
+        )],
+    ))
+
+    with pytest.raises(ValidationFailed) as caught:
+        domain.client().events(domain.shipped)
+    assert caught.value.code == "INVALID_RECORD"
+    message = str(caught.value)
+    assert message.startswith(
+        "OrderShipped event about Order 'order-1' (invocation 'inv-1'): stored payload "
+        "no longer matches the event class: field 'carrier': Field required"
+    )
+    assert message.endswith(
+        "-- if the class changed after these events were stored, make the new or changed "
+        "field optional, or read without an event class (the only fix for a removed field)"
+    )
+    # The untyped read still returns the stored payload (plus the redacted field).
+    assert [record.payload.model_dump() for record in domain.client().events()] == [
+        {"human_secret": None},
+    ]

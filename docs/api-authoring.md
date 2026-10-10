@@ -359,13 +359,17 @@ the action rolls back and is audited as `error`:
 | The event class is not registered on this `Ontology` | `UNKNOWN_NAME` |
 | The event is not in the action's `emits` | `UNDECLARED_EVENT` |
 | The subject cannot be resolved, is not of the target type, was not handed out by this context, or has no row yet | `EVENT_SUBJECT_INVALID` |
+| A payload value does not match its declared type, such as a naive `datetime` | `INVALID_RECORD` |
 
 `client.events(event_type=None, /, *, about=None, since=None, until=None)` returns
 the events the client's consumer may see, as `list[EventRecord[E]]`, in emission
 order. `about` is an object or a `(cls, id)` tuple. `since` is inclusive and `until`
 is exclusive; both must be timezone-aware. There is no paging. Passing an event class
 hydrates each payload into that class; without one, each payload is a plain `Event`
-that keeps its stored fields.
+that keeps its stored fields. If the class changed after its events were stored and an
+old payload no longer fits, the typed read raises `INVALID_RECORD`. The message names
+the event type and each mismatched field. Make the new or changed field optional, or
+read without an event class. A removed field can only be read without an event class.
 
 ```python
 records = client.events(OrderShipped, about=(Order, "o-1"))

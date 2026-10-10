@@ -482,7 +482,11 @@ ERROR_CODES: dict[str, ErrorCodeInfo] = {
             "back is the same failure class ingest carries on write. "
             "`Ontology.diagnose(store=...)` reports, per type and property, "
             "the stored rows that would fail hydration under the current "
-            "ontology, and `Ontology.validate(store=...)` raises this code for them."
+            "ontology, and `Ontology.validate(store=...)` raises this code for them. "
+            "Events use the same code: `ctx.emit` refuses a payload value that "
+            "does not match its declared type (for example, a naive datetime), and "
+            "a typed `client.events` read raises it for a stored payload that no "
+            "longer fits its event class."
         ),
     ),
     "UNKNOWN_FIELD": ErrorCodeInfo(
