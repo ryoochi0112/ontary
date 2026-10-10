@@ -57,6 +57,17 @@ you**.
   and `traverse_many` then returned nothing. `save` failed on the second save after
   the key changed. The other calls refused the object as missing. The context now
   uses the same canonical id as every store (#91).
+- **`ctx.emit` now refuses a naive `datetime` in an event payload (#111).** Before, a
+  payload field, or a struct field inside one, accepted a datetime with no time zone
+  and stored it. Now the payload meets the same declared-type check as a property
+  value, and the refusal is `INVALID_RECORD`. The action rolls back. A handler that
+  emitted naive datetimes must now attach a time zone.
+- **A typed `client.events` read of a drifted payload now raises `INVALID_RECORD` (#113).**
+  Before, reading an old event whose class had since changed raised a raw pydantic
+  `ValidationError`. The new error names the event type, its subject, and each
+  mismatched field. It also says to make the field optional or to read without an
+  event class. A removed field can only be read without an event class, because
+  `Event` forbids extra fields.
 
 ## [0.26.0] — 2026-10-09
 

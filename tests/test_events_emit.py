@@ -529,3 +529,38 @@ def test_mypy_accepts_event_and_refuses_object(tmp_path: Path) -> None:
     assert ': error: Argument 1 to "emit" of "ActionContext" has incompatible type "object"; ' \
         'expected "Event"  [arg-type]' in result.stdout
     assert result.stdout.count(": error:") == 1, result.stdout
+
+
+def test_emit_refuses_a_naive_datetime_payload_field_and_rolls_back(domain: EmitDomain) -> None:
+    def emit_naive(ctx: ActionContext) -> dict[str, Any]:
+        ctx.emit(domain.shipped(carrier="yamato", at=datetime(2026, 10, 4, 9)))
+        return {}
+
+    _assert_refusal(
+        domain, emit_naive, code="INVALID_RECORD",
+        message=(
+            "ActionContext.emit: event 'OrderShipped' property 'at' expected an "
+            "offset-aware datetime (tzinfo set), got a naive one: '2026-10-04T09:00:00'"
+        ),
+    )
+
+
+def test_emit_refuses_a_naive_datetime_inside_a_struct_payload_field(domain: EmitDomain) -> None:
+    def emit_naive(ctx: ActionContext) -> dict[str, Any]:
+        ctx.emit(domain.shipped(
+            carrier="yamato",
+            detail=ShipmentDetail(
+                label="box", count=1, state=ShippingState.SHIPPED,
+                dispatched_at=datetime(2026, 10, 4, 9), dispatch_day=date(2026, 10, 4),
+            ),
+        ))
+        return {}
+
+    _assert_refusal(
+        domain, emit_naive, code="INVALID_RECORD",
+        message=(
+            "ActionContext.emit: event 'OrderShipped' property 'detail' dispatched_at: "
+            "expected an offset-aware datetime (tzinfo set), got a naive one: "
+            "'2026-10-04T09:00:00'"
+        ),
+    )

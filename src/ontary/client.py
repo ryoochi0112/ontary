@@ -57,6 +57,8 @@ from collections.abc import Callable, Iterable, Mapping
 from datetime import datetime
 from typing import Any, Literal, TypeVar, overload
 
+from pydantic import ValidationError
+
 from ontary._runtime import default_id_factory
 from ontary._typed_api import _TypedReadMixin, list_objects
 from ontary.actions import ActionError, ActionExecutor, TypedHandler
@@ -410,9 +412,12 @@ class OntologyClient(_TypedReadMixin):
             self._consumer, event_type=name, about=subject, since=since, until=until,
         ):
             # Explicit None overrides any author default for a redacted field.
-            payload = payload_cls.model_validate({
-                **event.payload, **dict.fromkeys(hidden),
-            })
+            try:
+                payload = payload_cls.model_validate({
+                    **event.payload, **dict.fromkeys(hidden),
+                })
+            except ValidationError as exc:
+                raise _payload_drift(entry, event, exc) from exc
             records.append(EventRecord(
                 event_type=event.event_type, about_type=event.about_type, about_id=event.about_id,
                 ts=entry.ts, invocation_id=entry.invocation_id, payload=payload,
@@ -970,3 +975,23 @@ class OntologyClient(_TypedReadMixin):
         write-back/re-ingest/visibility/transaction-ownership/idempotency
         stance, audit scope, and this ontology's own `min_n`."""
         return declarations(self._ontology)
+
+
+def _payload_drift(entry: AuditEntry, event: EmittedEvent, exc: ValidationError) -> ValidationFailed:
+    """A typed event read whose stored payload no longer fits its class (#113).
+
+    Names the event, its subject, and each mismatched field, and says how to
+    read the old events -- the same `INVALID_RECORD` kind that object
+    hydration raises for a drifted stored row."""
+    mismatches = "; ".join(
+        f"field {'.'.join(str(part) for part in error['loc'])!r}: {error['msg']}"
+        for error in exc.errors()
+    )
+    return ValidationFailed(
+        f"{event.event_type} event about {event.about_type} {event.about_id!r} "
+        f"(invocation {entry.invocation_id!r}): stored payload no longer matches the "
+        f"event class: {mismatches} -- if the class changed after these events were "
+        "stored, make the new or changed field optional, or read without an event class "
+        "(the only fix for a removed field)",
+        code="INVALID_RECORD",
+    )

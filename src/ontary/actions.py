@@ -70,6 +70,16 @@ def _event_payload_to_storage(event: Event, event_def: EventTypeDef) -> dict[str
         if prop.type == "struct" and prop.fields is not None:
             value = struct_value(value, prop.fields)
         value = choice_value(value, prop.choices)
+        if value is not None:
+            # The same declared-shape rule a property value meets: a naive
+            # datetime names no instant, so it is refused, not stored (#111).
+            violation = validate_scalar(value, prop.type, prop.choices, fields=prop.fields)
+            if violation is not None:
+                raise ValidationFailed(
+                    f"ActionContext.emit: event {event_def.api_name!r} property "
+                    f"{prop.name!r} {violation}",
+                    code="INVALID_RECORD",
+                )
         payload[prop.name] = _to_storage_scalar(value, prop.type, fields=prop.fields)
     return payload
 
