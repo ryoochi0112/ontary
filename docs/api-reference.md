@@ -61,7 +61,10 @@ namespace.
 builders return it; it needs the `[mcp]` extra (`pip install 'ontary[mcp]'`).
 `import ontary` works without the extra, and only touching `MCPServer` raises
 an `ImportError` naming the install command. In a core-only install that
-includes `from ontary import *`, which fetches every `__all__` name.
+includes `from ontary import *`, which fetches every `__all__` name. It also
+includes `hasattr(ontary, "MCPServer")`: `hasattr` catches only
+`AttributeError`, so it raises the same `ImportError` instead of returning
+`False`. `dir(ontary)` lists `MCPServer` without importing the extra.
 
 ### Error classes
 

@@ -1156,6 +1156,56 @@ def test_mcp_testing_section_names_the_thread_trap_and_is_identical_in_en_and_ja
     assert en == ja
 
 
+# The facts the MCP testing prose states (#140), as one marker per language.
+# Matched against the prose outside the code fence, whitespace collapsed, so a
+# translation that drops or changes a fact fails even when the terms survive.
+MCP_TESTING_FACTS: dict[str, dict[Path, str]] = {
+    "HTTP 200 still comes back": {
+        _DOCS / "testing.md": "The HTTP call still returns 200",
+        _DOCS / "testing.ja.md": "HTTP 呼び出しは 200 を返します",
+    },
+    "the SQLite connection cannot cross threads": {
+        _DOCS / "testing.md": "the SQLite `ObjectStore` connection refuses to cross threads",
+        _DOCS / "testing.ja.md": "SQLite の `ObjectStore` の接続はスレッドをまたげません",
+    },
+    "the fix works for every store": {
+        _DOCS / "testing.md": "the same test works with every store",
+        _DOCS / "testing.ja.md": "どのストアでも同じテストが動きます",
+    },
+    "stateless_http needs no initialize handshake": {
+        _DOCS / "testing.md": "`stateless_http=True` lets one `tools/call` request stand alone, "
+        "with no `initialize` handshake",
+        _DOCS / "testing.ja.md": "`stateless_http=True` にすると、`initialize` のハンドシェイクなしで "
+        "`tools/call` リクエストを 1 件だけ送れます",
+    },
+}
+
+
+def test_mcp_testing_section_states_the_same_facts_in_en_and_ja() -> None:
+    """EN and JA prose of the in-process MCP section state the same four facts
+    (#140); the test above only pins terms and the code fence."""
+    for path, heading in MCP_TESTING_SECTION.items():
+        section = _markdown_section(path.read_text(), heading)
+        prose = " ".join(re.sub(r"```python\n.*?```", " ", section, flags=re.DOTALL).split())
+        for fact, markers in MCP_TESTING_FACTS.items():
+            assert markers[path] in prose, f"{path.name}: MCP section no longer states {fact!r}"
+
+
+# The API reference states the core-only behaviour of the lazy `MCPServer`
+# export (#61, #140) in the "Runtime entries" section, EN and JA.
+LAZY_MCPSERVER_NOTE = {
+    _DOCS / "api-reference.md": "### Runtime entries",
+    _DOCS / "api-reference.ja.md": "### Runtime entries / ランタイム項目",
+}
+
+
+def test_api_reference_states_core_only_star_import_and_hasattr_behaviour() -> None:
+    for path, heading in LAZY_MCPSERVER_NOTE.items():
+        section = _markdown_section(path.read_text(), heading)
+        for term in ("from ontary import *", 'hasattr(ontary, "MCPServer")', "dir(ontary)"):
+            assert term in section, f"{path.name}: Runtime entries does not mention {term}"
+
+
 # The one place the API reference states the date/datetime write rule (#57),
 # and the write sites that must point at it. Anchors are hard-coded so this
 # pin also runs offline in `make verify`; `validation.anchors: warn` with

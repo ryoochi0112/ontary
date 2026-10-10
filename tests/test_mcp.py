@@ -1708,19 +1708,34 @@ def test_root_reexports_the_mcp_server_class() -> None:
     assert "MCPServer" in ontary.__all__
 
 
+def test_root_dir_lists_every_all_name_including_the_lazy_mcp_server() -> None:
+    """`dir(ontary)` lists the lazy `MCPServer` through a module `__dir__`
+    (#140), so every `__all__` name shows up for tools that list the module."""
+    import ontary
+
+    names = dir(ontary)
+    assert "MCPServer" in names
+    assert set(ontary.__all__) <= set(names)
+
+
 def test_root_mcp_server_without_the_extra_names_the_install_command() -> None:
     """Without `mcp`, only touching `ontary.MCPServer` fails, with the
     builders' install hint (#61). A star import fetches every `__all__` name,
-    so in a core-only install it raises the same hint (accepted, documented)."""
+    so in a core-only install it raises the same hint (accepted, documented).
+    `hasattr` swallows only `AttributeError`, so it raises the hint too, while
+    `dir()` still lists the name without importing `mcp` (#140)."""
     import ontary
 
     with _mcp_uninstalled():
+        assert "MCPServer" in dir(ontary)
         with pytest.raises(ImportError) as attr_info:
             ontary.MCPServer  # noqa: B018 -- the attribute access is the test
         with pytest.raises(ImportError) as star_info:
             exec("from ontary import *", {})
+        with pytest.raises(ImportError) as hasattr_info:
+            hasattr(ontary, "MCPServer")
 
-    for exc_info in (attr_info, star_info):
+    for exc_info in (attr_info, star_info, hasattr_info):
         assert str(exc_info.value) == MCP_EXTRA_HINT
         assert isinstance(exc_info.value.__cause__, ModuleNotFoundError)
 

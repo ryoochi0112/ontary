@@ -13,6 +13,11 @@ you**.
 
 ### Fixed
 
+- **`dir(ontary)` now lists the lazy `MCPServer` export (#140).** The module now
+  defines `__dir__`, so every `__all__` name appears without importing the `mcp`
+  extra. In a core-only install `hasattr(ontary, "MCPServer")` still raises the
+  install-hint `ImportError`, like `from ontary import *`; the API reference now
+  says so.
 - **Typed-handle `client.traverse` now pages with `limit` and `after` (#203).**
   It used to accept both and ignore them, returning every linked row.
   `client.traverse(link_cls, anchor, limit=n, after=cursor)` now returns a
