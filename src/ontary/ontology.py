@@ -104,7 +104,7 @@ class SupportsDefinition(Protocol):
 
 
 def resolve_definition(ontology: OntologyDef | SupportsDefinition) -> OntologyDef:
-    """THE single normalization point for the `OntologyDef | Ontology`
+    """THE single normalization point for the `OntologyDef | SupportsDefinition`
     union every public entry (client, MCP server builders, connect
     pipeline) accepts. Call it once at the boundary; everything below works
     with a plain `OntologyDef`."""

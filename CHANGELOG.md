@@ -43,6 +43,12 @@ you**.
   count-only mode. The
   error-code tables in the API reference (EN and JA) follow. This is a documentation
   change only; behavior is unchanged.
+- **`build_mcp_server` and `build_multi_consumer_mcp_server` now annotate `ontology` as
+  `OntologyDef | SupportsDefinition` (#222).** This is the annotation `OntologyRuntime` and
+  `OntologyClient` already use, so every public entry point that takes an ontology
+  accepts the same thing: an `OntologyDef`, an `Ontology`, or any object with a
+  `definition` property. The old `OntologyDef | Ontology` spelling accepted a subset.
+  Runtime behavior is unchanged.
 
 ### Fixed
 
