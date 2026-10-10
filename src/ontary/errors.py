@@ -596,17 +596,23 @@ ERROR_CODES: dict[str, ErrorCodeInfo] = {
     "INVALID_LIMIT": ErrorCodeInfo(
         kind="validation",
         description=(
-            "`GuardedQuery.get_objects`'s (or `OntologyClient.list`'s) "
-            "`limit` was < 1 -- a silently empty page would hide that the "
-            "call was malformed rather than legitimately paginated."
+            "A paging `limit` was below 1 on `GuardedQuery.get_objects` / "
+            "`OntologyClient.list` (there, also not an integer), "
+            "`GuardedQuery.traverse_page` / string-form "
+            "`OntologyClient.traverse`, or the MCP `query_objects`, "
+            "`traverse_links`, and `list_events` tools; or an MCP `limit` was "
+            "above the tool cap, or `limit=0` (count-only mode) came with "
+            "`after`. A silently empty page would hide that the call was "
+            "malformed rather than legitimately paginated."
         ),
     ),
     "AFTER_WITHOUT_LIMIT": ErrorCodeInfo(
         kind="validation",
         description=(
-            "`GuardedQuery.get_objects`'s (or `OntologyClient.list`'s) "
-            "`after` was given without `limit` -- the unpaginated "
-            "`Store.read_all` path has no page to resume, "
+            "`after` was given without `limit` on `GuardedQuery.get_objects` / "
+            "`OntologyClient.list`, string-form `OntologyClient.traverse`, or "
+            "the MCP `query_objects`, `traverse_links`, and `list_events` "
+            "tools -- the unpaginated path has no page to resume, "
             "so ignoring `after` would let a caller that lost track of its "
             "limit silently re-read every visible row and duplicate work; a "
             "caller that genuinely wants everything passes no `after` at all."

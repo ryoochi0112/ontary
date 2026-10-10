@@ -35,6 +35,14 @@ you**.
 - **The `Page`, `TypedPage`, and `Lineage` cursor docs are now accurate (#204).**
   They say the traversal cursor is the object id of the last kept row. This is a
   documentation change only; behavior is unchanged.
+- **The `INVALID_LIMIT` and `AFTER_WITHOUT_LIMIT` descriptions now name every raiser (#201).**
+  Both named only `GuardedQuery.get_objects` and `OntologyClient.list`. The MCP
+  `query_objects` and `list_events` tools, and since #63/#64 `GuardedQuery.traverse_page`,
+  string-form `OntologyClient.traverse`, and MCP `traverse_links`, raise them too. The
+  MCP tools also use `INVALID_LIMIT` for a limit above the cap and for `after` in
+  count-only mode. The
+  error-code tables in the API reference (EN and JA) follow. This is a documentation
+  change only; behavior is unchanged.
 
 ### Fixed
 
