@@ -38,7 +38,7 @@ from ontary.model import CapabilityHandle, Event, LinkHandle, OntologyObject, _c
 from ontary.scope import ScopePolicy, resolve_owning_scope
 from ontary.security import Consumer, covers_scope
 from ontary.store import AuditEntry, Source, Store, StoredObject
-from ontary.store._shared import iso_instant, refuse_bare_anchors
+from ontary.store._shared import canonical_id, iso_instant, refuse_bare_anchors
 from ontary.typesys import _to_storage_scalar, choice_value, struct_value, validate_scalar
 
 TypedHandler = Callable[["ActionContext", BaseModel], dict[str, Any]]
@@ -217,7 +217,7 @@ class ActionContext:
                     code="EVENT_SUBJECT_INVALID",
                 )
             primary_key = self._registry_or_raise("emit").get_object_type(about_type).primary_key
-            about_id = str(getattr(about, primary_key))
+            about_id = canonical_id(getattr(about, primary_key))
         if self._store.read_last(about_type, about_id) is None:
             raise ValidationFailed(
                 f"ActionContext.emit: subject {about_type} {about_id!r} "
@@ -299,7 +299,7 @@ class ActionContext:
     def _object_id(self, obj: OntologyObject, operation: str) -> tuple[str, str]:
         api_name = self._api_name(type(obj), operation)
         primary_key = self._registry_or_raise(operation).get_object_type(api_name).primary_key
-        return api_name, str(getattr(obj, primary_key))
+        return api_name, canonical_id(getattr(obj, primary_key))
 
     def _link_type(self, link: LinkHandle[Any, Any], operation: str) -> str:
         registry = self._registry_or_raise(operation)
@@ -393,7 +393,7 @@ class ActionContext:
         if not changes:
             return
         primary_key = self._registry_or_raise("save").get_object_type(api_name).primary_key
-        self._store.update(api_name, str(snapshot[primary_key]), changes, self._source)
+        self._store.update(api_name, canonical_id(snapshot[primary_key]), changes, self._source)
         self._loaded[id(obj)] = (obj, api_name, current)
 
     def link(self, link: LinkHandle[_F, _T], from_: _F | str, to: _T | str, /) -> None:
