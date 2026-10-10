@@ -235,6 +235,34 @@ def list_objects(
     return [hydrate(obj_type, so, consumer.kind) for so in stored]
 
 
+def _check_typed_link(
+    registry: OntologyRegistry | None,
+    via: LinkHandle[F, T],
+    *,
+    api_name_for: Callable[[type[OntologyObject]], str],
+    owner: str,
+) -> None:
+    """Fail closed unless both ends and the link belong to this ontology."""
+    api_name_for(via.from_cls)
+    api_name_for(via.to_cls)
+    # `api_name_for` above fails closed when a directly-constructed
+    # `BoundQuery` has no registry. Keep the invariant explicit so optimized
+    # Python cannot remove it.
+    if registry is None:
+        raise InternalError(
+            f"typed traversal on {owner} reached link lookup without a registry",
+            code="INTERNAL_ERROR",
+        )
+    try:
+        registry.get_link_type(via.api_name)
+    except ValidationFailed as exc:
+        raise ValidationFailed(
+            f"link {via.api_name!r} is not registered on this "
+            f"{owner}'s ontology",
+            code="UNKNOWN_NAME",
+        ) from exc
+
+
 @overload
 def traverse_via(
     query: GuardedQuery,
@@ -289,30 +317,44 @@ def traverse_via(
     reverse: bool = False,
 ) -> list[T] | list[F]:
     """Shared typed traversal branch for both typed façades."""
-    api_name_for(via.from_cls)
-    api_name_for(via.to_cls)
-    # `api_name_for` above fails closed when a directly-constructed
-    # `BoundQuery` has no registry. Keep the invariant explicit so optimized
-    # Python cannot remove it.
-    if registry is None:
-        raise InternalError(
-            f"typed traversal on {owner} reached link lookup without a registry",
-            code="INTERNAL_ERROR",
-        )
-    try:
-        registry.get_link_type(via.api_name)
-    except ValidationFailed as exc:
-        raise ValidationFailed(
-            f"link {via.api_name!r} is not registered on this "
-            f"{owner}'s ontology",
-            code="UNKNOWN_NAME",
-        ) from exc
+    _check_typed_link(registry, via, api_name_for=api_name_for, owner=owner)
     stored_list = query.traverse(
         consumer, via.api_name, from_id, reverse=reverse
     )
     if reverse:
         return [hydrate(via.from_cls, so, consumer.kind) for so in stored_list]
     return [hydrate(via.to_cls, so, consumer.kind) for so in stored_list]
+
+
+def traverse_page_via(
+    query: GuardedQuery,
+    consumer: Consumer,
+    registry: OntologyRegistry | None,
+    from_id: str,
+    via: LinkHandle[F, T],
+    *,
+    api_name_for: Callable[[type[OntologyObject]], str],
+    owner: str,
+    reverse: bool = False,
+    limit: int,
+    after: str | None = None,
+) -> TypedPage[T] | TypedPage[F]:
+    """One hydrated page of a typed traversal (`GuardedQuery.traverse_page`)."""
+    _check_typed_link(registry, via, api_name_for=api_name_for, owner=owner)
+    page = query.traverse_page(
+        consumer, via.api_name, from_id, reverse=reverse, limit=limit, after=after
+    )
+    if reverse:
+        return TypedPage(
+            items=[hydrate(via.from_cls, so, consumer.kind) for so in page.items],
+            next_cursor=page.next_cursor,
+            has_more=page.has_more,
+        )
+    return TypedPage(
+        items=[hydrate(via.to_cls, so, consumer.kind) for so in page.items],
+        next_cursor=page.next_cursor,
+        has_more=page.has_more,
+    )
 
 
 @overload
@@ -369,24 +411,7 @@ def traverse_many_via(
     reverse: bool = False,
 ) -> dict[str, list[T]] | dict[str, list[F]]:
     """Shared typed traversal branch for both typed façades."""
-    api_name_for(via.from_cls)
-    api_name_for(via.to_cls)
-    # `api_name_for` above fails closed when a directly-constructed
-    # `BoundQuery` has no registry. Keep the invariant explicit so optimized
-    # Python cannot remove it.
-    if registry is None:
-        raise InternalError(
-            f"typed traversal on {owner} reached link lookup without a registry",
-            code="INTERNAL_ERROR",
-        )
-    try:
-        registry.get_link_type(via.api_name)
-    except ValidationFailed as exc:
-        raise ValidationFailed(
-            f"link {via.api_name!r} is not registered on this "
-            f"{owner}'s ontology",
-            code="UNKNOWN_NAME",
-        ) from exc
+    _check_typed_link(registry, via, api_name_for=api_name_for, owner=owner)
     stored = query.traverse_many(consumer, via.api_name, anchor_ids, reverse=reverse)
     if reverse:
         return {
@@ -538,6 +563,28 @@ class _TypedReadMixin:
             api_name_for=self._api_name_for,
             owner=self._typed_owner,
             reverse=reverse,
+        )
+
+    def _traverse_page_via(
+        self,
+        from_id: str,
+        via: LinkHandle[F, T],
+        *,
+        reverse: bool = False,
+        limit: int,
+        after: str | None = None,
+    ) -> TypedPage[T] | TypedPage[F]:
+        return traverse_page_via(
+            self._query,
+            self._consumer,
+            self._registry,
+            from_id,
+            via,
+            api_name_for=self._api_name_for,
+            owner=self._typed_owner,
+            reverse=reverse,
+            limit=limit,
+            after=after,
         )
 
     def _traverse_anchor_id(self, link_cls: LinkHandle[F, T], anchor_obj_or_id: F | T | str, *, reverse: bool = False) -> str:

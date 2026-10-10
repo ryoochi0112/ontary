@@ -601,6 +601,34 @@ class TestTypedTraverse:
         with raises_code(InternalError, "INTERNAL_ERROR"):
             client.traverse(works_with, "t1")
 
+    @pytest.mark.parametrize("reverse", [False, True])
+    def test_paged_handle_from_another_ontology_raises_unknown_name(
+        self, reverse: bool
+    ) -> None:
+        # #203: the paged typed path keeps the same ontology guard.
+        client_a, *_ = _linked_client(_human_consumer())
+        _, _, _, works_with_b, _ = _build_linked_ontology()
+
+        with raises_code(ValidationFailed, "UNKNOWN_NAME"):
+            client_a.traverse(works_with_b, "t1", reverse=reverse, limit=5)
+
+    def test_paged_handle_with_unregistered_link_name_raises_unknown_name(self) -> None:
+        client, Ticket, Person, _, _, _ = _linked_client(_human_consumer())
+        bogus = LinkHandle(api_name="nope", from_cls=Ticket, to_cls=Person)
+
+        with raises_code(ValidationFailed, "UNKNOWN_NAME"):
+            client.traverse(bogus, "t1", limit=5)
+
+    def test_paged_typed_traverse_refuses_missing_internal_registry(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client, _, _, works_with, _, _ = _linked_client(_human_consumer())
+        monkeypatch.setattr(client, "_registry", None)
+        monkeypatch.setattr(client, "_api_name_for", lambda cls: cls.__name__)
+
+        with raises_code(InternalError, "INTERNAL_ERROR"):
+            client.traverse(works_with, "t1", limit=5)
+
     def test_traverse_string_form_unchanged(self) -> None:
         client, Ticket, Person, _, _, _ = _linked_client(_human_consumer())
         client.ingest("Ticket", [{"id": "t1", "subject": "s", "priority": 1}], SRC)

@@ -598,8 +598,8 @@ ERROR_CODES: dict[str, ErrorCodeInfo] = {
         description=(
             "A paging `limit` was below 1 on `GuardedQuery.get_objects` / "
             "`OntologyClient.list` (there, also not an integer), "
-            "`GuardedQuery.traverse_page` / string-form "
-            "`OntologyClient.traverse`, or the MCP `query_objects`, "
+            "`GuardedQuery.traverse_page` / `OntologyClient.traverse` (both "
+            "forms), or the MCP `query_objects`, "
             "`traverse_links`, and `list_events` tools; or an MCP `limit` was "
             "above the tool cap, or `limit=0` (count-only mode) came with "
             "`after`. A silently empty page would hide that the call was "
@@ -610,7 +610,7 @@ ERROR_CODES: dict[str, ErrorCodeInfo] = {
         kind="validation",
         description=(
             "`after` was given without `limit` on `GuardedQuery.get_objects` / "
-            "`OntologyClient.list`, string-form `OntologyClient.traverse`, or "
+            "`OntologyClient.list`, `OntologyClient.traverse` (both forms), or "
             "the MCP `query_objects`, `traverse_links`, and `list_events` "
             "tools -- the unpaginated path has no page to resume, "
             "so ignoring `after` would let a caller that lost track of its "
