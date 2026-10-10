@@ -71,7 +71,7 @@ from typing import TYPE_CHECKING, Annotated, Any, NamedTuple, cast
 from pydantic import Field, SkipValidation
 
 from ontary.audit import AuditEntry, EmittedEvent
-from ontary.authoring import CapabilityHandle, Ontology
+from ontary.authoring import CapabilityHandle
 from ontary.client import OntologyClient, OntologyRuntime
 from ontary.errors import OntaryError, PermissionDenied, ValidationFailed
 from ontary.meta import (
@@ -83,7 +83,7 @@ from ontary.meta import (
     ObjectTypeDef,
     PropertyDef,
 )
-from ontary.ontology import OntologyDef, resolve_definition
+from ontary.ontology import OntologyDef, SupportsDefinition, resolve_definition
 from ontary.query import AggregateFunc, AggregateValue, Page
 from ontary.security import Consumer
 from ontary.store import Store, StoredObject
@@ -1526,7 +1526,7 @@ def _register_tools(
 
 
 def build_mcp_server(
-    ontology: OntologyDef | Ontology,
+    ontology: OntologyDef | SupportsDefinition,
     store: Store,
     consumer: Consumer,
     *,
@@ -1536,10 +1536,11 @@ def build_mcp_server(
     """Build an `MCPServer` bound to exactly one `(ontology, store,
     consumer)` triple -- one server process, one Consumer identity.
 
-    `ontology` accepts either a plain `OntologyDef` (descriptor authoring)
-    or an `Ontology` (class authoring) -- same
-    as `OntologyClient`'s own constructor, which this function delegates
-    to internally. Handlers arrive pre-bound: an `Ontology`'s
+    `ontology` accepts a plain `OntologyDef` (descriptor authoring) or any
+    `SupportsDefinition` -- an `Ontology` (class authoring), or anything
+    else with a `definition` property -- the same annotation as
+    `OntologyClient`'s own constructor, which this function delegates
+    to internally (#222). Handlers arrive pre-bound: an `Ontology`'s
     `@ontology.action(...)`/`@ontology.function(...)`-declared handlers
     auto-bind to the internal `OntologyClient` this server builds (the old
     `register_handlers` callback parameter was removed -- there is no
@@ -1567,7 +1568,7 @@ def build_mcp_server(
 
 
 def build_multi_consumer_mcp_server(
-    ontology: OntologyDef | Ontology,
+    ontology: OntologyDef | SupportsDefinition,
     store: Store,
     *,
     resolve_consumer: ConsumerResolver,

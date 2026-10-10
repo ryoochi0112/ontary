@@ -48,7 +48,9 @@ from ontary import (
 from ontary.authoring import Ontology, OntologyObject, prop
 from ontary.client import OntologyClient, OntologyRuntime
 from ontary.errors import ValidationFailed, VisibilityError
+from ontary.mcp_server import build_multi_consumer_mcp_server
 from ontary.model import Event
+from ontary.ontology import OntologyDef, SupportsDefinition
 from ontary.store import StoredObject
 from ontary.testing import Scenario, consumer, scenario
 
@@ -768,3 +770,42 @@ def test_root_mcp_server_types_the_builder_result() -> None:
 
     assert_type(server, ontary.MCPServer)
     assert isinstance(server, ontary.MCPServer)
+
+
+class _DefinitionOnly:
+    """A `SupportsDefinition` that is not an `Ontology`: only the structural
+    face the entry points are declared to accept (#222)."""
+
+    def __init__(self, definition: OntologyDef) -> None:
+        self._definition = definition
+
+    @property
+    def definition(self) -> OntologyDef:
+        return self._definition
+
+
+def test_every_public_entry_point_accepts_a_supports_definition() -> None:
+    """`OntologyRuntime`, `OntologyClient`, `build_mcp_server`, and
+    `build_multi_consumer_mcp_server` all annotate `ontology` as
+    `OntologyDef | SupportsDefinition`, so a bare `definition` carrier
+    type-checks and runs on each of them (#222)."""
+    ontology, store = build_ontology()
+    load_fixtures(store)
+    wrapped = _DefinitionOnly(ontology.definition)
+    assert isinstance(wrapped, SupportsDefinition)
+    assert not isinstance(wrapped, Ontology)
+    consumer = Consumer(
+        actor_id="agent-1", role="Agent", scope_level="queue", scope_id="q", kind="human"
+    )
+
+    runtime = OntologyRuntime(wrapped, store)
+    assert_type(runtime, OntologyRuntime)
+    client = OntologyClient(wrapped, store, consumer)
+    assert_type(client, OntologyClient)
+    server = ontary.build_mcp_server(wrapped, store, consumer)
+    assert_type(server, ontary.MCPServer)
+    multi = build_multi_consumer_mcp_server(
+        wrapped, store, resolve_consumer=lambda token: consumer
+    )
+    assert_type(multi, ontary.MCPServer)
+    assert server.name == multi.name == ontology.definition.name
