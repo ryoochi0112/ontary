@@ -121,11 +121,12 @@ ontary version, or migrate the data into a fresh store.
 
 There is no in-place upgrade. The supported path is **drop and recreate**: the
 engine creates the current schema on an empty store, and the application re-ingests
-from its sources. This is the intended shape for an ontary store, which is a
-governed projection of source systems, not the system of record; `client.ingest`
-and `client.ingest_links` rebuild it. If the store holds facts that exist nowhere
-else (Action-written rows, audit history you must keep), export them with the old
-ontary version before dropping.
+from its sources. This is the intended shape for ingested rows, which are a governed
+projection of source systems; `client.ingest` and `client.ingest_links` rebuild them.
+Action-written rows and audit history exist nowhere else: for those, ontary is the
+system of record, and an in-place upgrade path is planned (see the
+[roadmap](roadmap.md#m9--evolve-the-model-in-place)). Until it ships, export them
+with the old ontary version before dropping.
 
 For SQLite, move the old file aside and let the engine create a new one at the
 same path.

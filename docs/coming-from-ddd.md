@@ -33,8 +33,8 @@ Some terms have a nearest equivalent rather than a declared construct.
 The table's missing declarations do not imply plans to add them.
 The roadmap records these specific limits and decisions:
 
-- **Later** — Delivery of events to subscribers. Events currently remain stored facts. → [Roadmap](roadmap.md#later--pulled-by-real-use)
-- **Later** — As-of reads of history. The store keeps row history, but client reads expose current objects. → [Roadmap](roadmap.md#later--pulled-by-real-use)
+- **Later** — Delivery of events to subscribers. Events currently remain stored facts; delivery is planned in M8. → [Roadmap](roadmap.md#later--pulled-by-real-use)
+- **Later** — As-of reads of history. The store keeps row history, but client reads expose current objects; as-of reads are planned in M9. → [Roadmap](roadmap.md#later--pulled-by-real-use)
 - **Later** — Interfaces and polymorphic object types. Shared property conventions do not declare substitutable types. → [Roadmap](roadmap.md#later--pulled-by-real-use)
 - **Later** — Composing several operations into one model. There is no declared context map. → [Roadmap](roadmap.md#later--pulled-by-real-use)
 - **Decided against** — Links with properties. Use an object type linked to each participant when a relationship carries facts. → [Roadmap](roadmap.md#decided-against)
