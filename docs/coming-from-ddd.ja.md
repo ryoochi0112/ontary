@@ -33,8 +33,8 @@ ontary を使うために、ドメイン駆動設計（DDD）の知識は必要�
 表に宣言されていないことは、追加予定であることを意味しません。
 ロードマップには、次の制約と決定が記録されています。
 
-- **Later** — 購読者へのイベント配信。イベントは現在、保存された事実のままです。→ [Roadmap](roadmap.md#later--pulled-by-real-use)
-- **Later** — 時点を指定した履歴読み取り。ストアは行の履歴を保持しますが、クライアントの読み取りが返すのは現在のオブジェクトです。→ [Roadmap](roadmap.md#later--pulled-by-real-use)
+- **Later** — 購読者へのイベント配信。イベントは現在、保存された事実のままです。配信は M8 で予定しています。→ [Roadmap](roadmap.md#later--pulled-by-real-use)
+- **Later** — 時点を指定した履歴読み取り。ストアは行の履歴を保持しますが、クライアントの読み取りが返すのは現在のオブジェクトです。時点指定の読み取りは M9 で予定しています。→ [Roadmap](roadmap.md#later--pulled-by-real-use)
 - **Later** — インターフェースとポリモーフィックなオブジェクト型。プロパティの規約を共有しても、置き換え可能な型は宣言されません。→ [Roadmap](roadmap.md#later--pulled-by-real-use)
 - **Later** — 複数の操作を一つのモデルに合成すること。宣言されたコンテキストマップはありません。→ [Roadmap](roadmap.md#later--pulled-by-real-use)
 - **Decided against** — プロパティを持つリンク。関係に事実がある場合は、各参加者にリンクするオブジェクト型を使います。→ [Roadmap](roadmap.md#decided-against)
