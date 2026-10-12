@@ -536,6 +536,9 @@ _VERSION_BADGES = (
     # wheel/sdist `Description`, so a stale value here is on the package page.
     ("README.md", re.compile(r"version\n\*\*([0-9][^*]*)\*\*, store schema"), "exact"),
     ("README.md", re.compile(r"Releases are annotated tags \(`v([0-9][^`]*)`\)"), "exact"),
+    # The paste-into-your-coding-agent prompt (#279); `## Install` names no pin
+    # on its `pip install` line, so this matches only the prompt.
+    ("README.md", re.compile(r'pip install "ontary\[mcp\]==([0-9][^"]*)"'), "exact"),
 )
 
 

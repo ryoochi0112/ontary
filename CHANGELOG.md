@@ -11,6 +11,14 @@ you**.
 
 ## [Unreleased]
 
+### Added
+
+- The README opens with a prompt to paste into a coding agent (Claude Code, Codex,
+  Cursor). It takes the agent from your tables or operation to an ontology that passes
+  `ontary validate --strict` and is served by `ontary serve --dev`, reading the docs
+  through `llms.txt`. Tests pin that every command, flag, docs URL, and the version pin
+  in the prompt are real (#279).
+
 ### Changed
 
 - The README, the docs home, the roadmap, the docs-site description, and the PyPI
