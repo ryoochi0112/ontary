@@ -1,7 +1,7 @@
 [project]
 name = "ontary"
 version = "0.28.0"
-description = "Domain-agnostic ontology SDK — declare a Foundry-style ontology (typed objects, links, actions, functions) and get a governed runtime"
+description = "ontary is an open-source operational ontology for Python: declare your objects, links, actions, rules, and who may do what, and the engine runs every write as a governed action, refuses what the declared policy forbids, audits every attempt, and serves the same model to people and AI agents over MCP."
 readme = "README.md"
 requires-python = ">=3.12"
 keywords = ["ontology", "governance", "audit", "mcp", "pydantic", "sdk"]

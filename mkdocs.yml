@@ -1,5 +1,5 @@
 site_name: ontary
-site_description: The ontology SDK — author an ontology and get a governed runtime.
+site_description: "ontary is an open-source operational ontology for Python: declare your objects, links, actions, rules, and who may do what, and the engine runs every write as a governed action, refuses what the declared policy forbids, audits every attempt, and serves the same model to people and AI agents over MCP."
 site_url: https://ryoochi0112.github.io/ontary/
 repo_url: https://github.com/ryoochi0112/ontary
 repo_name: ryoochi0112/ontary

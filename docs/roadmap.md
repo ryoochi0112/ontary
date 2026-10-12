@@ -44,13 +44,16 @@ ontology**: the model is where business verbs run. Every write is an action
 with declared rules, every read and every action is checked against a
 declared security policy, and every refusal is audited.
 
-ontary is an operational ontology you can embed. It is a self-hosted Python
-library on SQLite or Postgres. It pairs **actions that own a full state
-transition** with **engine-enforced scope, sensitivity, and audit**, and it
-serves the same governed model to people and AI agents over MCP. It fits one
-developer's laptop and a team's deployed service alike. What it does not do is
-copy data out of your SaaS tools or run analytics over the copy; feed it
-through `client.ingest` from whatever already does that.
+ontary is an open-source operational ontology for Python: declare your
+objects, links, actions, rules, and who may do what, and the engine runs every
+write as a governed action, refuses what the declared policy forbids, audits
+every attempt, and serves the same model to people and AI agents over MCP.
+It is a self-hosted Python library on SQLite or Postgres that pairs **actions
+that own a full state transition** with **engine-enforced scope, sensitivity,
+and audit**. It fits one developer's laptop and a team's deployed service
+alike. What it does not do is copy data out of your SaaS tools or run
+analytics over the copy; feed it through `client.ingest` from whatever already
+does that.
 
 To the objection that this is "views and stored procedures": a view cannot
 refuse a read, a stored procedure does not know who is asking or whether an
