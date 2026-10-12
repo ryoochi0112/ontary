@@ -14,6 +14,7 @@ import importlib
 import inspect
 import re
 import sys
+import tomllib
 from pathlib import Path
 from typing import Any, get_args, get_origin, get_type_hints
 
@@ -561,6 +562,84 @@ def test_cookbook_recipes_execute_verbatim(recipe: str) -> None:
 def test_readme_is_within_line_budget() -> None:
     """OSS v0 README: hard 200-line budget (spec § 4.1)."""
     assert len(_read_readme().splitlines()) <= 200
+
+
+_ROOT = README.parent
+_WHITESPACE = re.compile(r"\s+")
+
+
+def _squash(text: str) -> str:
+    return _WHITESPACE.sub(" ", text).strip()
+
+
+def _readme_lead_paragraphs() -> list[str]:
+    """Whitespace-squashed paragraphs between the README H1 and its first H2."""
+    body = _read_readme().split("\n## ", 1)[0]
+    _, _, after_h1 = body.partition("\n")
+    return [_squash(chunk) for chunk in after_h1.strip().split("\n\n") if chunk.strip()]
+
+
+def _site_description() -> str:
+    text = (_ROOT / "mkdocs.yml").read_text()
+    match = re.search(r"^site_description:\s*(.+)$", text, re.MULTILINE)
+    assert match is not None, "mkdocs.yml has no site_description"
+    return match.group(1).strip().strip('"').strip("'")
+
+
+def _pyproject_description() -> str:
+    with (_ROOT / "pyproject.toml").open("rb") as handle:
+        description = tomllib.load(handle)["project"]["description"]
+    assert isinstance(description, str)
+    return description
+
+
+def test_positioning_line_is_identical_across_surfaces() -> None:
+    """#278: README's first paragraph is the one positioning sentence, and the
+    roadmap, the docs-site description, and the PyPI summary carry it verbatim."""
+    line = _readme_lead_paragraphs()[0]
+    assert "operational ontology" in line
+    for word in ("action", "refuse", "audit"):
+        assert word in line, f"positioning line does not mention {word!r}"
+    assert line in _squash((_DOCS / "roadmap.md").read_text()), "roadmap lacks the line"
+    assert _squash(_site_description()) == line, "mkdocs site_description differs"
+    assert _squash(_pyproject_description()) == line, "pyproject description differs"
+
+
+def test_positioning_line_has_japanese_counterpart() -> None:
+    """#278: the Japanese sentence sits right under the English one."""
+    japanese = _readme_lead_paragraphs()[1]
+    assert "operational ontology" in japanese
+    assert "監査" in japanese
+    assert japanese.endswith("ます。") or japanese.endswith("です。")
+
+
+def test_readme_answers_views_and_stored_procedures() -> None:
+    """#278: the objection is answered on the README, concretely and briefly."""
+    readme = _read_readme()
+    heading = next(
+        (
+            line
+            for line in readme.splitlines()
+            if line.startswith("## ") and "views and stored procedures" in line.lower()
+        ),
+        None,
+    )
+    assert heading is not None, "README has no 'views and stored procedures' section"
+    section = readme.split(heading, 1)[1].split("\n## ", 1)[0]
+    prose = [line for line in section.strip().splitlines() if line.strip()]
+    assert len(prose) <= 6, "objection section exceeds six lines of prose"
+    for word in ("refuse", "audit", "SQL"):
+        assert word in section, f"objection section does not mention {word!r}"
+
+
+def test_positioning_avoids_vendor_framing() -> None:
+    """#278 'Decided against': no vendor names on the positioning surfaces."""
+    for path in (README, _ROOT / "mkdocs.yml", _ROOT / "pyproject.toml"):
+        assert "Palantir" not in path.read_text(), f"{path.name} names Palantir"
+    assert "Foundry" not in _pyproject_description()
+    roadmap = (_DOCS / "roadmap.md").read_text()
+    section = roadmap.split("## Decided against", 1)[1].split("\n## ", 1)[0]
+    assert '- No "Palantir alternative" wording.' in section
 
 
 def _parse_api_reference_error_rows(text: str) -> dict[str, str]:

@@ -11,6 +11,13 @@ you**.
 
 ## [Unreleased]
 
+### Changed
+
+- The README, the docs home, the roadmap, the docs-site description, and the PyPI
+  summary now carry one positioning sentence that names ontary an open-source
+  **operational ontology** for Python, in English and Japanese, and the README
+  answers the "views and stored procedures" objection in one short section (#278).
+
 ## [0.28.0] — 2026-10-10
 
 ```bash

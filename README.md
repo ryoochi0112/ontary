@@ -1,9 +1,14 @@
-# ontary — the ontology SDK
+# ontary — the open-source operational ontology for Python
 
-Author an ontology once — typed objects, links, actions, functions, and a
-security policy — and get a governed runtime: scope- and sensitivity-aware
-reads, audited business-verb actions, and an MCP server for AI agents. The
-engine is domain-agnostic; the ticket domain below is just an example.
+ontary is an open-source operational ontology for Python: declare your
+objects, links, actions, rules, and who may do what, and the engine runs every
+write as a governed action, refuses what the declared policy forbids, audits
+every attempt, and serves the same model to people and AI agents over MCP.
+
+ontary は Python 製のオープンソースの operational ontology です。対象・関係・
+アクション・ルール・権限を一度宣言すると、すべての書き込みを統制されたアクションとして
+実行し、宣言したポリシーに反する操作を拒否し、すべての試行を監査し、同じモデルを人と
+AI エージェントに MCP で提供するランタイムが得られます。
 
 Python 3.12+ · pydantic-only core · `mypy --strict` · offline `make verify`.
 
@@ -13,6 +18,15 @@ Release metadata: version
 Documentation: **https://ryoochi0112.github.io/ontary/** (English / 日本語).
 
 For AI coding assistants: [`llms.txt`](https://ryoochi0112.github.io/ontary/llms.txt) indexes the docs and [`llms-full.txt`](https://ryoochi0112.github.io/ontary/llms-full.txt) holds every English page in one file.
+
+## Why not views and stored procedures?
+
+A view cannot refuse a read, and a stored procedure does not know who is asking,
+whether the caller is an agent, or which rows and properties that caller may see.
+ontary checks declared scope and sensitivity on every read, runs every write as a
+declared action with its rules, and writes an audit row for every attempt,
+including the ones it refused. An agent on MCP gets only the governed tools: no
+raw SQL, no table access, no write outside a declared action.
 
 ## Install
 
