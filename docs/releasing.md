@@ -31,8 +31,9 @@ the PR if a pin is missing.
 2. In `README.md`, update the version badge line (`version **X.Y.Z**, store
    schema **vN**`), the tag line (``annotated tags (`vX.Y.Z`)``), both
    `==X.Y.Z` pins under `## Install` (the `uv add` fence and the
-   `pyproject.toml` sample), and the git-ref install fallback line (the one
-   pinned to the release tag).
+   `pyproject.toml` sample), the `pip install "ontary[mcp]==X.Y.Z"` pin in the
+   coding-agent prompt, and the git-ref install fallback line (the one pinned
+   to the release tag).
 3. In `CHANGELOG.md`, rename `## [Unreleased]` to `## [X.Y.Z] — YYYY-MM-DD`,
    put the git-ref install fence (the `uv add "ontary @ git+…"` line from
    the previous release section, re-pinned to `vX.Y.Z`) under the heading,

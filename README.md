@@ -19,6 +19,27 @@ Documentation: **https://ryoochi0112.github.io/ontary/** (English / 日本語).
 
 For AI coding assistants: [`llms.txt`](https://ryoochi0112.github.io/ontary/llms.txt) indexes the docs and [`llms-full.txt`](https://ryoochi0112.github.io/ontary/llms-full.txt) holds every English page in one file.
 
+## Paste this into your coding agent
+
+Paste this into Claude Code, Codex, or Cursor, then tell it your tables or the
+operation you want to model. It ends with a validated ontology served over MCP.
+
+次のブロックをコーディングエージェントに貼り付け、テーブルやモデル化したい業務を伝えてください。
+
+```text
+Set up ontary (the open-source operational ontology for Python) in this project.
+1. Install it: `pip install "ontary[mcp]==0.28.0"` (or the uv/poetry equivalent).
+2. Read https://ryoochi0112.github.io/ontary/llms.txt, then read the ontology
+   design guide and the getting-started page it lists. Follow the design guide.
+3. If I have not told you my tables or the operation I want to model, ask me now.
+4. Write the ontology in a module, for example `ontology.py` exposing `ontology`:
+   one object type per real-world entity, actions as business verbs, scope declared.
+5. Run `ontary validate ontology:ontology --strict` and fix every finding until it
+   exits 0. Do not silence a finding with accept= unless the guide says it applies.
+6. Run `ontary serve ontology:ontology --dev` and tell me the MCP URL it serves
+   (http://127.0.0.1:8000/mcp) and the object types and actions it exposes.
+```
+
 ## Why not views and stored procedures?
 
 A view cannot refuse a read, and a stored procedure does not know who is asking,

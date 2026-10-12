@@ -13,6 +13,7 @@ import ast
 import importlib
 import inspect
 import re
+import shlex
 import sys
 import tomllib
 from pathlib import Path
@@ -640,6 +641,117 @@ def test_positioning_avoids_vendor_framing() -> None:
     roadmap = (_DOCS / "roadmap.md").read_text()
     section = roadmap.split("## Decided against", 1)[1].split("\n## ", 1)[0]
     assert '- No "Palantir alternative" wording.' in section
+
+
+_AGENT_PROMPT_HEADING = "## Paste this into your coding agent"
+_DOCS_SITE = "https://ryoochi0112.github.io/ontary/"
+_FENCE = re.compile(r"(?ms)^```[^\n]*\n(?P<body>.*?)^```[ \t]*$")
+_CJK = re.compile(r"[぀-ヿ一-鿿]")
+
+
+def _agent_prompt_section() -> str:
+    readme = _read_readme()
+    assert f"\n{_AGENT_PROMPT_HEADING}\n" in readme, "README has no agent prompt section"
+    return readme.split(f"\n{_AGENT_PROMPT_HEADING}\n", 1)[1].split("\n## ", 1)[0]
+
+
+def _agent_prompt() -> str:
+    fences = _FENCE.findall(_agent_prompt_section())
+    assert len(fences) == 1, f"agent prompt section has {len(fences)} fences, expected 1"
+    body: str = fences[0]
+    return body
+
+
+def test_agent_prompt_section_placement() -> None:
+    """#279 AC1: the section sits after the llms.txt line and before the
+    views-and-stored-procedures answer, with one Japanese lead-in line."""
+    lines = _read_readme().splitlines()
+    llms = next(i for i, line in enumerate(lines) if "llms.txt" in line)
+    prompt = lines.index(_AGENT_PROMPT_HEADING)
+    views = next(
+        i for i, line in enumerate(lines)
+        if line.startswith("## ") and "views and stored procedures" in line.lower()
+    )
+    assert llms < prompt < views
+    assert prompt == next(i for i, line in enumerate(lines) if line.startswith("## "))
+    section = _agent_prompt_section()
+    _agent_prompt()  # exactly one fence
+    lead_in = section.split("```", 1)[0]
+    assert _CJK.search(lead_in), "no Japanese line before the prompt fence"
+
+
+def test_agent_prompt_covers_full_path() -> None:
+    """#279 AC2: install, read docs, ask, write, validate --strict, serve --dev."""
+    prompt = _squash(_agent_prompt()).lower()
+    for anchor in (
+        "ontary[mcp]==",
+        f"{_DOCS_SITE}llms.txt",
+        "design guide",
+        "getting-started",
+        "ask me",
+        "write the ontology",
+        "ontary validate",
+        "--strict",
+        "exits 0",
+        "ontary serve",
+        "--dev",
+        "http://127.0.0.1:8000/mcp",
+    ):
+        assert anchor in prompt, f"agent prompt lacks {anchor!r}"
+
+
+def _prompt_cli_commands(prompt: str) -> list[list[str]]:
+    """Every backticked `ontary ...` span, split into argv with placeholders filled."""
+    commands = []
+    for span in re.findall(r"`(ontary [^`]+)`", prompt):
+        argv = shlex.split(re.sub(r"<[^>]+>", "pkg.mod:attr", span))
+        commands.append(argv[1:])
+    return commands
+
+
+def _parses(argv: list[str]) -> bool:
+    try:
+        cli._build_parser().parse_args(argv)
+    except SystemExit:
+        return False
+    return True
+
+
+def test_agent_prompt_commands_parse() -> None:
+    """#279 AC3: every `ontary` command in the prompt parses with the real CLI."""
+    commands = _prompt_cli_commands(_agent_prompt())
+    assert {argv[0] for argv in commands} >= {"validate", "serve"}
+    for argv in commands:
+        assert _parses(argv), f"prompt command does not parse: ontary {' '.join(argv)}"
+    assert not _parses(_prompt_cli_commands("`ontary validate a:b --foo`")[0])
+
+
+def _nav_url_paths() -> set[str]:
+    nav = re.findall(r"^\s+- [^:\n]+:\s*(\S+\.md)\s*$", (_ROOT / "mkdocs.yml").read_text(), re.M)
+    assert nav, "mkdocs.yml nav not found"
+    return {"" if page == "index.md" else page.removesuffix(".md") + "/" for page in nav}
+
+
+def _unknown_docs_urls(prompt: str) -> list[str]:
+    allowed = _nav_url_paths() | {"llms.txt", "llms-full.txt"}
+    paths = re.findall(re.escape(_DOCS_SITE) + r"([^\s`)\"'>]*)", prompt)
+    paths = [path.rstrip(".,;:") for path in paths]
+    return [path for path in paths if path.split("#", 1)[0] not in allowed]
+
+
+def test_agent_prompt_urls_are_nav_pages() -> None:
+    """#279 AC4: every docs URL in the prompt is llms.txt or a page in the nav."""
+    prompt = _agent_prompt()
+    assert _DOCS_SITE + "llms.txt" in prompt
+    assert _unknown_docs_urls(prompt) == []
+    assert _unknown_docs_urls(f"{_DOCS_SITE}ontology-guide/") == ["ontology-guide/"]
+
+
+def test_agent_prompt_is_short() -> None:
+    """#279 AC6: a prompt a developer will actually paste."""
+    prompt = _agent_prompt()
+    assert len(prompt.splitlines()) <= 25
+    assert len(prompt) <= 1500
 
 
 def _parse_api_reference_error_rows(text: str) -> dict[str, str]:
