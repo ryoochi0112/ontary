@@ -36,7 +36,7 @@ mcp = [
     # on a worker thread, hence the `async def` handlers in `mcp_server.py`.
     # 2.1.1 is the first 2.x release verified against the full suite: `make verify`
     # is green on 2.1.1; `<3` guards the next layout change.
-    "mcp>=2.1.1,<3",
+    "mcp>=2.2.0,<3",
 ]
 postgres = [
     # psycopg 3. `[binary]` so an adopter does not need libpq headers to install
